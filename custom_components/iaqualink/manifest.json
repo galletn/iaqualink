@@ -4,5 +4,6 @@
     "requirements": [],
     "iot_class": "Cloud Polling",
     "integration_type": "device",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "codeowners": ["@galletn"]
 }

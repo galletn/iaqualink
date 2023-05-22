@@ -1,0 +1,8 @@
+{
+    "domain": "iaqualink",
+    "name": "iaqualink Zodiac Robot",
+    "requirements": [],
+    "iot_class": "Cloud Polling",
+    "integration_type": "device",
+    "version": "0.1.0"
+}

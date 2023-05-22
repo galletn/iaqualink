@@ -14,7 +14,6 @@ Home Assistant Iaqualink Vacuums Robots
 
 - In HACS, look for "iaqualink" and install and restart
 - If integration was not found, please add custom repository `galletn/iaqualink` as integration
-- In Settings --> Devices & Services - (Lower Right) "Add Integration"
 
 #### Setup
 

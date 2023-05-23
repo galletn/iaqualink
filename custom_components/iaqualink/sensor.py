@@ -101,8 +101,18 @@ class iaqualinkRobotSensor(Entity):
                     self._state = data["state"]["reported"]["aws"]["status"]
                     self._last_online = datetime_obj = datetime.datetime.fromtimestamp((data["state"]["reported"]["aws"]["timestamp"]/1000)) #Convert Epoch To Unix
                     self._attributes['last_online'] = self._last_online
-                    self._temperature = data["state"]["reported"]["equipment"]["robot"]["sensors"]["sns_1"]["val"]
+
+                    #temperature seems to depend on robot model and has 2 possible locations:
+                    try:
+                        self._temperature = data["state"]["reported"]["equipment"]["robot"]["sensors"]["sns_1"]["val"]
+                    except:
+                        try: 
+                            self._temperature = data["state"]["reported"]["equipment"]["robot"]["sensors"]["sns_1"]["state"]
+                        except:
+                            error = error + ' temparture mapping error'
+                            
                     self._attributes['temperature'] = self._temperature
+
                     self._pressure = data["state"]["reported"]["equipment"]["robot"]["sensors"]["sns_2"]["state"]
                     self._attributes['pressure'] = self._pressure
                     self._total_hours = data["state"]["reported"]["equipment"]["robot"]["totalHours"]

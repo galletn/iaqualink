@@ -125,6 +125,10 @@ class iaqualinkRobotSensor(Entity):
                     self._attributes['equipment_id'] = self._equipment_id
                     self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp(data["state"]["reported"]["equipment"]["robot"]["cycleStartTime"])
                     self._attributes['cycle_start_time'] = self._cycle_start_time
+                    self._canister = data["state"]["reported"]["equipment"]["robot"]["canister"] 
+                    self._attributes['canister'] = self._canister 
+                    self._running = data["state"]["reported"]["equipment"]["robot"]["state"] 
+                    self._attributes['running'] = self._running 
                 else:
                     self._state = response.text[:250]
             else:

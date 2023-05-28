@@ -8,6 +8,7 @@ from homeassistant.util import Throttle
 URL_LOGIN="https://prod.zodiac-io.com/users/v1/login"
 URL_GET_DEVICES="https://r-api.iaqualink.net/devices.json"
 URL_GET_DEVICE_STATUS="https://prod.zodiac-io.com/devices/v1/"
+URL_GET_DEVICE_FEATURES="https://prod.zodiac-io.com/devices/v2/"
 
 SCAN_INTERVAL = timedelta(seconds=30)
 
@@ -129,6 +130,18 @@ class iaqualinkRobotSensor(Entity):
                     self._attributes['canister'] = self._canister 
                     self._running = data["state"]["reported"]["equipment"]["robot"]["state"] 
                     self._attributes['running'] = self._running 
+
+                    #Get model Number
+                    data = None
+                    self._headers = {"Content-Type": "application/json; charset=utf-8", "Connection": "keep-alive", "Accept": "*/*", "Authorization" : self._id_token}
+                    url = URL_GET_DEVICE_FEATURES + self._serial_number + "/features"
+                    response = requests.get(url, headers = self._headers)
+                    data = response.json()
+                    if response.status_code == 200:
+                        self._model = data["model"]
+                        self._attributes['model'] = self._model
+                    else:
+                        self._state = response.text[:250]
                 else:
                     self._state = response.text[:250]
             else:

@@ -31,6 +31,7 @@ sensor:
 
 - EX 4000 iQ
 - RA 6570 iQ
+- Polaris - VRX iQ+
 
 ## Known Models to have issues:
 

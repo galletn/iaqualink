@@ -25,6 +25,7 @@ sensor:
     username: <username>
     password: <password>
     api_key: EOOEMOW4YR6QNB07
+    name: <Robot name, will also be the sensor name>
 ```
 ## Supported Models:
 

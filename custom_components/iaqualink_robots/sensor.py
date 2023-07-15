@@ -136,6 +136,8 @@ class iaqualinkRobotSensor(Entity):
                 data = response.json()
                 self._serial_number = data[0]["serial_number"] #assumption only 1 robot for now
                 self._attributes['serial_number'] = self._serial_number
+                self._robot_name = data[0]["name"]
+                self._attributes['robot_name'] = self._robot_name
 
                 url = URL_GET_DEVICE_STATUS + self._serial_number + "/shadow"
                 data = None

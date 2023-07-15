@@ -21,7 +21,7 @@ add the following entry to the config file:
 
 ```yaml
 sensor:
-  - platform: iaqualink
+  - platform: iaqualinkRobots
     username: <username>
     password: <password>
     api_key: EOOEMOW4YR6QNB07

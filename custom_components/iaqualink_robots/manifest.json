@@ -1,0 +1,14 @@
+{
+    "domain": "iaqualinkRobots",
+    "name": "IaqualinkRobots",
+    "codeowners": ["@galletn"],
+    "config_flow": false,
+    "dependencies": [],
+    "documentation": "https://github.com/galletn/iaqualink/",
+    "integration_type": "device",
+    "iot_class": "cloud_polling",
+    "issue_tracker": "https://github.com/galletn/iaqualink/issues/",
+    "requirements": [],
+    "version": "v0.2.1"
+  }
+  

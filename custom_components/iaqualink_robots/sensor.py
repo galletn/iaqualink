@@ -1,3 +1,13 @@
+from __future__ import annotations
+
+import logging
+import json
+from pathlib import Path
+
+from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import Config, HomeAssistant
+from homeassistant.const import Platform
 import json
 import datetime
 import requests
@@ -5,15 +15,24 @@ from homeassistant.helpers.entity import Entity
 from datetime import timedelta
 from homeassistant.util import Throttle
 
-URL_LOGIN="https://prod.zodiac-io.com/users/v1/login"
-URL_GET_DEVICES="https://r-api.iaqualink.net/devices.json"
-URL_GET_DEVICE_STATUS="https://prod.zodiac-io.com/devices/v1/"
-URL_GET_DEVICE_FEATURES="https://prod.zodiac-io.com/devices/v2/"
+from .const import (
+    URL_LOGIN,
+    URL_GET_DEVICES,
+    URL_GET_DEVICE_STATUS,
+    URL_GET_DEVICE_FEATURES,
+    NAME,
+    VERSION,
+    DOMAIN,
+    ISSUEURL,
+    STARTUP,
+    SCAN_INTERVAL
+)
 
-SCAN_INTERVAL = timedelta(seconds=30)
+_LOGGER = logging.getLogger(__name__)
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
     """Setup the sensor platform."""
+    _LOGGER.info(STARTUP)
     add_devices([iaqualinkRobotSensor(config)])
 
 class iaqualinkRobotSensor(Entity):
@@ -56,6 +75,31 @@ class iaqualinkRobotSensor(Entity):
     def state(self):
         """Return the state of the sensor."""
         return self._state
+
+    @property
+    def unique_id(self) -> str:
+        """Return the name of the sensor."""
+        return (
+            f"{NAME} {self._model} {self._name}"
+        )
+
+    @property
+    def device_info(self) -> dict:
+        """Return Device info"""
+        return {
+            "identifiers": {(DOMAIN, self.unique_id)},
+            "name": self.name,
+            "manufacturer": DOMAIN,
+        }
+
+    @property
+    def name(self) -> str:
+        return self.unique_id
+
+    @property
+    def icon(self) -> str:
+        """Shows the correct icon for container."""
+        return "mdi:robot-mower-outline"
 
     @property
     def device_state_attributes(self):

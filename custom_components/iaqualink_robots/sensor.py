@@ -1,19 +1,22 @@
+"""Platform for sensor integration."""
 from __future__ import annotations
 
-import logging
-import json
-from pathlib import Path
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
+from homeassistant.const import UnitOfTemperature
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from homeassistant import config_entries
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import Config, HomeAssistant
-from homeassistant.const import Platform
+from homeassistant.util import Throttle
 import json
 import datetime
 import requests
-from homeassistant.helpers.entity import Entity
-from datetime import timedelta
-from homeassistant.util import Throttle
+
+
 
 from .const import (
     URL_LOGIN,
@@ -28,32 +31,92 @@ from .const import (
     SCAN_INTERVAL
 )
 
-_LOGGER = logging.getLogger(__name__)
+def setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None
+) -> None:
+    """Set up the sensor platform."""
+    iaqualink_data = iaqualinkData(config)
+    iaqualink_data.update()
+    add_entities([iaqualinkRobotSensor(iaqualink_data, config)])
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the sensor platform."""
-    _LOGGER.info(STARTUP)
-    add_devices([iaqualinkRobotSensor(config)])
+class iaqualinkRobotSensor(SensorEntity):
+    """Representation of a Sensor."""
 
-class iaqualinkRobotSensor(Entity):
+    def __init__(self, iaqualink_data, config):
+        self.data = iaqualink_data
+        self._attributes = {}
+        # Apply throttling to methods using configured interval
+        self.update = Throttle(SCAN_INTERVAL)(self.update)
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self.data.state
+
+    @property
+    def unique_id(self) -> str:
+        """Return the name of the sensor."""
+        return (
+            f"{self.data.model} {self.data.name}"
+        )
+
+    @property
+    def device_state_attributes(self):
+        """Return device specific state attributes."""
+        return self._attributes
+
+    @property
+    def extra_state_attributes(self):
+        """Return entity specific state attributes."""
+        return self._attributes
+
+    def update(self) -> None:
+        """Fetch new state data for the sensor.
+
+        This is the only method that should fetch new data for Home Assistant.
+        """
+        self._attr_native_value = self.data.model
+        self._attributes = self.data.attributes
+
+class iaqualinkData:
+    """Get the latest data and update the states."""
+
     def __init__(self, config):
+        """Initialize the data object."""
+        self.available = True
+        self._attributes = {}
         self._name = config.get('name')
         self._username = config.get('username')
         self._password = config.get('password')
         self._api_key = config.get('api_key')
-
         self._headers = {"Content-Type": "application/json; charset=utf-8", "Connection": "keep-alive", "Accept": "*/*" }
-
-        self._attributes = {}
-
-        # Apply throttling to methods using configured interval
-        self.update = Throttle(SCAN_INTERVAL)(self._update)
-
-        self._update()
+        self._model = ''
+        self._state = 'initiating connection'
+        self._last_name = ''
+        self._serial_number = ''
 
     @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._state
+
+    @property
+    def attributes(self):
+        """Return device attributes."""
+        return self._attributes
+    
+    @property
+    def model(self):
+        """Return device model."""
+        return self._model
+    
+    @property
     def name(self):
-        return self._name 
+        """Return device model."""
+        return self._name
 
     @property
     def username(self):
@@ -69,49 +132,10 @@ class iaqualinkRobotSensor(Entity):
 
     @property
     def serial_number(self):
-        return self._serial_number
+        return self._number
 
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def unique_id(self) -> str:
-        """Return the name of the sensor."""
-        return (
-            f"{NAME} {self._model} {self._name}"
-        )
-
-    @property
-    def device_info(self) -> dict:
-        """Return Device info"""
-        return {
-            "identifiers": {(DOMAIN, self.unique_id)},
-            "name": self.name,
-            "manufacturer": DOMAIN,
-        }
-
-    @property
-    def name(self) -> str:
-        return self.unique_id
-
-    @property
-    def icon(self) -> str:
-        """Shows the correct icon for container."""
-        return "mdi:robot-mower-outline"
-
-    @property
-    def device_state_attributes(self):
-        """Return device specific state attributes."""
-        return self._attributes
-
-    @property
-    def extra_state_attributes(self):
-        """Return entity specific state attributes."""
-        return self._attributes
-
-    def _update(self):
+    @Throttle(SCAN_INTERVAL)
+    def update(self):
         self._attributes['username'] = self._username
         url = URL_LOGIN
         data = {"apikey": self._api_key, "email": self._username, "password": self._password}
@@ -156,7 +180,7 @@ class iaqualinkRobotSensor(Entity):
                         try: 
                             self._temperature = data["state"]["reported"]["equipment"]["robot"]["sensors"]["sns_1"]["state"]
                         except:
-                            error = error + ' temparture mapping error'
+                            self._temperature = '0' #Zodiac XA 5095 iQ does not support temp for example see https://github.com/galletn/iaqualink/issues/9
                             
                     self._attributes['temperature'] = self._temperature
 

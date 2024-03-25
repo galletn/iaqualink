@@ -217,7 +217,7 @@ class iaqualinkData:
                     try:
                         self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp(data["state"]["reported"]["equipment"]["robot"]["cycleStartTime"])
                     except:
-                        self._cycle_start_time = datetime.now()
+                        self._cycle_start_time = "2000-01-01T09:00:00.000000"
                     self._attributes['cycle_start_time'] = self._cycle_start_time
 
                     try:

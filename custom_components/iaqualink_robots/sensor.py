@@ -184,21 +184,52 @@ class iaqualinkData:
                             
                     self._attributes['temperature'] = self._temperature
 
-                    self._pressure = data["state"]["reported"]["equipment"]["robot"]["sensors"]["sns_2"]["state"]
+                    try:
+                        self._pressure = data["state"]["reported"]["equipment"]["robot"]["sensors"]["sns_2"]["state"]
+                    except:
+                        self._pressure = "N/A"
                     self._attributes['pressure'] = self._pressure
-                    self._total_hours = data["state"]["reported"]["equipment"]["robot"]["totalHours"]
+                
+                    try:
+                        self._total_hours = data["state"]["reported"]["equipment"]["robot"]["totalHours"]
+                    except:
+                        self._total_hours = 0
                     self._attributes['total_hours'] = self._total_hours
-                    self._error_state = data["state"]["reported"]["equipment"]["robot"]["errorState"]
+
+                    try:
+                        self._error_state = data["state"]["reported"]["equipment"]["robot"]["errorState"]
+                    except:
+                        self._error_state = "N/A"
                     self._attributes['error_state'] = self._error_state
-                    self._lift_control = data["state"]["reported"]["equipment"]["robot"]["liftControl"]
+
+                    try:
+                        self._lift_control = data["state"]["reported"]["equipment"]["robot"]["liftControl"]
+                    except:
+                        self._lift_control = "N/A"
                     self._attributes['lift_control'] = self._lift_control
-                    self._equipment_id = data["state"]["reported"]["equipment"]["robot"]["equipmentId"]
+
+                    try:
+                        self._equipment_id = data["state"]["reported"]["equipment"]["robot"]["equipmentId"]
+                    except:
+                        self._equipment_id = "N/A"
                     self._attributes['equipment_id'] = self._equipment_id
-                    self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp(data["state"]["reported"]["equipment"]["robot"]["cycleStartTime"])
+
+                    try:
+                        self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp(data["state"]["reported"]["equipment"]["robot"]["cycleStartTime"])
+                    except:
+                        self._cycle_start_time = datetime.now()
                     self._attributes['cycle_start_time'] = self._cycle_start_time
-                    self._canister = data["state"]["reported"]["equipment"]["robot"]["canister"] 
+
+                    try:
+                        self._canister = data["state"]["reported"]["equipment"]["robot"]["canister"] 
+                    except:
+                        self._canister = "N/A"
                     self._attributes['canister'] = self._canister 
-                    self._running = data["state"]["reported"]["equipment"]["robot"]["state"] 
+
+                    try:
+                        self._running = data["state"]["reported"]["equipment"]["robot"]["state"] 
+                    except:
+                        self._running = "N/A"
                     self._attributes['running'] = self._running 
 
                     #Get model Number

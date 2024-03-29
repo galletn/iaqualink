@@ -97,11 +97,17 @@ class iaqualinkData:
         self._state = 'initiating connection'
         self._last_name = ''
         self._serial_number = ''
+        self._temperature = '0'
 
     @property
     def state(self):
         """Return the state of the sensor."""
         return self._state
+
+    @property
+    def temperature(self):
+        """Return the state of the sensor."""
+        return self._temperature
 
     @property
     def attributes(self):

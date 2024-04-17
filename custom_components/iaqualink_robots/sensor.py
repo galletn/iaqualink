@@ -75,9 +75,9 @@ class iaqualinkRobotSensor(SensorEntity):
 
     def update(self) -> None:
         """Fetch new state data for the sensor.
-
         This is the only method that should fetch new data for Home Assistant.
         """
+        self.data.update()
         self._attr_native_value = self.data.model
         self._attributes = self.data.attributes
 

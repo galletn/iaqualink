@@ -73,7 +73,8 @@ class iaqualinkRobotSensor(SensorEntity):
         """Return entity specific state attributes."""
         return self._attributes
 
-    def update(self) -> None:
+    @Throttle(SCAN_INTERVAL)
+    def update(self):
         """Fetch new state data for the sensor.
         This is the only method that should fetch new data for Home Assistant.
         """

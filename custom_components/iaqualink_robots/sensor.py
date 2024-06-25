@@ -207,7 +207,7 @@ class iaqualinkData:
                         self._total_hours = data["state"]["reported"]["equipment"]["robot"]["totalHours"]
                     except:
                         try:
-                            self._total_hours = data["state"]["reported"]["equipment"]["robot"]["totRunTime"]
+                            self._total_hours = data["state"]["reported"]["equipment"]["robot"][1]["totRunTime"] #[1] needed because null is returned for the cyclonext device type
                         except:
                             self._total_hours = 0
                     self._attributes['total_hours'] = self._total_hours
@@ -215,7 +215,10 @@ class iaqualinkData:
                     try:
                         self._error_state = data["state"]["reported"]["equipment"]["robot"]["errorState"]
                     except:
-                        self._error_state = "N/A"
+                        try:
+                            self._error_state = data["state"]["reported"]["equipment"]["robot"]["errors"]["code"] #other location for the cyclonext device type errors
+                        except:
+                            self._error_state = "N/A"
                     self._attributes['error_state'] = self._error_state
 
                     try:
@@ -227,19 +230,28 @@ class iaqualinkData:
                     try:
                         self._equipment_id = data["state"]["reported"]["equipment"]["robot"]["equipmentId"]
                     except:
-                        self._equipment_id = "N/A"
+                        try: 
+                            self._equipment_id = data["state"]["reported"]["equipment"]["robot"][1]["equipmentId"] #[1] needed because null is returned for the cyclonext device type
+                        except:
+                            self._equipment_id = "N/A"
                     self._attributes['equipment_id'] = self._equipment_id
 
                     try:
                         self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp(data["state"]["reported"]["equipment"]["robot"]["cycleStartTime"])
                     except:
-                        self._cycle_start_time = "2000-01-01T09:00:00.000000"
+                        try:
+                            self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp(data["state"]["reported"]["equipment"]["robot"][1]["cycleStartTime"])#[1] needed because null is returned for the cyclonext device type
+                        except:
+                            self._cycle_start_time = "2000-01-01T09:00:00.000000"
                     self._attributes['cycle_start_time'] = self._cycle_start_time
 
                     try:
                         self._canister = data["state"]["reported"]["equipment"]["robot"]["canister"] 
                     except:
-                        self._canister = "N/A"
+                        try:
+                            self._canister = data["state"]["reported"]["equipment"]["robot"][1]["canister"]#[1] needed because null is returned for the cyclonext device type
+                        except:
+                            self._canister = "N/A"
                     self._attributes['canister'] = self._canister 
 
                     try:

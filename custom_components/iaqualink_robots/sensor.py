@@ -200,7 +200,10 @@ class iaqualinkData:
                     try:
                         self._total_hours = data["state"]["reported"]["equipment"]["robot"]["totalHours"]
                     except:
-                        self._total_hours = 0
+                        try:
+                            self._total_hours = data["state"]["reported"]["equipment"]["robot"]["totRunTime"]
+                        except:
+                            self._total_hours = 0
                     self._attributes['total_hours'] = self._total_hours
 
                     try:

@@ -165,9 +165,15 @@ class iaqualinkData:
             
             if response.status_code == 200:
                 data = response.json()
-                self._serial_number = data[0]["serial_number"] #assumption only 1 robot for now
+                index = 0
+                if data[0]['device_type'] == "iaqua":
+                    index = 1    
+                else:
+                    index = 0
+                    
+                self._serial_number = data[index]["serial_number"]
                 self._attributes['serial_number'] = self._serial_number
-                self._robot_name = data[0]["name"]
+                self._robot_name = data[index]["name"]
                 self._attributes['robot_name'] = self._robot_name
 
                 url = URL_GET_DEVICE_STATUS + self._serial_number + "/shadow"

@@ -252,7 +252,10 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             try:
                 self._temperature = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['val']
             except:
-                self._temperature = None #Zodiac XA 5095 iQ does not support temp for example see https://github.com/galletn/iaqualink/issues/9
+                try: 
+                    self._temperature = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['state']
+                except:
+                    self._temperature = '0' #Zodiac XA 5095 iQ does not support temp for example see https://github.com/galletn/iaqualink/issues/9
                             
             self._attributes['temperature'] = self._temperature
 

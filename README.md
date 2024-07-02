@@ -46,6 +46,7 @@ vacuum:
 - RA 6570 iQ
 - RA 6900 iQ
 - Polaris - VRX iQ+
+- CNX 30 iQ
 
 ## Known Models to have issues:
 

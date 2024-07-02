@@ -27,6 +27,19 @@ sensor:
     api_key: EOOEMOW4YR6QNB07
     name: <Robot name, will also be the sensor name>
 ```
+
+From now on please use the vacuum entity, I will no longer update the sensor integration as more is possible with the vacuum entity
+
+```yaml
+vacuum:
+  - platform: iaqualinkRobots
+    username: <username>
+    password: <password>
+    api_key: EOOEMOW4YR6QNB07
+    name: <Robot name, will also be the sensor name>
+```
+
+
 ## Supported Models:
 
 - EX 4000 iQ

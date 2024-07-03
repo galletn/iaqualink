@@ -2,6 +2,7 @@ import asyncio
 import json
 import datetime
 import aiohttp
+from datetime import timedelta
 
 from homeassistant.components.vacuum import (
     STATE_CLEANING,
@@ -76,6 +77,9 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._total_hours = None
         self._cycle_start_time = None
         self._app_client_id = None
+        self._cycle_duration = None
+        self._cycle_end_time = None
+        self._time_remaining = None
 
     @property
     def temperature(self):
@@ -276,6 +280,29 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['equipment']['robot']['cycleStartTime'])) #Convert Epoch To Unix
             self._attributes['cycle_start_time'] = self._cycle_start_time
 
+            self._cycle = data['payload']['robot']['state']['reported']['equipment']['robot']['prCyc']
+            self._attributes['cycle'] = self._cycle
+
+            cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot']['durations']
+
+            self._cycle_duration = list(cycle_duration_values.values())[self._cycle]
+            self._attributes['cycle_duration'] = self._cycle_duration
+
+            minutes = self._cycle_duration
+
+            try:
+                self._cycle_end_time = datetime_obj = self.add_minutes_to_datetime(self._cycle_start_time, minutes)
+                self._attributes['cycle_end_time'] = self._cycle_end_time
+            except:
+                self._attributes['cycle_end_time'] = None
+
+            try:
+                self._time_remaining = self.subtract_dates(datetime.datetime.now(), self._cycle_end_time)
+                self._attributes['time_remaining'] = self._time_remaining
+            except:
+                self._attributes['time_remaining'] = None
+
+
         #For cyclonext device type device mapping
         if self._device_type == "cyclonext":
             
@@ -296,7 +323,31 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['equipment']['robot.1']['cycleStartTime'])) #Convert Epoch To Unix
             self._attributes['cycle_start_time'] = self._cycle_start_time
 
+            self._cycle = data['payload']['robot']['state']['reported']['equipment']['robot.1']['cycle']
+            self._attributes['cycle'] = self._cycle
+
+            cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot.1']['durations']
+
+            self._cycle_duration = list(cycle_duration_values.values())[self._cycle]
+            self._attributes['cycle_duration'] = self._cycle_duration
+
+            minutes = self._cycle_duration
+
+            try:
+                self._cycle_end_time = datetime_obj = self.add_minutes_to_datetime(self._cycle_start_time, minutes)
+                self._attributes['cycle_end_time'] = self._cycle_end_time
+            except:
+                self._attributes['cycle_end_time'] = None
+
+            try:
+                self._time_remaining = self.subtract_dates(datetime.datetime.now(), self._cycle_end_time)
+                self._attributes['time_remaining'] = self._time_remaining
+            except:
+                self._attributes['time_remaining'] = None
+
         #If other device types add here
+
+
 
         #Get Model
         data = None
@@ -340,5 +391,30 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 await websocket.send_json(request)
                 message = await websocket.receive()
             return message.json()
+
+    def add_minutes_to_datetime(self, dt, minutes):
+        return dt + datetime.timedelta(minutes=minutes)
+
+    def subtract_dates(self, date1, date2):
+        """ Subtract the two dates """
+        try:
+            time_diff = date2 - date1
+        except:
+            return 0
+
+        """ If the result is negative, return 0 """
+        if time_diff < timedelta():
+            return 0
+    
+        """ Otherwise, calculate the number of hours, minutes and remaining seconds """
+        total_seconds = time_diff.total_seconds()
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        remaining_seconds = int(total_seconds % 60)
+
+        """ Create a string that includes the number of hours, minutes and remaining seconds """
+        time_str = f"{hours} Hour(s) {minutes} Minute(s) {remaining_seconds} Second(s)"
+
+        return time_str
 
     

@@ -80,6 +80,8 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._cycle_duration = None
         self._cycle_end_time = None
         self._time_remaining = None
+        self._serial_number = None
+        self._model = None
 
     @property
     def temperature(self):
@@ -183,7 +185,9 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             if self._device_type == "cyclonext":
                 request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
-            data = await self.setCleanerState(request)
+            data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+
+            await asyncio.wait_for(self.async_update(), timeout=30)
             
     async def async_stop(self, **kwargs):
         """Stop the vacuum."""
@@ -199,14 +203,16 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":0 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
             
-            data = await self.setCleanerState(request)
+            data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+
+            await asyncio.wait_for(self.async_update(), timeout=30)
 
     async def async_update(self):
         """Get the latest state of the vacuum."""
 
         data = {"apikey": self._api_key, "email": self._username, "password": self._password}
         data = json.dumps(data)
-        data = await self.send_login(data,self._headers)
+        data = await asyncio.wait_for(self.send_login(data,self._headers), timeout=30)
         self._first_name = data["first_name"]
         self._last_name = data["last_name"]
         self._id = data["id"]
@@ -219,31 +225,33 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._attributes['last_name'] = self._last_name
         self._attributes['id'] = self._id
 
-        data = None
-        params = {"authentication_token":self._authentication_token,"user_id":self._id,"api_key":self._api_key}
-        data =  await self.get_devices(params, self._headers)
+        #Only get serial number if its initial to avoid too many calls and load
+        if self._serial_number == None:
+            data = None
+            params = {"authentication_token":self._authentication_token,"user_id":self._id,"api_key":self._api_key}
+            data =  await asyncio.wait_for(self.get_devices(params, self._headers), timeout=30)
     
-        #check needed in case other devices are registered under same account. Some devices seem not to have an owned ID resulting in errors.
-        index = 0
-        if data[0]['device_type'] == "iaqua":
-            index = 1    
-        else:
+            #check needed in case other devices are registered under same account. Some devices seem not to have an owned ID resulting in errors.
             index = 0
+            if data[0]['device_type'] == "iaqua":
+                index = 1    
+            else:
+                index = 0
                     
-        #serial number
-        self._serial_number = data[index]["serial_number"]
-        self._attributes['serial_number'] = self._serial_number
+            #serial number
+            self._serial_number = data[index]["serial_number"]
+            self._attributes['serial_number'] = self._serial_number
 
-        #device type will define further mappings and value locations
-        self._device_type = data[index]["device_type"]
-        self._attributes['device_type'] = self._device_type
+            #device type will define further mappings and value locations
+            self._device_type = data[index]["device_type"]
+            self._attributes['device_type'] = self._device_type
 
 
         #request device status over websocket
         request = { "action": "subscribe", "namespace": "authorization", "payload": { "userId": self.id }, "service": "Authorization", "target": self._serial_number, "version": 1 }
 
         data= None
-        data = await self.get_device_status(request)
+        data = await asyncio.wait_for(self.get_device_status(request), timeout=30)
 
         self._status = data['payload']['robot']['state']['reported']['aws']['status']
         self._attributes['status'] = self._status
@@ -349,48 +357,66 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
 
 
-        #Get Model
-        data = None
-        url = URL_GET_DEVICE_FEATURES + self._serial_number + "/features"
-        data =  await self.get_device_features(url)
+        #Get model only first time to avoid load.
+        if self._model == None:
+            data = None
+            url = URL_GET_DEVICE_FEATURES + self._serial_number + "/features"
+            data =  await asyncio.wait_for(self.get_device_features(url), timeout=30)
 
-        self._model = data['model']
-        self._attributes['model'] = self.model
+            self._model = data['model']
+            self._attributes['model'] = self._model
 
 
     async def send_login(self, data, headers):
         """Post a login request to the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.post(URL_LOGIN, data=data) as response:
-                return await response.json()
+            try:
+                async with session.post(URL_LOGIN, data=data) as response:
+                    return await response.json()
+            finally:
+                await asyncio.wait_for(session.close(), timeout=30)
 
     async def get_devices(self, params, headers):
         """Get device list from the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(URL_GET_DEVICES, params=params) as response:
-                return await response.json()
+            try:
+                async with session.get(URL_GET_DEVICES, params=params) as response:
+                    return await response.json()
+            finally:
+                await asyncio.wait_for(session.close(), timeout=30)
+
 
     async def get_device_features(self, url):
         """Get device list from the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            async with session.get(url) as response:
-                return await response.json()
+            try:
+                async with session.get(url) as response:
+                    return await response.json()
+            finally:
+                await asyncio.wait_for(session.close(), timeout=30)
 
     async def get_device_status(self, request):
         """Get device status of the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
-                await websocket.send_json(request)
-                message = await websocket.receive()
-            return message.json()
+            try:
+                async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
+                    await websocket.send_json(request)
+                    message = await websocket.receive()
+                return message.json()
+            finally:
+                await asyncio.wait_for(session.close(), timeout=30)
     
     async def setCleanerState(self, request):
         """Get device status of the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
-                await websocket.send_json(request)
-                message = await websocket.receive()
-            return message.json()
+            try:
+                async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
+                    await websocket.send_json(request)
+                    message = await websocket.receive()
+                return message.json()
+            finally:
+                await asyncio.wait_for(session.close(), timeout=30)
+
 
     def add_minutes_to_datetime(self, dt, minutes):
         return dt + datetime.timedelta(minutes=minutes)
@@ -416,5 +442,3 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         time_str = f"{hours} Hour(s) {minutes} Minute(s) {remaining_seconds} Second(s)"
 
         return time_str
-
-    

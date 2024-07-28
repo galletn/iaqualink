@@ -15,6 +15,7 @@ from homeassistant.components.vacuum import (
     SUPPORT_STOP,
     SUPPORT_FAN_SPEED,
     StateVacuumEntity,
+    VacuumEntityFeature,
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -38,9 +39,10 @@ from .const import (
 
 # Define the supported features of our vacuum entity
 SUPPORT_IAQUALINK_ROBOTS = (
-    SUPPORT_START
-    | SUPPORT_STOP
-    | SUPPORT_FAN_SPEED
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
 )
 
 

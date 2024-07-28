@@ -86,6 +86,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._model = None
         self._fan_speed_list = ["Floor only", "Floor and walls"]
         self._fan_speed = self._fan_speed_list[0]
+        self._debug = None
 
     @property
     def fan_speed(self):
@@ -455,26 +456,33 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
         return time_str
 
-    async def set_fan_speed(self, speed):
+    async def async_set_fan_speed(self, fan_speed):
         """ code to send fan speed to vacuum cleaner """
-        if speed not in self.fan_speed_list:
+        if fan_speed not in self._fan_speed_list:
             raise ValueError('Invalid fan speed')
-        self.fan_speed = speed
+        self._fan_speed = fan_speed
 
         clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
 
-        #if self._device_type == "vr":
-            # todo 
+        if self._device_type == "vr":
+            if fan_speed == "Floor only":
+                _cycle_speed = "1"
 
-        if self._device_type == "cyclonext":
-            if speed == "Floor only":
+            if fan_speed == "Floor and walls":
                 _cycle_speed = "2"
 
-            if speed == "Floor and walls":
+            request = {"action":"setCleaningMode","version":1,"namespace":"vr","payload":{"state":{"desired":{"equipment":{"robot":{"prCyc":_cycle_speed}}}},"clientToken": clientToken},"service":"StateController","target": self._serial_number}
+
+
+        if self._device_type == "cyclonext":
+            if fan_speed == "Floor only":
+                _cycle_speed = "2"
+
+            if fan_speed == "Floor and walls":
                 _cycle_speed = "3"
 
             request = { "action": "setCleaningMode", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "cycle": _cycle_speed } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
         data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
 
-        await asyncio.wait_for(self.async_update(), timeout=30)
+        self._debug = data

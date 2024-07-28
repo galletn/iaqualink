@@ -201,8 +201,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
             data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-
-            await asyncio.wait_for(self.async_update(), timeout=30)
             
     async def async_stop(self, **kwargs):
         """Stop the vacuum."""
@@ -219,8 +217,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             
             
             data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-
-            await asyncio.wait_for(self.async_update(), timeout=30)
 
     async def async_update(self):
         """Get the latest state of the vacuum."""
@@ -427,10 +423,11 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             try:
                 async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
                     await websocket.send_json(request)
-                    message = await websocket.receive()
-                return message.json()
+                    # message = await websocket.receive()
+                # return message.json()
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
+                await self.async_update()
 
 
     def add_minutes_to_datetime(self, dt, minutes):

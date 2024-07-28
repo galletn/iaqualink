@@ -13,6 +13,7 @@ from homeassistant.components.vacuum import (
     SUPPORT_RETURN_HOME,
     SUPPORT_START,
     SUPPORT_STOP,
+    SUPPORT_FAN_SPEED,
     StateVacuumEntity,
 )
 from homeassistant.const import (
@@ -39,6 +40,7 @@ from .const import (
 SUPPORT_IAQUALINK_ROBOTS = (
     SUPPORT_START
     | SUPPORT_STOP
+    | SUPPORT_FAN_SPEED
 )
 
 
@@ -82,6 +84,16 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._time_remaining = None
         self._serial_number = None
         self._model = None
+        self._fan_speed_list = ["Floor only", "Floor and walls"]
+        self._fan_speed = self._fan_speed_list[0]
+
+    @property
+    def fan_speed(self):
+        return self._fan_speed
+
+    @property
+    def fan_speed_list(self):
+        return self._fan_speed_list
 
     @property
     def temperature(self):
@@ -442,3 +454,27 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         time_str = f"{hours} Hour(s) {minutes} Minute(s) {remaining_seconds} Second(s)"
 
         return time_str
+
+    async def set_fan_speed(self, speed):
+        """ code to send fan speed to vacuum cleaner """
+        if speed not in self.fan_speed_list:
+            raise ValueError('Invalid fan speed')
+        self.fan_speed = speed
+
+        clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
+
+        #if self._device_type == "vr":
+            # todo 
+
+        if self._device_type == "cyclonext":
+            if speed == "Floor only":
+                _cycle_speed = "2"
+
+            if speed == "Floor and walls":
+                _cycle_speed = "3"
+
+            request = { "action": "setCleaningMode", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "cycle": _cycle_speed } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
+            
+        data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+
+        await asyncio.wait_for(self.async_update(), timeout=30)

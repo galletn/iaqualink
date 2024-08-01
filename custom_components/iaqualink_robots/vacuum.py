@@ -13,7 +13,9 @@ from homeassistant.components.vacuum import (
     SUPPORT_RETURN_HOME,
     SUPPORT_START,
     SUPPORT_STOP,
+    SUPPORT_FAN_SPEED,
     StateVacuumEntity,
+    VacuumEntityFeature,
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -37,8 +39,10 @@ from .const import (
 
 # Define the supported features of our vacuum entity
 SUPPORT_IAQUALINK_ROBOTS = (
-    SUPPORT_START
-    | SUPPORT_STOP
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
 )
 
 
@@ -82,6 +86,18 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._time_remaining = None
         self._serial_number = None
         self._model = None
+        self._fan_speed_list = ["Floor only", "Floor and walls"]
+        self._fan_speed = self._fan_speed_list[0]
+        self._debug = None
+        self._debug_mode=False
+
+    @property
+    def fan_speed(self):
+        return self._fan_speed
+
+    @property
+    def fan_speed_list(self):
+        return self._fan_speed_list
 
     @property
     def temperature(self):
@@ -186,8 +202,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
             data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-
-            await asyncio.wait_for(self.async_update(), timeout=30)
             
     async def async_stop(self, **kwargs):
         """Stop the vacuum."""
@@ -204,8 +218,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             
             
             data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-
-            await asyncio.wait_for(self.async_update(), timeout=30)
 
     async def async_update(self):
         """Get the latest state of the vacuum."""
@@ -253,8 +265,20 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         data= None
         data = await asyncio.wait_for(self.get_device_status(request), timeout=30)
 
-        self._status = data['payload']['robot']['state']['reported']['aws']['status']
-        self._attributes['status'] = self._status
+        try:
+            self._status = data['payload']['robot']['state']['reported']['aws']['status']
+            self._attributes['status'] = self._status
+        except:
+            #returns empty message somethimes, try second call
+            self._debug = data
+            if self._debug_mode == True:
+                self._attributes['debug'] = self._debug
+            
+            data = await asyncio.wait_for(self.get_device_status(request), timeout=30)
+
+            self._status = data['payload']['robot']['state']['reported']['aws']['status']
+            self._attributes['status'] = self._status
+            
 
         self._last_online = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['aws']['timestamp']/1000)) #Convert Epoch To Unix
         self._attributes['last_online'] = self._last_online
@@ -412,10 +436,11 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             try:
                 async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
                     await websocket.send_json(request)
-                    message = await websocket.receive()
-                return message.json()
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
+                #wait 2 seconds to avoid flooding iaqualink server with fetching statusses again otherwise it causes empty message returns
+                await asyncio.sleep(2)
+                await self.async_update()
 
 
     def add_minutes_to_datetime(self, dt, minutes):
@@ -442,3 +467,34 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         time_str = f"{hours} Hour(s) {minutes} Minute(s) {remaining_seconds} Second(s)"
 
         return time_str
+
+    async def async_set_fan_speed(self, fan_speed):
+        """ code to send fan speed to vacuum cleaner """
+        if fan_speed not in self._fan_speed_list:
+            raise ValueError('Invalid fan speed')
+        self._fan_speed = fan_speed
+
+        clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
+
+        if self._device_type == "vr":
+            if fan_speed == "Floor only":
+                _cycle_speed = "1"
+
+            if fan_speed == "Floor and walls":
+                _cycle_speed = "2"
+
+            request = {"action":"setCleaningMode","version":1,"namespace":"vr","payload":{"state":{"desired":{"equipment":{"robot":{"prCyc":_cycle_speed}}}},"clientToken": clientToken},"service":"StateController","target": self._serial_number}
+
+
+        if self._device_type == "cyclonext":
+            if fan_speed == "Floor only":
+                _cycle_speed = "1"
+
+            if fan_speed == "Floor and walls":
+                _cycle_speed = "3"
+
+            request = {"action":"setCleaningMode","namespace":"cyclonext","payload":{"clientToken":clientToken,"state":{"desired":{ "equipment":{"robot.1":{"cycle":_cycle_speed}}}}},"service":"StateController","target":self._serial_number,"version":1}
+            
+        data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+
+        self._debug = data

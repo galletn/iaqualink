@@ -89,6 +89,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._fan_speed_list = ["Floor only", "Floor and walls"]
         self._fan_speed = self._fan_speed_list[0]
         self._debug = None
+        self._debug_mode=False
 
     @property
     def fan_speed(self):
@@ -264,8 +265,20 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         data= None
         data = await asyncio.wait_for(self.get_device_status(request), timeout=30)
 
-        self._status = data['payload']['robot']['state']['reported']['aws']['status']
-        self._attributes['status'] = self._status
+        try:
+            self._status = data['payload']['robot']['state']['reported']['aws']['status']
+            self._attributes['status'] = self._status
+        except:
+            #returns empty message somethimes, try second call
+            self._debug = data
+            if self._debug_mode == True:
+                self._attributes['debug'] = self._debug
+            
+            data = await asyncio.wait_for(self.get_device_status(request), timeout=30)
+
+            self._status = data['payload']['robot']['state']['reported']['aws']['status']
+            self._attributes['status'] = self._status
+            
 
         self._last_online = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['aws']['timestamp']/1000)) #Convert Epoch To Unix
         self._attributes['last_online'] = self._last_online
@@ -423,10 +436,10 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             try:
                 async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
                     await websocket.send_json(request)
-                    # message = await websocket.receive()
-                # return message.json()
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
+                #wait 2 seconds to avoid flooding iaqualink server with fetching statusses again otherwise it causes empty message returns
+                await asyncio.sleep(2)
                 await self.async_update()
 
 
@@ -475,12 +488,12 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
         if self._device_type == "cyclonext":
             if fan_speed == "Floor only":
-                _cycle_speed = "2"
+                _cycle_speed = "1"
 
             if fan_speed == "Floor and walls":
                 _cycle_speed = "3"
 
-            request = { "action": "setCleaningMode", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "cycle": _cycle_speed } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
+            request = {"action":"setCleaningMode","namespace":"cyclonext","payload":{"clientToken":clientToken,"state":{"desired":{ "equipment":{"robot.1":{"cycle":_cycle_speed}}}}},"service":"StateController","target":self._serial_number,"version":1}
             
         data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
 

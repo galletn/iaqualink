@@ -214,33 +214,47 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
     async def async_start(self):
         """Start the vacuum."""
         # Your start code here
-        if self._status == "connected":
+        if self._status == "connected":    
             self._state = STATE_CLEANING
-            clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
+            if self._device_type == "i2d_robot":
+                request = { "command": "/command","params": "request=0A1240&timeout=800","user_id": self._id }
+                url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
+                data= None
 
-            if self._device_type == "vr":
-                request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
+                data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=800)
+            else:
+                if self._status == "connected":
+                    clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
+
+                    if self._device_type == "vr":
+                        request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
-            if self._device_type == "cyclonext":
-                request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
+                    if self._device_type == "cyclonext":
+                        request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
-            data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+                    data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
             
     async def async_stop(self, **kwargs):
         """Stop the vacuum."""
         # Your stop code here
         if self._status == "connected":
             self._state = STATE_IDLE
-            clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
+            if self._device_type == "i2d_robot":
+                request = { "command": "/command","params": "request=0A1210&timeout=800","user_id": self._id }
+                url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
+                data= None
 
-            if self._device_type == "vr":
-                request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 0 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
+                data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=800)
+            else:
+                clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
+
+                if self._device_type == "vr":
+                    request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 0 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
-            if self._device_type == "cyclonext":
-                request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":0 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
+                if self._device_type == "cyclonext":
+                    request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":0 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
-            
-            data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+                data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
 
     async def async_update(self):
         """Get the latest state of the vacuum."""
@@ -294,16 +308,19 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
         #request status for i2d type
         if self._device_type == "i2d_robot":
-            request = { "command": "/command","params": "request=0A0D","user_id": self._id }
+            request = { "command": "/command","params": "request=OA11","user_id": self._id }
 
             url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
             data= None
-            data = await asyncio.wait_for(self.get_device_status_i2d(url,request), timeout=30)
+            data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=30)
 
             try:
-                if data["command"]["request"] == "0A0D":
-                    self._status = "online"
+                if data["command"]["request"] == "OA11":
+                    self._status = "connected"
                     self._attributes['status'] = self._status
+                    self._debug = data["command"]["response"]
+                    if self._debug_mode == True:
+                        self._attributes['debug'] = self._debug
             except:
                 try:
                     if data["status"] == "500":
@@ -486,7 +503,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
-    async def get_device_status_i2d(self, url, request):
+    async def post_command_i2d(self, url, request):
         """Get device status of the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token, "api_key": self._api_key}) as session:
             try:

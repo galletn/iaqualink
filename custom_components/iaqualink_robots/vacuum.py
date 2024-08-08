@@ -8,6 +8,7 @@ from homeassistant.components.vacuum import (
     STATE_CLEANING,
     STATE_DOCKED,
     STATE_IDLE,
+    STATE_RETURNING,
     SUPPORT_BATTERY,
     SUPPORT_PAUSE,
     SUPPORT_RETURN_HOME,
@@ -39,6 +40,28 @@ from .const import (
 
 # Define the supported features of our vacuum entity
 SUPPORT_IAQUALINK_ROBOTS = (
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
+)
+
+SUPPORT_IAQUALINK_ROBOTS_vr = (
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
+        | VacuumEntityFeature.RETURN_HOME
+)
+
+SUPPORT_IAQUALINK_ROBOTS_cyclonext = (
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
+)
+
+SUPPORT_IAQUALINK_ROBOTS_i2d = (
         VacuumEntityFeature.START
         | VacuumEntityFeature.STOP
         | VacuumEntityFeature.FAN_SPEED
@@ -258,6 +281,16 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             self._device_type = data[index]["device_type"]
             self._attributes['device_type'] = self._device_type
 
+            #Set modes based on model
+            if self._device_type == "vr":
+
+                self._fan_speed_list = ["Floor only", "SMART Floor and walls", "Floor and walls"]
+                self._supported_features = SUPPORT_IAQUALINK_ROBOTS_vr
+
+            if self._device_type == "cyclonext":
+
+                self._fan_speed_list = ["Floor only", "SMART Floor and walls"]
+                self._supported_features = SUPPORT_IAQUALINK_ROBOTS_cyclonext
 
         #request device status over websocket
         request = { "action": "subscribe", "namespace": "authorization", "payload": { "userId": self.id }, "service": "Authorization", "target": self._serial_number, "version": 1 }
@@ -285,6 +318,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
         #For VR device type device mapping
         if self._device_type == "vr":
+
             try:
                 self._temperature = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['val']
             except:
@@ -298,7 +332,10 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             if data['payload']['robot']['state']['reported']['equipment']['robot']['state'] == 1:
                 self._state = STATE_CLEANING
             else:
-                self._state = STATE_IDLE
+                if data['payload']['robot']['state']['reported']['equipment']['robot']['state'] == 3:
+                    self._state = STATE_RETURNING
+                else:
+                    self._state = STATE_IDLE
 
             self._canister = data['payload']['robot']['state']['reported']['equipment']['robot']['canister']
             self._attributes['canister'] = self._canister
@@ -442,7 +479,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 await asyncio.sleep(2)
                 await self.async_update()
 
-
     def add_minutes_to_datetime(self, dt, minutes):
         return dt + datetime.timedelta(minutes=minutes)
 
@@ -480,11 +516,13 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             if fan_speed == "Floor only":
                 _cycle_speed = "1"
 
-            if fan_speed == "Floor and walls":
+            if fan_speed == "SMART Floor and walls":
                 _cycle_speed = "2"
 
-            request = {"action":"setCleaningMode","version":1,"namespace":"vr","payload":{"state":{"desired":{"equipment":{"robot":{"prCyc":_cycle_speed}}}},"clientToken": clientToken},"service":"StateController","target": self._serial_number}
+            if fan_speed == "Floor and walls":
+                _cycle_speed = "3"
 
+            request = {"action":"setCleaningMode","version":1,"namespace":"vr","payload":{"state":{"desired":{"equipment":{"robot":{"prCyc":_cycle_speed}}}},"clientToken": clientToken},"service":"StateController","target": self._serial_number}
 
         if self._device_type == "cyclonext":
             if fan_speed == "Floor only":
@@ -498,3 +536,15 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
 
         self._debug = data
+
+    async def async_return_to_base(self, **kwargs):
+        """Set the vacuum cleaner to return to the dock."""
+        if self._status == "connected":
+            self._state = STATE_RETURNING
+            clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
+
+            #Only supported by VR type
+            if self._device_type == "vr":
+                request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 3 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
+                        
+                data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)

@@ -66,6 +66,7 @@ SUPPORT_IAQUALINK_ROBOTS_i2d = (
         | VacuumEntityFeature.STOP
         | VacuumEntityFeature.FAN_SPEED
         | VacuumEntityFeature.STATUS
+        | VacuumEntityFeature.RETURN_HOME
 )
 
 
@@ -124,12 +125,10 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
     @property
     def temperature(self):
-        """Return the state of the sensor."""
         return self._temperature
 
     @property
     def name(self):
-        """Return the name of the vacuum."""
         return self._name
 
     @property
@@ -154,7 +153,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
     @property
     def model(self):
-        """Return device model."""
         return self._model
 
     @property
@@ -203,7 +201,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
     @property
     def status(self):
-        """Return the state of the vacuum."""
+        """Return the status of the vacuum."""
         return self._status
 
     @property
@@ -306,6 +304,11 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 self._fan_speed_list = ["Floor only", "SMART Floor and walls"]
                 self._supported_features = SUPPORT_IAQUALINK_ROBOTS_cyclonext
 
+            if self._device_type == "i2d_robot":
+
+                self._fan_speed_list = ["Floor only", "Walls only", "Floor and walls"]
+                self._supported_features = SUPPORT_IAQUALINK_ROBOTS_i2d
+
         #request status for i2d type
         if self._device_type == "i2d_robot":
             request = { "command": "/command","params": "request=OA11","user_id": self._id }
@@ -330,6 +333,14 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                     self._debug = data
                     if self._debug_mode == True:
                         self._attributes['debug'] = self._debug
+
+            if self._state == STATE_CLEANING:
+                minutes_remaining = data[11:13]
+                try:
+                    self.add_minutes_to_datetime(datetime.datetime.now(), minutes_remaining)
+                    self._attributes['time_remaining'] = self._time_remaining
+                except:
+                    self._attributes['time_remaining'] = None
 
         else:
         #request device status & attributes over websocket for cyclonext and vr device types
@@ -554,42 +565,64 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         if fan_speed not in self._fan_speed_list:
             raise ValueError('Invalid fan speed')
         self._fan_speed = fan_speed
+        if self._device_type == "i2d_robot":
+            if fan_speed == "Walls only":
+                _cycle_speed = "0A1284"
 
-        clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
-
-        if self._device_type == "vr":
             if fan_speed == "Floor only":
-                _cycle_speed = "1"
-
-            if fan_speed == "SMART Floor and walls":
-                _cycle_speed = "2"
+                _cycle_speed = "0A1280"
 
             if fan_speed == "Floor and walls":
-                _cycle_speed = "3"
+                _cycle_speed = "0A1283"
 
-            request = {"action":"setCleaningMode","version":1,"namespace":"vr","payload":{"state":{"desired":{"equipment":{"robot":{"prCyc":_cycle_speed}}}},"clientToken": clientToken},"service":"StateController","target": self._serial_number}
+            request = { "command": "/command","params": "request=" + _cycle_speed + "&timeout=800","user_id": self._id }
+            url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
+            data= None
+            data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=800)
+        
+        else:
+            clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
 
-        if self._device_type == "cyclonext":
-            if fan_speed == "Floor only":
-                _cycle_speed = "1"
+            if self._device_type == "vr":
+                if fan_speed == "Floor only":
+                    _cycle_speed = "1"
 
-            if fan_speed == "Floor and walls":
-                _cycle_speed = "3"
+                if fan_speed == "SMART Floor and walls":
+                    _cycle_speed = "2"
 
-            request = {"action":"setCleaningMode","namespace":"cyclonext","payload":{"clientToken":clientToken,"state":{"desired":{ "equipment":{"robot.1":{"cycle":_cycle_speed}}}}},"service":"StateController","target":self._serial_number,"version":1}
+                if fan_speed == "Floor and walls":
+                    _cycle_speed = "3"
+
+                request = {"action":"setCleaningMode","version":1,"namespace":"vr","payload":{"state":{"desired":{"equipment":{"robot":{"prCyc":_cycle_speed}}}},"clientToken": clientToken},"service":"StateController","target": self._serial_number}
+
+            if self._device_type == "cyclonext":
+                if fan_speed == "Floor only":
+                    _cycle_speed = "1"
+
+                if fan_speed == "Floor and walls":
+                    _cycle_speed = "3"
+
+                request = {"action":"setCleaningMode","namespace":"cyclonext","payload":{"clientToken":clientToken,"state":{"desired":{ "equipment":{"robot.1":{"cycle":_cycle_speed}}}}},"service":"StateController","target":self._serial_number,"version":1}
             
-        data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+            data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
 
-        self._debug = data
+        if self._debug_mode == True:
+            self._attributes['debug'] = self._debug
 
     async def async_return_to_base(self, **kwargs):
         """Set the vacuum cleaner to return to the dock."""
         if self._status == "connected":
             self._state = STATE_RETURNING
-            clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
 
-            #Only supported by VR type
             if self._device_type == "vr":
+                clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
                 request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 3 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
                         
                 data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+            
+            if self._device_type == "i2d_robot":
+                request = { "command": "/command","params": "request=0A1701&timeout=800","user_id": self._id }
+                url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
+                data= None
+
+                data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=800)

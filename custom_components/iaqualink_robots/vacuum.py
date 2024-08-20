@@ -301,7 +301,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
             if self._device_type == "cyclonext":
 
-                self._fan_speed_list = ["Floor only", "SMART Floor and walls"]
+                self._fan_speed_list = ["Floor only", "Floor and walls"]
                 self._supported_features = SUPPORT_IAQUALINK_ROBOTS_cyclonext
 
             if self._device_type == "i2d_robot":

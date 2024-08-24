@@ -60,3 +60,8 @@ vacuum:
 
 https://github.com/user-attachments/assets/0390dc52-5c24-455a-b5ae-6e725579ce71
 
+## Trademark Legal Notices
+All product names, trademarks and registered trademarks in the images in this repository, are property of their respective owners. All images in this repository are used by the Home Assistant project for identification purposes only.
+
+The use of these names, trademarks and brands appearing in these image files, do not imply endorsement.
+

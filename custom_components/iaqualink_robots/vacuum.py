@@ -437,8 +437,11 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 self._error_state = data['payload']['robot']['state']['reported']['equipment']['robot.1']['errors']['code']
                 self._attributes['error_state'] = self._error_state
 
-                self._total_hours = data['payload']['robot']['state']['reported']['equipment']['robot.1']['totRunTime']
-                self._attributes['total_hours'] = self._total_hours
+                try:
+                    self._total_hours = data['payload']['robot']['state']['reported']['equipment']['robot.1']['totRunTime']
+                    self._attributes['total_hours'] = self._total_hours
+                except:
+                    self._attributes['total_hours'] = 0 #not supported by some cyclonex models
 
                 self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['equipment']['robot.1']['cycleStartTime'])) #Convert Epoch To Unix
                 self._attributes['cycle_start_time'] = self._cycle_start_time

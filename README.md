@@ -47,11 +47,13 @@ vacuum:
 - RA 6900 iQ
 - Polaris - VRX iQ+
 - CNX 30 iQ
+- CNX 40 IQ
 - CNX 4090 iQ
+- OV 5490 IQ
 
 ## Known Models to have issues:
 
-- OV 5490 IQ
+- 
 
 
 ## Stop Start Example:

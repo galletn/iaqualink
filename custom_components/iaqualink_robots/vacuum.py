@@ -474,8 +474,11 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 url = URL_GET_DEVICE_FEATURES + self._serial_number + "/features"
                 data =  await asyncio.wait_for(self.get_device_features(url), timeout=30)
 
-                self._model = data['model']
-                self._attributes['model'] = self._model
+                try:
+                    self._model = data['model']
+                    self._attributes['model'] = self._model
+                except:
+                    self._model = 'Not Supported' #39 some models do not return a model number on the features call
 
 
     async def send_login(self, data, headers):

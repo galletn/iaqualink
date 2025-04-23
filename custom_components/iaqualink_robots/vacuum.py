@@ -5,18 +5,9 @@ import aiohttp
 from datetime import timedelta
 
 from homeassistant.components.vacuum import (
-    STATE_CLEANING,
-    STATE_DOCKED,
-    STATE_IDLE,
-    STATE_RETURNING,
-    SUPPORT_BATTERY,
-    SUPPORT_PAUSE,
-    SUPPORT_RETURN_HOME,
-    SUPPORT_START,
-    SUPPORT_STOP,
-    SUPPORT_FAN_SPEED,
     StateVacuumEntity,
     VacuumEntityFeature,
+    VacuumActivity
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -54,6 +45,13 @@ SUPPORT_IAQUALINK_ROBOTS_vr = (
         | VacuumEntityFeature.RETURN_HOME
 )
 
+SUPPORT_IAQUALINK_ROBOTS_cyclobat = (
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
+)
+
 SUPPORT_IAQUALINK_ROBOTS_cyclonext = (
         VacuumEntityFeature.START
         | VacuumEntityFeature.STOP
@@ -88,7 +86,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         """Initialize the vacuum."""
         self._name = config.get('name')
         self._attributes = {}
-        self._state = STATE_IDLE
+        self._activity = VacuumActivity.IDLE
         self._battery_level = None
         self._supported_features = SUPPORT_IAQUALINK_ROBOTS
         self._username = config.get('username')
@@ -114,6 +112,10 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._fan_speed = self._fan_speed_list[0]
         self._debug = None
         self._debug_mode=True
+
+    @property
+    def activity(self) -> VacuumActivity:
+        return self._activity
 
     @property
     def fan_speed(self):
@@ -195,11 +197,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         return self._attributes
 
     @property
-    def state(self):
-        """Return the state of the vacuum."""
-        return self._state
-
-    @property
     def status(self):
         """Return the status of the vacuum."""
         return self._status
@@ -212,8 +209,11 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
     async def async_start(self):
         """Start the vacuum."""
         # Your start code here
-        if self._status == "connected":    
-            self._state = STATE_CLEANING
+        if self._status == "connected":
+
+            self._activity = VacuumActivity.CLEANING
+            self.async_write_ha_state()
+
             if self._device_type == "i2d_robot":
                 request = { "command": "/command","params": "request=0A1240&timeout=800","user_id": self._id }
                 url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
@@ -227,6 +227,9 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                     if self._device_type == "vr":
                         request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
+                    if self._device_type == "cyclobat":
+                        request = { "action": "setCleaningMode", "version":1, "namespace": "cyclobat", "payload": {"state": {"desired": {"equipment": {"robot": {"main": {"ctrl":1 } } } } }, "clientToken": clientToken }, "service":"StateController", "target": self._serial_number}
+                                    
                     if self._device_type == "cyclonext":
                         request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
             
@@ -236,7 +239,10 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         """Stop the vacuum."""
         # Your stop code here
         if self._status == "connected":
-            self._state = STATE_IDLE
+
+            self._activity = VacuumActivity.IDLE
+            self.async_write_ha_state()
+
             if self._device_type == "i2d_robot":
                 request = { "command": "/command","params": "request=0A1210&timeout=800","user_id": self._id }
                 url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
@@ -248,6 +254,9 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
                 if self._device_type == "vr":
                     request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 0 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
+            
+                if self._device_type == "cyclobat":
+                    request = { "action": "setCleaningMode", "version":1, "namespace": "cyclobat", "payload": {"state": {"desired": {"equipment": {"robot": {"main": {"ctrl":0 } } } } }, "clientToken": clientToken }, "service":"StateController", "target": self._serial_number}
             
                 if self._device_type == "cyclonext":
                     request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":0 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
@@ -296,8 +305,13 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             #Set modes based on model
             if self._device_type == "vr":
 
-                self._fan_speed_list = ["Floor only", "SMART Floor and walls", "Floor and walls"]
+                self._fan_speed_list = ["Wall only","Floor only", "SMART Floor and walls", "Floor and walls"]
                 self._supported_features = SUPPORT_IAQUALINK_ROBOTS_vr
+
+            if self._device_type == "cyclobat":
+
+                self._fan_speed_list = ["Wall only","Floor only", "SMART Floor and walls", "Floor and walls"]
+                self._supported_features = SUPPORT_IAQUALINK_ROBOTS_cyclobat
 
             if self._device_type == "cyclonext":
 
@@ -334,7 +348,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                     if self._debug_mode == True:
                         self._attributes['debug'] = self._debug
 
-            if self._state == STATE_CLEANING:
+            if self._activity == VacuumActivity.CLEANING:
                 minutes_remaining = data[11:13]
                 try:
                     self.add_minutes_to_datetime(datetime.datetime.now(), minutes_remaining)
@@ -381,12 +395,15 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 self._attributes['temperature'] = self._temperature
 
                 if data['payload']['robot']['state']['reported']['equipment']['robot']['state'] == 1:
-                    self._state = STATE_CLEANING
+                    self._activity = VacuumActivity.CLEANING
+                    self.async_write_ha_state()
                 else:
                     if data['payload']['robot']['state']['reported']['equipment']['robot']['state'] == 3:
-                        self._state = STATE_RETURNING
+                        self._activity = VacuumActivity.RETURNING
+                        self.async_write_ha_state()
                     else:
-                        self._state = STATE_IDLE
+                        self._activity = VacuumActivity.IDLE
+                        self.async_write_ha_state()
 
                 self._canister = data['payload']['robot']['state']['reported']['equipment']['robot']['canister']
                 self._attributes['canister'] = self._canister
@@ -422,14 +439,68 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 except:
                     self._attributes['time_remaining'] = None
 
+            #For cyclobat device type device mapping
+            if self._device_type == "cyclobat":
+                if data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["main"]["state"] == 1:
+                    self._activity = VacuumActivity.CLEANING
+                    self.async_write_ha_state()
+                else:
+                    if data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["main"]["state"] == 3:
+                        self._activity = VacuumActivity.RETURNING
+                        self.async_write_ha_state()
+                    else:
+                        self._activity = VacuumActivity.IDLE
+                        self.async_write_ha_state()
+
+                self._total_hours = total_minutes = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["stats"]["totRunTime"]
+                self._attributes['total_hours'] = self._total_hours
+
+                self._battery_state = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["battery"]["state"]
+                self._attributes['battery_state'] = self._battery_state
+
+                self._user_charge_percentage = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["battery"]["userChargePerc"]
+                self._attributes['user_charge_percentage'] = self._user_charge_percentage
+
+                self._battery_cycles = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["battery"]["cycles"]
+                self._attributes['battery_cycles'] =  self._battery_cycles
+
+
+                self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['equipment']['robot']['main']['cycleStartTime'])) #Convert Epoch To Unix
+                self._attributes['cycle_start_time'] = self._cycle_start_time
+
+                self._cycle = data['payload']['robot']['state']['reported']['equipment']['robot']['lastCycle']['endCycleType']
+                self._attributes['cycle'] = self._cycle
+
+                cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot']['cycles']
+
+                self._cycle_duration = list(cycle_duration_values.values())[self._cycle]
+                self._attributes['cycle_duration'] = self._cycle_duration
+
+                minutes = self._cycle_duration
+
+                try:
+                    self._cycle_end_time = datetime_obj = self.add_minutes_to_datetime(self._cycle_start_time, minutes)
+                    self._attributes['cycle_end_time'] = self._cycle_end_time
+                except:
+                    self._attributes['cycle_end_time'] = None
+
+                try:
+                    self._time_remaining = self.subtract_dates(datetime.datetime.now(), self._cycle_end_time)
+                    self._attributes['time_remaining'] = self._time_remaining
+                except:
+                    self._attributes['time_remaining'] = None
+
+
 
             #For cyclonext device type device mapping
             if self._device_type == "cyclonext":
             
                 if data['payload']['robot']['state']['reported']['equipment']['robot.1']['mode']== 1:
-                    self._state = STATE_CLEANING
+                    self._activity = VacuumActivity.CLEANING
+                    self.async_write_ha_state()
                 else:
-                    self._state = STATE_IDLE
+                    self._activity = VacuumActivity.IDLE
+                    self.async_write_ha_state()
 
                 self._canister = data['payload']['robot']['state']['reported']['equipment']['robot.1']['canister']
                 self._attributes['canister'] = self._canister
@@ -590,6 +661,9 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
 
             if self._device_type == "vr":
+                if fan_speed == "Wall only":
+                    _cycle_speed = "0"
+
                 if fan_speed == "Floor only":
                     _cycle_speed = "1"
 
@@ -600,6 +674,21 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                     _cycle_speed = "3"
 
                 request = {"action":"setCleaningMode","version":1,"namespace":"vr","payload":{"state":{"desired":{"equipment":{"robot":{"prCyc":_cycle_speed}}}},"clientToken": clientToken},"service":"StateController","target": self._serial_number}
+
+            if self._device_type == "cyclobat":
+                if fan_speed == "Wall only":
+                    _cycle_speed = "3"
+
+                if fan_speed == "Floor only":
+                    _cycle_speed = "0"
+
+                if fan_speed == "SMART Floor and walls":
+                    _cycle_speed = "2"
+
+                if fan_speed == "Floor and walls":
+                    _cycle_speed = "1"
+
+                request = { "action": "setCleaningMode", "version":1, "namespace": "cyclobat", "payload": {"state": {"desired": {"equipment": {"robot": {"main": {"mode": _cycle_speed } } } } }, "clientToken": clientToken }, "service":"StateController", "target": self._serial_number}
 
             if self._device_type == "cyclonext":
                 if fan_speed == "Floor only":
@@ -618,14 +707,25 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
     async def async_return_to_base(self, **kwargs):
         """Set the vacuum cleaner to return to the dock."""
         if self._status == "connected":
-            self._state = STATE_RETURNING
+            
+            self._activity = VacuumActivity.RETURNING
+            self.async_write_ha_state()
 
+            #VR
             if self._device_type == "vr":
                 clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
                 request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 3 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
                         
                 data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+
+            #Cyclobat
+            if self._device_type == "cyclobat":
+                clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
+                request = { "action": "setCleanerState", "namespace": "cyclobat", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 3 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
+                        
+                data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
             
+            #I2D Robot
             if self._device_type == "i2d_robot":
                 request = { "command": "/command","params": "request=0A1701&timeout=800","user_id": self._id }
                 url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"

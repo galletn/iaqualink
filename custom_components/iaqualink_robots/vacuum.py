@@ -607,16 +607,8 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             try:
                 async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
                     await websocket.send_json(request)
-                try:
-                    message = await asyncio.wait_for(websocket.receive(), timeout=10)
-                except asyncio.TimeoutError:
-                    _LOGGER.warning("WebSocket timeout: no message received")
-                    return {}
-                if message.type == aiohttp.WSMsgType.TEXT:
-                    return message.json()
-                else:
-                    _LOGGER.warning("WebSocket returned non-text message: %s", message.type)
-                    return {}
+                    message = await websocket.receive()
+                return message.json()
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 

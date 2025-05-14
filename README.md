@@ -40,7 +40,7 @@ vacuum:
 - CNX 4090 iQ
 - OV 5490 IQ
 - RF 5600 IQ
-- 
+- P965 iQ
 
 ## Known Models to have issues:
 

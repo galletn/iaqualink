@@ -2,7 +2,11 @@ import asyncio
 import json
 import datetime
 import aiohttp
+import logging
 from datetime import timedelta
+
+_LOGGER = logging.getLogger(__name__)
+
 
 from homeassistant.components.vacuum import (
     StateVacuumEntity,
@@ -281,24 +285,39 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._attributes['last_name'] = self._last_name
         self._attributes['id'] = self._id
 
+        _LOGGER.debug("Contenu de self : %s", self.__dict__)
+
         #Only get serial number if its initial to avoid too many calls and load
         if self._serial_number == None:
             data = None
             params = {"authentication_token":self._authentication_token,"user_id":self._id,"api_key":self._api_key}
             data =  await asyncio.wait_for(self.get_devices(params, self._headers), timeout=30)
     
-            #check needed in case other devices are registered under same account. Some devices seem not to have an owned ID resulting in errors.
-            index = 0
-            if data[0]['device_type'] == "iaqua":
-                index = 1    
-            else:
-                index = 0
-                    
-            #serial number
+            # Filter only devices that are compatible with the module.
+            supported_device_types = ["i2d_robot", "cyclonext", "cyclobat", "vr"]
+
+            index = None
+            for i, device in enumerate(data):
+                device_type = device.get("device_type")
+                _LOGGER.debug("🔍 Devices found : %s", device)
+                if device_type in supported_device_types:
+                    index = i
+                    _LOGGER.debug("✅ Device selected : %s (index=%d)", device_type, i)
+                    break
+                else:
+                    _LOGGER.debug("⏩ Device ignored (unsupported type) : %s", device_type)
+
+            if index is None:
+                _LOGGER.error("❌ No compatible robot found in the device list.")
+                self._status = "offline"
+                self._attributes['status'] = self._status
+                return
+
+            # serial number
             self._serial_number = data[index]["serial_number"]
             self._attributes['serial_number'] = self._serial_number
 
-            #device type will define further mappings and value locations
+            # device type
             self._device_type = data[index]["device_type"]
             self._attributes['device_type'] = self._device_type
 
@@ -566,7 +585,9 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers=headers) as session:
             try:
                 async with session.get(URL_GET_DEVICES, params=params) as response:
-                    return await response.json()
+                    data = await response.json()
+                    _LOGGER.debug("Réponse brute de get_devices : %s", data)
+                    return data
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
@@ -586,8 +607,16 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             try:
                 async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
                     await websocket.send_json(request)
-                    message = await websocket.receive()
-                return message.json()
+                try:
+                    message = await asyncio.wait_for(websocket.receive(), timeout=10)
+                except asyncio.TimeoutError:
+                    _LOGGER.warning("WebSocket timeout: no message received")
+                    return {}
+                if message.type == aiohttp.WSMsgType.TEXT:
+                    return message.json()
+                else:
+                    _LOGGER.warning("WebSocket returned non-text message: %s", message.type)
+                    return {}
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 

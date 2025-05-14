@@ -285,8 +285,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._attributes['last_name'] = self._last_name
         self._attributes['id'] = self._id
 
-        _LOGGER.debug("Contenu de self : %s", self.__dict__)
-
         #Only get serial number if its initial to avoid too many calls and load
         if self._serial_number == None:
             data = None

@@ -583,9 +583,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers=headers) as session:
             try:
                 async with session.get(URL_GET_DEVICES, params=params) as response:
-                    data = await response.json()
-                    _LOGGER.debug("Réponse brute de get_devices : %s", data)
-                    return data
+                    return await response.json()
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 

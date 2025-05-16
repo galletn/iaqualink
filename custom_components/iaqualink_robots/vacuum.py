@@ -353,6 +353,36 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                     self._status = "connected"
                     self._attributes['status'] = self._status
                     self._debug = data["command"]["response"]
+
+                    response = self._debug
+
+                    if isinstance(response, str) and len(response) >= 12:
+                        error_code = response[6:8].upper()
+
+                        error_map = {
+                            "00": "no_error",
+                            "01": "pump_short_circuit",
+                            "02": "right_drive_motor_short_circuit",
+                            "03": "left_drive_motor_short_circuit",
+                            "04": "pump_motor_overconsumption",
+                            "05": "right_drive_motor_overconsumption",
+                            "06": "left_drive_motor_overconsumption",
+                            "07": "floats_on_surface",
+                            "08": "running_out_of_water",
+                            "0A": "communication_error"
+                        }
+
+                        error_text = error_map.get(error_code, f"unknown_{error_code}")
+
+                        self._attributes['error_code'] = error_code
+                        self._attributes['error_text'] = error_text
+
+                        if error_code != "00":
+                            self._activity = VacuumActivity.ERROR
+                    else:
+                        self._attributes['error_code'] = "??"
+                        self._attributes['error_text'] = "unreadable"
+
                     if self._debug_mode == True:
                         self._attributes['debug'] = self._debug
             except:
@@ -366,12 +396,20 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                         self._attributes['debug'] = self._debug
 
             if self._activity == VacuumActivity.CLEANING:
-                minutes_remaining = data[11:13]
                 try:
-                    self.add_minutes_to_datetime(datetime.datetime.now(), minutes_remaining)
-                    self._attributes['time_remaining'] = self._time_remaining
-                except:
-                    self._attributes['time_remaining'] = None
+                    response = data["command"]["response"]
+                    if isinstance(response, str) and len(response) >= 12:
+                        minutes_remaining = int(response[10:12], 16)
+                        self._estimated_end_time = self.add_minutes_to_datetime(datetime.datetime.now(), minutes_remaining)
+                        self._attributes['estimated_end_time'] = self._estimated_end_time
+                        self._attributes['time_remaining_human'] = f"{minutes_remaining // 60}:{minutes_remaining % 60:02d}"
+                    else:
+                        self._attributes['estimated_end_time'] = None
+                        self._attributes['time_remaining_human'] = None
+                except Exception as e:
+                    _LOGGER.warning("Error while parsing remaining minutes: {e}")
+                    self._attributes['estimated_end_time'] = None
+                    self._attributes['time_remaining_human'] = None
 
         else:
         #request device status & attributes over websocket for cyclonext and vr device types

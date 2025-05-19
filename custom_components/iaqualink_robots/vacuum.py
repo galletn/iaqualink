@@ -71,25 +71,23 @@ ROBOT_FEATURES = {
 # Define the platform for our vacuum entity
 PLATFORM = "vacuum"
 
-
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the iaqualink_robots vacuum platform."""
-    async_add_entities([IAquaLinkRobotVacuum(config)])
-
+async def async_setup_entry(hass, entry, async_add_entities):
+    vacuum = IAquaLinkRobotVacuum(entry)
+    async_add_entities([vacuum])
 
 class IAquaLinkRobotVacuum(StateVacuumEntity):
     """Represents an iaqualink_robots vacuum."""
 
-    def __init__(self, config):
+    def __init__(self, entry):
         """Initialize the vacuum."""
-        self._name = config.get('name')
+        self._name = entry.data["name"]
         self._attributes = {}
         self._activity = VacuumActivity.IDLE
         self._battery_level = None
         self._supported_features = ROBOT_FEATURES["default"]
-        self._username = config.get('username')
-        self._password = config.get('password')
-        self._api_key = config.get('api_key')
+        self._username = entry.data["username"]
+        self._password = entry.data["password"]
+        self._api_key = entry.data["api_key"]
         self._first_name = None
         self._last_name = None
         self._id = None
@@ -230,132 +228,125 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
     async def async_start(self):
         """Start the vacuum."""
         if self._status != "connected":
-            _LOGGER.warning("Cannot start vacuum: Device is %s. Commands can only be sent when device is connected.", self._status)
             return
 
         self._activity = VacuumActivity.CLEANING
         self.async_write_ha_state()
 
-        try:
-            if self._device_type == "i2d_robot":
+        if self._device_type == "i2d_robot":
+            request = {
+                "command": "/command",
+                "params": "request=0A1240&timeout=800",
+                "user_id": self._id
+            }
+            url = f"https://r-api.iaqualink.net/v2/devices/{self._serial_number}/control.json"
+            await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
+        else:
+            clientToken = f"{self._id}|{self._authentication_token}|{self._app_client_id}"
+            
+            request = None
+            if self._device_type == "vr":
                 request = {
-                    "command": "/command",
-                    "params": "request=0A1240&timeout=800",
-                    "user_id": self._id
+                    "action": "setCleanerState",
+                    "namespace": "vr",
+                    "payload": {
+                        "clientToken": clientToken,
+                        "state": {"desired": {"equipment": {"robot": {"state": 1}}}}
+                    },
+                    "service": "StateController",
+                    "target": self._serial_number,
+                    "version": 1
                 }
-                url = f"https://r-api.iaqualink.net/v2/devices/{self._serial_number}/control.json"
-                await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
-            else:
-                clientToken = f"{self._id}|{self._authentication_token}|{self._app_client_id}"
-                
-                request = None
-                if self._device_type == "vr":
-                    request = {
-                        "action": "setCleanerState",
-                        "namespace": "vr",
-                        "payload": {
-                            "clientToken": clientToken,
-                            "state": {"desired": {"equipment": {"robot": {"state": 1}}}}
-                        },
-                        "service": "StateController",
-                        "target": self._serial_number,
-                        "version": 1
-                    }
-                elif self._device_type == "cyclobat":
-                    request = {
-                        "action": "setCleaningMode",
-                        "version": 1,
-                        "namespace": "cyclobat",
-                        "payload": {
-                            "state": {"desired": {"equipment": {"robot": {"main": {"ctrl": 1}}}}},
-                            "clientToken": clientToken
-                        },
-                        "service": "StateController",
-                        "target": self._serial_number
-                    }
-                elif self._device_type == "cyclonext":
-                    request = {
-                        "action": "setCleanerState",
-                        "namespace": "cyclonext",
-                        "payload": {
-                            "clientToken": clientToken,
-                            "state": {"desired": {"equipment": {"robot.1": {"mode": 1}}}}
-                        },
-                        "service": "StateController",
-                        "target": self._serial_number,
-                        "version": 1
-                    }
-                
-                if request:
-                    await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-        except Exception as e:
-            _LOGGER.error("Failed to start vacuum: %s", str(e))
-            self._activity = VacuumActivity.IDLE
-            self.async_write_ha_state()
+            elif self._device_type == "cyclobat":
+                request = {
+                    "action": "setCleaningMode",
+                    "version": 1,
+                    "namespace": "cyclobat",
+                    "payload": {
+                        "state": {"desired": {"equipment": {"robot": {"main": {"ctrl": 1}}}}},
+                        "clientToken": clientToken
+                    },
+                    "service": "StateController",
+                    "target": self._serial_number
+                }
+            elif self._device_type == "cyclonext":
+                request = {
+                    "action": "setCleanerState",
+                    "namespace": "cyclonext",
+                    "payload": {
+                        "clientToken": clientToken,
+                        "state": {"desired": {"equipment": {"robot.1": {"mode": 1}}}}
+                    },
+                    "service": "StateController",
+                    "target": self._serial_number,
+                    "version": 1
+                }
+            
+            if request:
+                await asyncio.wait_for(self.setCleanerState(request), timeout=30)
             
     async def async_stop(self, **kwargs):
         """Stop the vacuum."""
         if self._status != "connected":
-            _LOGGER.warning("Cannot stop vacuum: Device is %s. Commands can only be sent when device is connected.", self._status)
             return
 
         self._activity = VacuumActivity.IDLE
         self.async_write_ha_state()
 
-        try:
-            if self._device_type == "i2d_robot":
+        self._time_remaining = 0
+        self._attributes["time_remaining"] = 0
+
+        if self._device_type == "i2d_robot":
+            request = {
+                "command": "/command",
+                "params": "request=0A1210&timeout=800",
+                "user_id": self._id
+            }
+            url = f"https://r-api.iaqualink.net/v2/devices/{self._serial_number}/control.json"
+            await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
+        else:
+            clientToken = f"{self._id}|{self._authentication_token}|{self._app_client_id}"
+            
+            request = None
+            if self._device_type == "vr":
                 request = {
-                    "command": "/command",
-                    "params": "request=0A1210&timeout=800",
-                    "user_id": self._id
+                    "action": "setCleanerState",
+                    "namespace": "vr",
+                    "payload": {
+                        "clientToken": clientToken,
+                        "state": {"desired": {"equipment": {"robot": {"state": 0}}}}
+                    },
+                    "service": "StateController",
+                    "target": self._serial_number,
+                    "version": 1
                 }
-                url = f"https://r-api.iaqualink.net/v2/devices/{self._serial_number}/control.json"
-                await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
-            else:
-                clientToken = f"{self._id}|{self._authentication_token}|{self._app_client_id}"
-                
-                request = None
-                if self._device_type == "vr":
-                    request = {
-                        "action": "setCleanerState",
-                        "namespace": "vr",
-                        "payload": {
-                            "clientToken": clientToken,
-                            "state": {"desired": {"equipment": {"robot": {"state": 0}}}}
-                        },
-                        "service": "StateController",
-                        "target": self._serial_number,
-                        "version": 1
-                    }
-                elif self._device_type == "cyclobat":
-                    request = {
-                        "action": "setCleaningMode",
-                        "version": 1,
-                        "namespace": "cyclobat",
-                        "payload": {
-                            "state": {"desired": {"equipment": {"robot": {"main": {"ctrl": 0}}}}},
-                            "clientToken": clientToken
-                        },
-                        "service": "StateController",
-                        "target": self._serial_number
-                    }
-                elif self._device_type == "cyclonext":
-                    request = {
-                        "action": "setCleanerState",
-                        "namespace": "cyclonext",
-                        "payload": {
-                            "clientToken": clientToken,
-                            "state": {"desired": {"equipment": {"robot.1": {"mode": 0}}}}
-                        },
-                        "service": "StateController",
-                        "target": self._serial_number,
-                        "version": 1
-                    }
-                
-                if request:
-                    await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-        except Exception as e:
-            _LOGGER.error("Failed to stop vacuum: %s", str(e))
+            elif self._device_type == "cyclobat":
+                request = {
+                    "action": "setCleaningMode",
+                    "version": 1,
+                    "namespace": "cyclobat",
+                    "payload": {
+                        "state": {"desired": {"equipment": {"robot": {"main": {"ctrl": 0}}}}},
+                        "clientToken": clientToken
+                    },
+                    "service": "StateController",
+                    "target": self._serial_number
+                }
+            elif self._device_type == "cyclonext":
+                request = {
+                    "action": "setCleanerState",
+                    "namespace": "cyclonext",
+                    "payload": {
+                        "clientToken": clientToken,
+                        "state": {"desired": {"equipment": {"robot.1": {"mode": 0}}}}
+                    },
+                    "service": "StateController",
+                    "target": self._serial_number,
+                    "version": 1
+                }
+            
+            if request:
+                await asyncio.wait_for(self.setCleanerState(request), timeout=30)
 
     async def async_update(self):
         """Get the latest state of the vacuum."""
@@ -377,51 +368,25 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
     async def _authenticate(self):
         """Authenticate with the iAqualink API."""
-        try:
-            data = {
-                "apikey": self._api_key,
-                "email": self._username,
-                "password": self._password
-            }
-            data_json = json.dumps(data)
-            response_data = await asyncio.wait_for(self.send_login(data_json, self._headers), timeout=30)
-            
-            if not response_data:
-                _LOGGER.error("Authentication failed: Empty response from server")
-                return
-                
-            try:
-                self._first_name = response_data.get("first_name", "")
-                self._last_name = response_data.get("last_name", "")
-                self._id = response_data.get("id")
-                self._authentication_token = response_data.get("authentication_token")
-                
-                if not self._id or not self._authentication_token:
-                    _LOGGER.error("Authentication failed: Missing required fields in response")
-                    return
-                
-                user_pool = response_data.get("userPoolOAuth", {})
-                cognito_pool = response_data.get("cognitoPool", {})
-                
-                self._id_token = user_pool.get("IdToken")
-                self._app_client_id = cognito_pool.get("appClientId")
-                
-                if not self._id_token or not self._app_client_id:
-                    _LOGGER.error("Authentication failed: Missing OAuth tokens")
-                    return
+        data = {
+            "apikey": self._api_key,
+            "email": self._username,
+            "password": self._password
+        }
+        data = json.dumps(data)
+        data = await asyncio.wait_for(self.send_login(data, self._headers), timeout=30)
+        
+        self._first_name = data["first_name"]
+        self._last_name = data["last_name"]
+        self._id = data["id"]
+        self._authentication_token = data["authentication_token"]
+        self._id_token = data["userPoolOAuth"]["IdToken"]
+        self._app_client_id = data["cognitoPool"]["appClientId"]
 
-                self._attributes['username'] = self._username
-                self._attributes['first_name'] = self._first_name
-                self._attributes['last_name'] = self._last_name
-                self._attributes['id'] = self._id
-                
-                _LOGGER.debug("Authentication successful for user: %s", self._username)
-            except KeyError as e:
-                _LOGGER.error("Authentication response missing required field: %s", str(e))
-        except asyncio.TimeoutError:
-            _LOGGER.error("Authentication timed out after 30 seconds")
-        except Exception as e:
-            _LOGGER.error("Unexpected error during authentication: %s", str(e))
+        self._attributes['username'] = self._username
+        self._attributes['first_name'] = self._first_name
+        self._attributes['last_name'] = self._last_name
+        self._attributes['id'] = self._id
 
     async def _initialize_device(self):
         """Initialize device information."""
@@ -715,10 +680,13 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         except Exception:
             self._attributes['cycle_end_time'] = None
 
-        try:
-            self._time_remaining = self.subtract_dates(datetime.datetime.now(), self._cycle_end_time)
-            self._attributes['time_remaining'] = self._time_remaining
-        except Exception:
+        if self._activity == VacuumActivity.CLEANING:
+            try:
+                self._time_remaining = self.subtract_dates(datetime.datetime.now(), self._cycle_end_time)
+                self._attributes['time_remaining'] = self._time_remaining
+            except Exception:
+                self._attributes['time_remaining'] = None
+        else:
             self._attributes['time_remaining'] = None
 
     async def _get_device_model(self):
@@ -740,17 +708,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers=headers) as session:
             try:
                 async with session.post(URL_LOGIN, data=data) as response:
-                    if response.status != 200:
-                        _LOGGER.error("Login request failed with status %s: %s", 
-                                     response.status, await response.text())
-                        return {}
                     return await response.json()
-            except aiohttp.ClientError as e:
-                _LOGGER.error("Network error during login request: %s", str(e))
-                return {}
-            except json.JSONDecodeError as e:
-                _LOGGER.error("Failed to parse login response: %s", str(e))
-                return {}
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
@@ -759,17 +717,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers=headers) as session:
             try:
                 async with session.get(URL_GET_DEVICES, params=params) as response:
-                    if response.status != 200:
-                        _LOGGER.error("Get devices request failed with status %s: %s", 
-                                     response.status, await response.text())
-                        return []
                     return await response.json()
-            except aiohttp.ClientError as e:
-                _LOGGER.error("Network error during get devices request: %s", str(e))
-                return []
-            except json.JSONDecodeError as e:
-                _LOGGER.error("Failed to parse devices response: %s", str(e))
-                return []
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
@@ -778,17 +726,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
             try:
                 async with session.get(url) as response:
-                    if response.status != 200:
-                        _LOGGER.error("Get device features request failed with status %s: %s", 
-                                     response.status, await response.text())
-                        return {}
                     return await response.json()
-            except aiohttp.ClientError as e:
-                _LOGGER.error("Network error during get device features request: %s", str(e))
-                return {}
-            except json.JSONDecodeError as e:
-                _LOGGER.error("Failed to parse device features response: %s", str(e))
-                return {}
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
@@ -799,17 +737,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
                     await websocket.send_json(request)
                     message = await websocket.receive()
-                    if message.type == aiohttp.WSMsgType.ERROR:
-                        _LOGGER.error("WebSocket error during get device status: %s", message.data)
-                        return {}
-                    try:
-                        return message.json()
-                    except json.JSONDecodeError as e:
-                        _LOGGER.error("Failed to parse WebSocket response: %s", str(e))
-                        return {}
-            except aiohttp.ClientError as e:
-                _LOGGER.error("Network error during WebSocket connection: %s", str(e))
-                return {}
+                return message.json()
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
@@ -818,18 +746,7 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token, "api_key": self._api_key}) as session:
             try:
                 async with session.post(url, json=request) as response:
-                    if response.status != 200:
-                        _LOGGER.error("Post command i2d request failed with status %s: %s", 
-                                     response.status, await response.text())
-                        return {}
-                    try:
-                        return await response.json()
-                    except json.JSONDecodeError as e:
-                        _LOGGER.error("Failed to parse i2d command response: %s", str(e))
-                        return {}
-            except aiohttp.ClientError as e:
-                _LOGGER.error("Network error during i2d command request: %s", str(e))
-                return {}
+                    return await response.json()
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
     
@@ -839,15 +756,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             try:
                 async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
                     await websocket.send_json(request)
-                    # Optionally wait for a response to confirm the command was received
-                    try:
-                        message = await asyncio.wait_for(websocket.receive(), timeout=5)
-                        if message.type == aiohttp.WSMsgType.ERROR:
-                            _LOGGER.error("WebSocket error during set cleaner state: %s", message.data)
-                    except asyncio.TimeoutError:
-                        _LOGGER.debug("No immediate response from setCleanerState, continuing")
-            except aiohttp.ClientError as e:
-                _LOGGER.error("Network error during WebSocket connection for setCleanerState: %s", str(e))
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
                 # Wait 2 seconds to avoid flooding iaqualink server
@@ -986,36 +894,30 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
     async def async_return_to_base(self, **kwargs):
         """Set the vacuum cleaner to return to the dock."""
         if self._status != "connected":
-            _LOGGER.warning("Cannot return to base: Device is %s. Commands can only be sent when device is connected.", self._status)
             return
             
         self._activity = VacuumActivity.RETURNING
         self.async_write_ha_state()
 
-        try:
-            if self._device_type == "i2d_robot":
-                request = {
-                    "command": "/command",
-                    "params": "request=0A1701&timeout=800",
-                    "user_id": self._id
-                }
-                url = f"https://r-api.iaqualink.net/v2/devices/{self._serial_number}/control.json"
-                await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
-            elif self._device_type in ["vr", "cyclobat"]:
-                clientToken = f"{self._id}|{self._authentication_token}|{self._app_client_id}"
-                request = {
-                    "action": "setCleanerState",
-                    "namespace": self._device_type,
-                    "payload": {
-                        "clientToken": clientToken,
-                        "state": {"desired": {"equipment": {"robot": {"state": 3}}}}
-                    },
-                    "service": "StateController",
-                    "target": self._serial_number,
-                    "version": 1
-                }
-                await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-        except Exception as e:
-            _LOGGER.error("Failed to return to base: %s", str(e))
-            self._activity = VacuumActivity.IDLE
-            self.async_write_ha_state()
+        if self._device_type == "i2d_robot":
+            request = {
+                "command": "/command",
+                "params": "request=0A1701&timeout=800",
+                "user_id": self._id
+            }
+            url = f"https://r-api.iaqualink.net/v2/devices/{self._serial_number}/control.json"
+            await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
+        elif self._device_type in ["vr", "cyclobat"]:
+            clientToken = f"{self._id}|{self._authentication_token}|{self._app_client_id}"
+            request = {
+                "action": "setCleanerState",
+                "namespace": self._device_type,
+                "payload": {
+                    "clientToken": clientToken,
+                    "state": {"desired": {"equipment": {"robot": {"state": 3}}}}
+                },
+                "service": "StateController",
+                "target": self._serial_number,
+                "version": 1
+            }
+            await asyncio.wait_for(self.setCleanerState(request), timeout=30)

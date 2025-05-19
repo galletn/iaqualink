@@ -377,25 +377,51 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
 
     async def _authenticate(self):
         """Authenticate with the iAqualink API."""
-        data = {
-            "apikey": self._api_key,
-            "email": self._username,
-            "password": self._password
-        }
-        data = json.dumps(data)
-        data = await asyncio.wait_for(self.send_login(data, self._headers), timeout=30)
-        
-        self._first_name = data["first_name"]
-        self._last_name = data["last_name"]
-        self._id = data["id"]
-        self._authentication_token = data["authentication_token"]
-        self._id_token = data["userPoolOAuth"]["IdToken"]
-        self._app_client_id = data["cognitoPool"]["appClientId"]
+        try:
+            data = {
+                "apikey": self._api_key,
+                "email": self._username,
+                "password": self._password
+            }
+            data_json = json.dumps(data)
+            response_data = await asyncio.wait_for(self.send_login(data_json, self._headers), timeout=30)
+            
+            if not response_data:
+                _LOGGER.error("Authentication failed: Empty response from server")
+                return
+                
+            try:
+                self._first_name = response_data.get("first_name", "")
+                self._last_name = response_data.get("last_name", "")
+                self._id = response_data.get("id")
+                self._authentication_token = response_data.get("authentication_token")
+                
+                if not self._id or not self._authentication_token:
+                    _LOGGER.error("Authentication failed: Missing required fields in response")
+                    return
+                
+                user_pool = response_data.get("userPoolOAuth", {})
+                cognito_pool = response_data.get("cognitoPool", {})
+                
+                self._id_token = user_pool.get("IdToken")
+                self._app_client_id = cognito_pool.get("appClientId")
+                
+                if not self._id_token or not self._app_client_id:
+                    _LOGGER.error("Authentication failed: Missing OAuth tokens")
+                    return
 
-        self._attributes['username'] = self._username
-        self._attributes['first_name'] = self._first_name
-        self._attributes['last_name'] = self._last_name
-        self._attributes['id'] = self._id
+                self._attributes['username'] = self._username
+                self._attributes['first_name'] = self._first_name
+                self._attributes['last_name'] = self._last_name
+                self._attributes['id'] = self._id
+                
+                _LOGGER.debug("Authentication successful for user: %s", self._username)
+            except KeyError as e:
+                _LOGGER.error("Authentication response missing required field: %s", str(e))
+        except asyncio.TimeoutError:
+            _LOGGER.error("Authentication timed out after 30 seconds")
+        except Exception as e:
+            _LOGGER.error("Unexpected error during authentication: %s", str(e))
 
     async def _initialize_device(self):
         """Initialize device information."""
@@ -714,7 +740,17 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers=headers) as session:
             try:
                 async with session.post(URL_LOGIN, data=data) as response:
+                    if response.status != 200:
+                        _LOGGER.error("Login request failed with status %s: %s", 
+                                     response.status, await response.text())
+                        return {}
                     return await response.json()
+            except aiohttp.ClientError as e:
+                _LOGGER.error("Network error during login request: %s", str(e))
+                return {}
+            except json.JSONDecodeError as e:
+                _LOGGER.error("Failed to parse login response: %s", str(e))
+                return {}
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
@@ -723,7 +759,17 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers=headers) as session:
             try:
                 async with session.get(URL_GET_DEVICES, params=params) as response:
+                    if response.status != 200:
+                        _LOGGER.error("Get devices request failed with status %s: %s", 
+                                     response.status, await response.text())
+                        return []
                     return await response.json()
+            except aiohttp.ClientError as e:
+                _LOGGER.error("Network error during get devices request: %s", str(e))
+                return []
+            except json.JSONDecodeError as e:
+                _LOGGER.error("Failed to parse devices response: %s", str(e))
+                return []
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
@@ -732,7 +778,17 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
             try:
                 async with session.get(url) as response:
+                    if response.status != 200:
+                        _LOGGER.error("Get device features request failed with status %s: %s", 
+                                     response.status, await response.text())
+                        return {}
                     return await response.json()
+            except aiohttp.ClientError as e:
+                _LOGGER.error("Network error during get device features request: %s", str(e))
+                return {}
+            except json.JSONDecodeError as e:
+                _LOGGER.error("Failed to parse device features response: %s", str(e))
+                return {}
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
@@ -743,7 +799,17 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
                 async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
                     await websocket.send_json(request)
                     message = await websocket.receive()
-                return message.json()
+                    if message.type == aiohttp.WSMsgType.ERROR:
+                        _LOGGER.error("WebSocket error during get device status: %s", message.data)
+                        return {}
+                    try:
+                        return message.json()
+                    except json.JSONDecodeError as e:
+                        _LOGGER.error("Failed to parse WebSocket response: %s", str(e))
+                        return {}
+            except aiohttp.ClientError as e:
+                _LOGGER.error("Network error during WebSocket connection: %s", str(e))
+                return {}
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
 
@@ -752,7 +818,18 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token, "api_key": self._api_key}) as session:
             try:
                 async with session.post(url, json=request) as response:
-                    return await response.json()
+                    if response.status != 200:
+                        _LOGGER.error("Post command i2d request failed with status %s: %s", 
+                                     response.status, await response.text())
+                        return {}
+                    try:
+                        return await response.json()
+                    except json.JSONDecodeError as e:
+                        _LOGGER.error("Failed to parse i2d command response: %s", str(e))
+                        return {}
+            except aiohttp.ClientError as e:
+                _LOGGER.error("Network error during i2d command request: %s", str(e))
+                return {}
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
     
@@ -762,6 +839,15 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             try:
                 async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
                     await websocket.send_json(request)
+                    # Optionally wait for a response to confirm the command was received
+                    try:
+                        message = await asyncio.wait_for(websocket.receive(), timeout=5)
+                        if message.type == aiohttp.WSMsgType.ERROR:
+                            _LOGGER.error("WebSocket error during set cleaner state: %s", message.data)
+                    except asyncio.TimeoutError:
+                        _LOGGER.debug("No immediate response from setCleanerState, continuing")
+            except aiohttp.ClientError as e:
+                _LOGGER.error("Network error during WebSocket connection for setCleanerState: %s", str(e))
             finally:
                 await asyncio.wait_for(session.close(), timeout=30)
                 # Wait 2 seconds to avoid flooding iaqualink server

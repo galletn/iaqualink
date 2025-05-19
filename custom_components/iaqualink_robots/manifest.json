@@ -1,6 +1,6 @@
 {
-    "domain": "iaqualinkRobots",
-    "name": "IaqualinkRobots",
+    "domain": "iaqualink_robots",
+    "name": "Iaqualink Robots",
     "codeowners": ["@galletn"],
     "config_flow": false,
     "dependencies": [],

@@ -73,7 +73,7 @@ PLATFORM = "vacuum"
 
 async def async_setup_entry(hass, entry, async_add_entities):
     vacuum = IAquaLinkRobotVacuum(entry)
-    async_add_entities([vacuum])
+    async_add_entities([vacuum], update_before_add=True)
 
 class IAquaLinkRobotVacuum(StateVacuumEntity):
     """Represents an iaqualink_robots vacuum."""
@@ -114,6 +114,19 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._debug_mode = True
         self._device_type = None
         self._status = None
+
+    @property
+    def unique_id(self):
+        return self._serial_number or self._name
+
+    @property
+    def device_info(self):
+        return {
+            "identifiers": {(DOMAIN, self._serial_number)},
+            "name": self._name,
+            "manufacturer": "iaqualink",
+            "model": self._model or "Unknown",
+        }
 
     @property
     def activity(self) -> VacuumActivity:
@@ -569,7 +582,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             self._activity = VacuumActivity.RETURNING
         else:
             self._activity = VacuumActivity.IDLE
-        self.async_write_ha_state()
 
         # Extract other attributes
         self._canister = data['payload']['robot']['state']['reported']['equipment']['robot']['canister']
@@ -605,7 +617,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             self._activity = VacuumActivity.RETURNING
         else:
             self._activity = VacuumActivity.IDLE
-        self.async_write_ha_state()
 
         # Extract attributes
         self._total_hours = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["stats"]["totRunTime"]
@@ -641,7 +652,6 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
             self._activity = VacuumActivity.CLEANING
         else:
             self._activity = VacuumActivity.IDLE
-        self.async_write_ha_state()
 
         # Extract attributes
         self._canister = data['payload']['robot']['state']['reported']['equipment']['robot.1']['canister']

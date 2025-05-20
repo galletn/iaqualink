@@ -5,12 +5,14 @@ from pathlib import Path
 from typing import Final
 from homeassistant.const import Platform
 
-PLATFORMS: Final = [Platform.SENSOR]
+PLATFORMS: Final = [Platform.VACUUM, Platform.SENSOR]
 
 URL_LOGIN="https://prod.zodiac-io.com/users/v1/login"
 URL_GET_DEVICES="https://r-api.iaqualink.net/devices.json"
 URL_GET_DEVICE_STATUS="https://prod.zodiac-io.com/devices/v1/"
 URL_GET_DEVICE_FEATURES="https://prod.zodiac-io.com/devices/v2/"
+URL_FEATURES = "https://prod.zodiac-io.com/devices/v2/"
+URL_WS = "wss://prod-socket.zodiac-io.com/devices"
 
 SCAN_INTERVAL = timedelta(seconds=30)
 

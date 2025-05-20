@@ -1,33 +1,34 @@
+import asyncio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.typing import ConfigType
 
-DOMAIN = "iaqualinkRobots"
+from .const import DOMAIN, PLATFORMS
 
-PLATFORMS = ["vacuum"]
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the iAquaLink Robots component from YAML (deprecated)."""
+async def async_setup(hass: HomeAssistant, config) -> bool:
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up iAquaLink Robots from a config entry."""
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = entry.data
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {}
+    from .coordinator import AqualinkClient, AqualinkDataUpdateCoordinator
+    from .const import SCAN_INTERVAL
+
+    client = AqualinkClient(entry.data["username"], entry.data["password"], entry.data["api_key"])
+    coordinator = AqualinkDataUpdateCoordinator(hass, client, SCAN_INTERVAL.total_seconds())
+    coordinator.title = entry.title
+    await coordinator.async_config_entry_first_refresh()
+    hass.data[DOMAIN][entry.entry_id]["client"] = client
+    hass.data[DOMAIN][entry.entry_id]["coordinator"] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    unload_ok = all(
-        await asyncio.gather(*[
+    unload_ok = await asyncio.gather(
+        *[
             hass.config_entries.async_forward_entry_unload(entry, platform)
             for platform in PLATFORMS
-        ])
+        ]
     )
-
-    if unload_ok:
+    if all(unload_ok):
         hass.data[DOMAIN].pop(entry.entry_id)
-
-    return unload_ok
+    return all(unload_ok)

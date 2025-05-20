@@ -12,6 +12,9 @@ from homeassistant.components.vacuum import (
     VacuumEntityFeature,
     VacuumActivity
 )
+
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_SUPPORTED_FEATURES,
@@ -72,22 +75,26 @@ ROBOT_FEATURES = {
 PLATFORM = "vacuum"
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    vacuum = IAquaLinkRobotVacuum(entry)
-    async_add_entities([vacuum], update_before_add=True)
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = data["coordinator"]
+    coordinator._title = entry.title
+    client = data["client"]
+    async_add_entities([IAquaLinkRobotVacuum(coordinator, client)], True)
 
-class IAquaLinkRobotVacuum(StateVacuumEntity):
+class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
     """Represents an iaqualink_robots vacuum."""
 
-    def __init__(self, entry):
+    def __init__(self, coordinator, client):
+        super().__init__(coordinator)
         """Initialize the vacuum."""
-        self._name = entry.data["name"]
+        self._name = coordinator._title
         self._attributes = {}
         self._activity = VacuumActivity.IDLE
         self._battery_level = None
         self._supported_features = ROBOT_FEATURES["default"]
-        self._username = entry.data["username"]
-        self._password = entry.data["password"]
-        self._api_key = entry.data["api_key"]
+        self._username = client.username
+        self._password = client.password
+        self._api_key = client.api_key
         self._first_name = None
         self._last_name = None
         self._id = None
@@ -115,9 +122,16 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         self._device_type = None
         self._status = None
 
+    def _handle_coordinator_update(self):
+        """Handle updated data from the coordinator and set activity."""
+        super()._handle_coordinator_update()
+        # Set activity based on cycle flag
+        data = self.coordinator.data
+        self.async_write_ha_state()
+
     @property
     def unique_id(self):
-        return self._serial_number or self._name
+        return self._name
 
     @property
     def device_info(self):

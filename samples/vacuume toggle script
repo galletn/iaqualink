@@ -1,0 +1,38 @@
+alias: Vacuum toggle script
+sequence:
+  - choose:
+      - conditions:
+          - condition: and
+            conditions:
+              - condition: template
+                value_template: "{{ state_attr('vacuum.sven_ii','status')=='connected' }}"
+            alias: Test if Sven is connected
+          - condition: state
+            entity_id: vacuum.sven_ii
+            state: cleaning
+        sequence:
+          - service: vacuum.stop
+            data: {}
+            target:
+              entity_id: vacuum.sven_ii
+          - stop: Vac_stopped
+            response_variable: Complete
+      - conditions:
+          - condition: and
+            conditions:
+              - condition: template
+                value_template: "{{ state_attr('vacuum.sven_ii','status')=='connected' }}"
+            alias: Test if Sven is connected
+          - condition: state
+            entity_id: vacuum.sven_ii
+            state: idle
+        sequence:
+          - service: vacuum.start
+            data: {}
+            target:
+              entity_id: vacuum.sven_ii
+          - stop: Vac_started
+            response_variable: Complete
+    enabled: true
+icon: mdi:vacuum
+mode: restart

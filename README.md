@@ -17,16 +17,8 @@ Home Assistant Iaqualink Vacuums Robots
 
 #### Setup
 
-add the following entry to the config file:
-
-```yaml
-vacuum:
-  - platform: iaqualinkRobots
-    username: <username>
-    password: <password>
-    api_key: EOOEMOW4YR6QNB07
-    name: <Robot name, will also be the sensor name>
-```
+Setup as of v2.0.2 is done via the config screen
+api_key: EOOEMOW4YR6QNB07
 
 ## Supported Models:
 
@@ -36,10 +28,11 @@ vacuum:
 - RA 6900 iQ
 - Polaris - VRX iQ+
 - CNX 30 iQ
-- CNX 40 IQ
+- CNX 40 Iq
+- CNX 50 iQ
 - CNX 4090 iQ
-- OV 5490 IQ
-- RF 5600 IQ
+- OV 5490 iQ
+- RF 5600 iQ
 - P965 iQ
 
 ## Known Models to have issues:

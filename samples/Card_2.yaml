@@ -1,0 +1,148 @@
+type: custom:stack-in-card
+cards:
+  - show_state: false
+    show_name: true
+    camera_view: live
+    type: picture-entity
+    entity: camera.pool_area
+    aspect_ratio: '16:9'
+    name: Pool Area
+  - type: conditional
+    conditions:
+      - entity: vacuum.sven_ii
+        state_not: unavailable
+    card:
+      type: entities
+      entities:
+        - type: section
+          label: Actions
+        - type: custom:vertical-stack-in-card
+          title: ''
+          card_mod:
+            style: |
+              ha-card {
+                 align-items: center;
+                 background: none;
+                 --ha-card-box-shadow: 0px 0px 0px 0px;
+               }
+          cards:
+            - type: conditional
+              condition: and
+              conditions:
+                - entity: vacuum.sven_ii
+                  state_not: unavailable
+                - entity: script.vacuum_toggle
+                  state_not: 'on'
+              card:
+                type: entities
+                entities:
+                  - type: custom:mushroom-template-card
+                    multiline_secondary: false
+                    layout: horizontal
+                    primary: Start/Stop Cycle
+                    secondary: >-
+                      Connection Status: {{ states('sensor.pool_robot_status')
+                      }} | Current State: {{ states('vacuum.sven_ii', )
+                      }}           
+                    entity: vacuum.sven_ii
+                    icon: mdi:power
+                    badge_icon: mdi:connection
+                    icon_color: |-
+                      {% if is_state('vacuum.sven_ii', 'cleaning') %}
+                        green
+                      {% elif is_state('vacuum.sven_ii', 'idle') %}
+                        grey
+                      {% else %} 
+                        red
+                      {% endif %}
+                    badge_color: >-
+                      {% if is_state_attr('vacuum.sven_ii', 'status',
+                      'connected') %}
+                        green
+                      {% else %} 
+                        red
+                      {% endif %}
+                    tap_action:
+                      action: call-service
+                      service: script.vacuum_toggle
+                    card_mod:
+                      style:
+                        mushroom-shape-icon$: |
+                          .shape {
+                            --icon-symbol-size: 31px;
+                            --icon-size: 61px;
+                          }
+                        .: |
+                          ha-card {
+                            align-items: center;
+                            background: none;
+                            --ha-card-box-shadow: 0px 0px 0px 0px;
+                            margin-bottom: 12px;
+                          }
+            - type: conditional
+              condition: and
+              conditions:
+                - entity: vacuum.sven_ii
+                  state_not: idle
+                - entity: script.vacuum_toggle
+                  state_not: 'on'
+              card:
+                type: custom:timer-bar-card
+                entity: vacuum.sven_ii
+                name: Progress
+                icon: mdi:progress-clock
+                bar_background: '#c2c2c2'
+                bar_foreground: green
+                active_state: cleaning
+                invert: false
+                bar_direction: ltr
+                bar_width: 60%
+                bar_radius: 3px
+                bar_height: 20px
+                duration:
+                  attribute: cycle_duration
+                  units: minutes
+                start_time:
+                  attribute: cycle_start_time
+                debug: false
+                card_mod:
+                  style:
+                    mushroom-shape-icon$: |
+                      .shape {
+                        --icon-symbol-size: 31px;
+                        --icon-size: 50px;
+                      }
+                    .: |
+                      ha-card {
+                        align-items: center;
+                        background: none;
+                        box-shadow: none;
+                        --ha-card-box-shadow: 0px 0px 0px 0px;
+                      }
+        - type: section
+          label: Cycle
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: cycle_start_time
+          name: Cycle Start Time
+          icon: mdi:clock
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: cycle_duration
+          name: Cycle Duration
+          icon: mdi:timelapse
+          suffix: min
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: time_remaining
+          name: Time left
+          icon: mdi:timer-sand-complete
+          suffix: min
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: cycle_end_time
+          name: Cycle End Time
+          icon: mdi:clock-end
+        - entity: input_select.vacuum_cycle
+          name: Cleaning cycle selected
+          icon: mdi:speedometer-slow

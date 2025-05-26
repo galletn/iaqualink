@@ -1,18 +1,17 @@
-import asyncio
-import json
-import datetime
-import aiohttp
 import logging
+import datetime
 from datetime import timedelta
 
 _LOGGER = logging.getLogger(__name__)
-
 
 from homeassistant.components.vacuum import (
     StateVacuumEntity,
     VacuumEntityFeature,
     VacuumActivity
 )
+
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_SUPPORTED_FEATURES,
@@ -21,10 +20,6 @@ from homeassistant.const import (
 )
 
 from .const import (
-    URL_LOGIN,
-    URL_GET_DEVICES,
-    URL_GET_DEVICE_STATUS,
-    URL_GET_DEVICE_FEATURES,
     NAME,
     VERSION,
     DOMAIN,
@@ -33,162 +28,187 @@ from .const import (
     SCAN_INTERVAL
 )
 
-# Define the supported features of our vacuum entity
-SUPPORT_IAQUALINK_ROBOTS = (
+# Define the supported features for different robot types
+ROBOT_FEATURES = {
+    "default": (
         VacuumEntityFeature.START
         | VacuumEntityFeature.STOP
         | VacuumEntityFeature.FAN_SPEED
         | VacuumEntityFeature.STATUS
-)
-
-SUPPORT_IAQUALINK_ROBOTS_vr = (
-        VacuumEntityFeature.START
-        | VacuumEntityFeature.STOP
-        | VacuumEntityFeature.FAN_SPEED
-        | VacuumEntityFeature.STATUS
-        | VacuumEntityFeature.RETURN_HOME
-)
-
-SUPPORT_IAQUALINK_ROBOTS_cyclobat = (
-        VacuumEntityFeature.START
-        | VacuumEntityFeature.STOP
-        | VacuumEntityFeature.FAN_SPEED
-        | VacuumEntityFeature.STATUS
-)
-
-SUPPORT_IAQUALINK_ROBOTS_cyclonext = (
-        VacuumEntityFeature.START
-        | VacuumEntityFeature.STOP
-        | VacuumEntityFeature.FAN_SPEED
-        | VacuumEntityFeature.STATUS
-)
-
-SUPPORT_IAQUALINK_ROBOTS_i2d = (
+    ),
+    "vr": (
         VacuumEntityFeature.START
         | VacuumEntityFeature.STOP
         | VacuumEntityFeature.FAN_SPEED
         | VacuumEntityFeature.STATUS
         | VacuumEntityFeature.RETURN_HOME
-)
+    ),
+    "cyclobat": (
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
+    ),
+    "cyclonext": (
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
+    ),
+    "i2d_robot": (
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
+        | VacuumEntityFeature.RETURN_HOME
+    )
+}
 
-
-# Define the domain and platform for our vacuum entity
-DOMAIN = "iaqualink_robots"
+# Define the platform for our vacuum entity
 PLATFORM = "vacuum"
 
+async def async_setup_entry(hass, entry, async_add_entities):
+    """Set up the vacuum platform."""
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = data["coordinator"]
+    client = data["client"]
+    
+    # Use the device serial number as part of the unique ID
+    serial_number = entry.data.get("serial_number", client.robot_id)
+    device_name = entry.data.get("name", entry.title)
+    
+    async_add_entities([IAquaLinkRobotVacuum(coordinator, client, device_name, serial_number)], True)
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the iaqualink_robots vacuum platform."""
-    # Your setup code here
-    async_add_entities([IAquaLinkRobotVacuum(config)])
-
-
-class IAquaLinkRobotVacuum(StateVacuumEntity):
+class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
     """Represents an iaqualink_robots vacuum."""
 
-    def __init__(self, config):
+    def __init__(self, coordinator, client, device_name, serial_number):
         """Initialize the vacuum."""
-        self._name = config.get('name')
+        super().__init__(coordinator)
+        self._name = device_name
+        self._serial_number = serial_number
         self._attributes = {}
         self._activity = VacuumActivity.IDLE
         self._battery_level = None
-        self._supported_features = SUPPORT_IAQUALINK_ROBOTS
-        self._username = config.get('username')
-        self._password = config.get('password')
-        self._api_key = config.get('api_key')
-        self._first_name = None
-        self._last_name = None
-        self._id = None
-        self._headers = {"Content-Type": "application/json; charset=utf-8", "Connection": "keep-alive", "Accept": "*/*" }
-        self._temperature = None
-        self._authentication_token = None
-        self._canister = None
-        self._error_state = None
-        self._total_hours = None
-        self._cycle_start_time = None
-        self._app_client_id = None
-        self._cycle_duration = None
-        self._cycle_end_time = None
-        self._time_remaining = None
-        self._serial_number = None
-        self._model = None
+        self._supported_features = ROBOT_FEATURES["default"]
+        self._client = client
         self._fan_speed_list = ["Floor only", "Floor and walls"]
         self._fan_speed = self._fan_speed_list[0]
-        self._debug = None
-        self._debug_mode=True
+        self._status = None
+        self._start_time = None
+        self._cycle_duration = 120  # Default cycle duration in minutes
+        self._time_remaining = None
+        self._estimated_end_time = None
+
+    def _handle_coordinator_update(self):
+        """Handle updated data from the coordinator and set activity."""
+        super()._handle_coordinator_update()
+        
+        # Update attributes from coordinator data
+        data = self.coordinator.data
+        if data:
+            # Set basic attributes
+            self._status = data.get("status")
+            self._attributes.update(data)
+            
+            # Set activity based on data
+            activity = data.get("activity")
+            if activity == "cleaning":
+                self._activity = VacuumActivity.CLEANING
+                
+                # If we have a cycle duration from the data, use it
+                if "cycle_duration" in data:
+                    self._cycle_duration = data.get("cycle_duration")
+                
+                # If we're cleaning and have a start time, update time remaining
+                if self._start_time and self._estimated_end_time:
+                    self._calculate_time_remaining()
+                    self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+                # If we're cleaning but don't have a start time (e.g., after HA restart),
+                # set it now based on the cycle_start_time from data if available
+                elif "cycle_start_time" in data:
+                    try:
+                        self._start_time = datetime.datetime.fromisoformat(data["cycle_start_time"])
+                        self._estimated_end_time = self._start_time + timedelta(minutes=self._cycle_duration)
+                        self._calculate_time_remaining()
+                        self._attributes["start_time"] = self._start_time.isoformat()
+                        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+                        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+                    except (ValueError, TypeError):
+                        # If we can't parse the cycle_start_time, just use current time
+                        self._start_time = datetime.datetime.now()
+                        self._estimated_end_time = self._start_time + timedelta(minutes=self._cycle_duration)
+                        self._calculate_time_remaining()
+                        self._attributes["start_time"] = self._start_time.isoformat()
+                        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+                        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+            elif activity == "returning":
+                self._activity = VacuumActivity.RETURNING
+            elif activity == "error":
+                self._activity = VacuumActivity.ERROR
+            else:
+                self._activity = VacuumActivity.IDLE
+                # Reset time remaining if we're idle and it was previously set
+                if self._time_remaining is not None:
+                    self._time_remaining = timedelta(seconds=0)
+                    self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+                
+            # Set device type specific attributes
+            device_type = data.get("device_type")
+            if device_type:
+                self._supported_features = ROBOT_FEATURES.get(device_type, ROBOT_FEATURES["default"])
+                
+                # Set fan speed list based on device type
+                if device_type == "vr" or device_type == "cyclobat":
+                    self._fan_speed_list = ["Wall only", "Floor only", "SMART Floor and walls", "Floor and walls"]
+                elif device_type == "cyclonext":
+                    self._fan_speed_list = ["Floor only", "Floor and walls"]
+                elif device_type == "i2d_robot":
+                    self._fan_speed_list = ["Floor only", "Walls only", "Floor and walls"]
+        
+        self.async_write_ha_state()
+
+    @property
+    def unique_id(self):
+        """Return a unique ID for this entity."""
+        return f"{DOMAIN}_{self._serial_number}"
+
+    @property
+    def device_info(self):
+        """Return device information about this entity."""
+        data = self.coordinator.data or {}
+        return {
+            "identifiers": {(DOMAIN, self._serial_number)},
+            "name": self._name,
+            "manufacturer": "iaqualink",
+            "model": data.get("model", "Unknown"),
+            "sw_version": data.get("sw_version", VERSION),
+        }
 
     @property
     def activity(self) -> VacuumActivity:
+        """Return the current activity of the vacuum."""
         return self._activity
 
     @property
     def fan_speed(self):
+        """Return the current fan speed."""
         return self._fan_speed
 
     @property
     def fan_speed_list(self):
+        """Return the list of available fan speeds."""
         return self._fan_speed_list
 
     @property
-    def temperature(self):
-        return self._temperature
-
-    @property
     def name(self):
+        """Return the name of the vacuum."""
         return self._name
-
-    @property
-    def username(self):
-        return self._username
-
-    @property
-    def password(self):
-        return self._password
-
-    @property
-    def api_key(self):
-        return self._api_key
-
-    @property
-    def frist_name(self):
-        return self._first_name
-
-    @property
-    def last_name(self):
-        return self._last_name
-
-    @property
-    def model(self):
-        return self._model
-
-    @property
-    def serial_number(self):
-        return self._number
-
-    @property
-    def id(self):
-        return self._id
-
-    @property
-    def id_token(self):
-        return self._id_token
-        
-    @property
-    def error_state(self):
-        return self._error_state
-
-    @property
-    def total_hours(self):
-        return self._total_hours 
-
-    @property
-    def cycle_start_time(self):
-        return self._cycle_start_time
 
     @property
     def should_poll(self):
         """Return True if the vacuum should be polled for state updates."""
-        return True
+        return False  # Coordinator handles polling
 
     @property
     def device_state_attributes(self):
@@ -210,580 +230,106 @@ class IAquaLinkRobotVacuum(StateVacuumEntity):
         """Return the supported features of the vacuum."""
         return self._supported_features
 
+    def _format_time_remaining(self, time_delta):
+        """Format time remaining as a human-readable string."""
+        if not time_delta:
+            return "0:00"
+        
+        total_seconds = time_delta.total_seconds()
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = int(total_seconds % 60)
+        
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        else:
+            return f"{minutes}:{seconds:02d}"
+    
+    def _calculate_time_remaining(self):
+        """Calculate time remaining based on start time and cycle duration."""
+        if not self._start_time or not self._estimated_end_time:
+            self._time_remaining = None
+            return
+        
+        now = datetime.datetime.now()
+        if now >= self._estimated_end_time:
+            self._time_remaining = timedelta(seconds=0)
+        else:
+            self._time_remaining = self._estimated_end_time - now
+    
     async def async_start(self):
         """Start the vacuum."""
-        # Your start code here
-        if self._status == "connected":
+        if self._status != "connected":
+            return
 
-            self._activity = VacuumActivity.CLEANING
-            self.async_write_ha_state()
+        self._activity = VacuumActivity.CLEANING
+        
+        # Set start time and calculate estimated end time
+        self._start_time = datetime.datetime.now()
+        self._estimated_end_time = self._start_time + timedelta(minutes=self._cycle_duration)
+        
+        # Calculate time remaining
+        self._calculate_time_remaining()
+        
+        # Update attributes
+        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+        
+        self.async_write_ha_state()
 
-            if self._device_type == "i2d_robot":
-                request = { "command": "/command","params": "request=0A1240&timeout=800","user_id": self._id }
-                url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
-                data= None
-
-                data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=800)
-            else:
-                if self._status == "connected":
-                    clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
-
-                    if self._device_type == "vr":
-                        request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
-            
-                    if self._device_type == "cyclobat":
-                        request = { "action": "setCleaningMode", "version":1, "namespace": "cyclobat", "payload": {"state": {"desired": {"equipment": {"robot": {"main": {"ctrl":1 } } } } }, "clientToken": clientToken }, "service":"StateController", "target": self._serial_number}
-                                    
-                    if self._device_type == "cyclonext":
-                        request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":1 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
-            
-                    data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
+        await self._client.start_cleaning()
+        await self.coordinator.async_request_refresh()
             
     async def async_stop(self, **kwargs):
         """Stop the vacuum."""
-        # Your stop code here
-        if self._status == "connected":
-
-            self._activity = VacuumActivity.IDLE
-            self.async_write_ha_state()
-
-            if self._device_type == "i2d_robot":
-                request = { "command": "/command","params": "request=0A1210&timeout=800","user_id": self._id }
-                url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
-                data= None
-
-                data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=800)
-            else:
-                clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
-
-                if self._device_type == "vr":
-                    request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 0 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
-            
-                if self._device_type == "cyclobat":
-                    request = { "action": "setCleaningMode", "version":1, "namespace": "cyclobat", "payload": {"state": {"desired": {"equipment": {"robot": {"main": {"ctrl":0 } } } } }, "clientToken": clientToken }, "service":"StateController", "target": self._serial_number}
-            
-                if self._device_type == "cyclonext":
-                    request = { "action": "setCleanerState", "namespace": "cyclonext", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot.1": { "mode":0 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
-            
-                data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-
-    async def async_update(self):
-        """Get the latest state of the vacuum."""
-
-        data = {"apikey": self._api_key, "email": self._username, "password": self._password}
-        data = json.dumps(data)
-        data = await asyncio.wait_for(self.send_login(data,self._headers), timeout=30)
-        self._first_name = data["first_name"]
-        self._last_name = data["last_name"]
-        self._id = data["id"]
-        self._authentication_token = data["authentication_token"]
-        self._id_token = data["userPoolOAuth"]["IdToken"]
-        self._app_client_id = data["cognitoPool"]["appClientId"]
-
-        self._attributes['username'] = self._username
-        self._attributes['first_name'] = self._first_name
-        self._attributes['last_name'] = self._last_name
-        self._attributes['id'] = self._id
-
-        #Only get serial number if its initial to avoid too many calls and load
-        if self._serial_number == None:
-            data = None
-            params = {"authentication_token":self._authentication_token,"user_id":self._id,"api_key":self._api_key}
-            data =  await asyncio.wait_for(self.get_devices(params, self._headers), timeout=30)
-    
-            # Filter only devices that are compatible with the module.
-            supported_device_types = ["i2d_robot", "cyclonext", "cyclobat", "vr"]
-
-            index = None
-            for i, device in enumerate(data):
-                device_type = device.get("device_type")
-                _LOGGER.debug("🔍 Devices found : %s", device)
-                if device_type in supported_device_types:
-                    index = i
-                    _LOGGER.debug("✅ Device selected : %s (index=%d)", device_type, i)
-                    break
-                else:
-                    _LOGGER.debug("⏩ Device ignored (unsupported type) : %s", device_type)
-
-            if index is None:
-                _LOGGER.error("❌ No compatible robot found in the device list.")
-                self._status = "offline"
-                self._attributes['status'] = self._status
-                return
-
-            # serial number
-            self._serial_number = data[index]["serial_number"]
-            self._attributes['serial_number'] = self._serial_number
-
-            # device type
-            self._device_type = data[index]["device_type"]
-            self._attributes['device_type'] = self._device_type
-
-            #Set modes based on model
-            if self._device_type == "vr":
-
-                self._fan_speed_list = ["Wall only","Floor only", "SMART Floor and walls", "Floor and walls"]
-                self._supported_features = SUPPORT_IAQUALINK_ROBOTS_vr
-
-            if self._device_type == "cyclobat":
-
-                self._fan_speed_list = ["Wall only","Floor only", "SMART Floor and walls", "Floor and walls"]
-                self._supported_features = SUPPORT_IAQUALINK_ROBOTS_cyclobat
-
-            if self._device_type == "cyclonext":
-
-                self._fan_speed_list = ["Floor only", "Floor and walls"]
-                self._supported_features = SUPPORT_IAQUALINK_ROBOTS_cyclonext
-
-            if self._device_type == "i2d_robot":
-
-                self._fan_speed_list = ["Floor only", "Walls only", "Floor and walls"]
-                self._supported_features = SUPPORT_IAQUALINK_ROBOTS_i2d
-
-        #request status for i2d type
-        if self._device_type == "i2d_robot":
-            request = { "command": "/command","params": "request=OA11","user_id": self._id }
-
-            url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
-            data= None
-            data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=30)
-
-            try:
-                if data["command"]["request"] == "OA11":
-                    self._status = "connected"
-                    self._attributes['status'] = self._status
-                    self._debug = data["command"]["response"]
-
-                    response = self._debug
-
-                    if isinstance(response, str) and len(response) >= 12:
-                        error_code = response[6:8].upper()
-
-                        error_map = {
-                            "00": "no_error",
-                            "01": "pump_short_circuit",
-                            "02": "right_drive_motor_short_circuit",
-                            "03": "left_drive_motor_short_circuit",
-                            "04": "pump_motor_overconsumption",
-                            "05": "right_drive_motor_overconsumption",
-                            "06": "left_drive_motor_overconsumption",
-                            "07": "floats_on_surface",
-                            "08": "running_out_of_water",
-                            "0A": "communication_error"
-                        }
-
-                        error_text = error_map.get(error_code, f"unknown_{error_code}")
-
-                        self._attributes['error_code'] = error_code
-                        self._attributes['error_text'] = error_text
-
-                        if error_code != "00":
-                            self._activity = VacuumActivity.ERROR
-                    else:
-                        self._attributes['error_code'] = "??"
-                        self._attributes['error_text'] = "unreadable"
-
-                    if self._debug_mode == True:
-                        self._attributes['debug'] = self._debug
-            except:
-                try:
-                    if data["status"] == "500":
-                        self._status = "offline"
-                        self._attributes['status'] = self._status
-                except:
-                    self._debug = data
-                    if self._debug_mode == True:
-                        self._attributes['debug'] = self._debug
-
-            if self._activity == VacuumActivity.CLEANING:
-                try:
-                    response = data["command"]["response"]
-                    if isinstance(response, str) and len(response) >= 12:
-                        minutes_remaining = int(response[10:12], 16)
-                        self._estimated_end_time = self.add_minutes_to_datetime(datetime.datetime.now(), minutes_remaining)
-                        self._attributes['estimated_end_time'] = self._estimated_end_time
-                        self._attributes['time_remaining_human'] = f"{minutes_remaining // 60}:{minutes_remaining % 60:02d}"
-                    else:
-                        self._attributes['estimated_end_time'] = None
-                        self._attributes['time_remaining_human'] = None
-                except Exception as e:
-                    _LOGGER.warning("Error while parsing remaining minutes: {e}")
-                    self._attributes['estimated_end_time'] = None
-                    self._attributes['time_remaining_human'] = None
-
-        else:
-        #request device status & attributes over websocket for cyclonext and vr device types
-            request = { "action": "subscribe", "namespace": "authorization", "payload": { "userId": self.id }, "service": "Authorization", "target": self._serial_number, "version": 1 }
-
-            data= None
-            data = await asyncio.wait_for(self.get_device_status(request), timeout=30)
-
-            try:
-                self._status = data['payload']['robot']['state']['reported']['aws']['status']
-                self._attributes['status'] = self._status
-            except:
-            #returns empty message somethimes, try second call
-                self._debug = data
-                if self._debug_mode == True:
-                    self._attributes['debug'] = self._debug
-            
-                data = await asyncio.wait_for(self.get_device_status(request), timeout=30)
-
-                self._status = data['payload']['robot']['state']['reported']['aws']['status']
-                self._attributes['status'] = self._status
-            
-
-            self._last_online = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['aws']['timestamp']/1000)) #Convert Epoch To Unix
-            self._attributes['last_online'] = self._last_online
-
-            #For VR device type device mapping
-            if self._device_type == "vr":
-
-                try:
-                    self._temperature = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['val']
-                except:
-                    try: 
-                        self._temperature = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['state']
-                    except:
-                        self._temperature = '0' #Zodiac XA 5095 iQ does not support temp for example see https://github.com/galletn/iaqualink/issues/9
-                            
-                self._attributes['temperature'] = self._temperature
-
-                if data['payload']['robot']['state']['reported']['equipment']['robot']['state'] == 1:
-                    self._activity = VacuumActivity.CLEANING
-                    self.async_write_ha_state()
-                else:
-                    if data['payload']['robot']['state']['reported']['equipment']['robot']['state'] == 3:
-                        self._activity = VacuumActivity.RETURNING
-                        self.async_write_ha_state()
-                    else:
-                        self._activity = VacuumActivity.IDLE
-                        self.async_write_ha_state()
-
-                self._canister = data['payload']['robot']['state']['reported']['equipment']['robot']['canister']
-                self._attributes['canister'] = self._canister
-
-                self._error_state = data['payload']['robot']['state']['reported']['equipment']['robot']['errorState']
-                self._attributes['error_state'] = self._error_state
-
-                self._total_hours = data['payload']['robot']['state']['reported']['equipment']['robot']['totalHours']
-                self._attributes['total_hours'] = self._total_hours
-
-                self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['equipment']['robot']['cycleStartTime'])) #Convert Epoch To Unix
-                self._attributes['cycle_start_time'] = self._cycle_start_time
-
-                self._cycle = data['payload']['robot']['state']['reported']['equipment']['robot']['prCyc']
-                self._attributes['cycle'] = self._cycle
-
-                cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot']['durations']
-
-                self._cycle_duration = list(cycle_duration_values.values())[self._cycle]
-                self._attributes['cycle_duration'] = self._cycle_duration
-
-                minutes = self._cycle_duration
-
-                try:
-                    self._cycle_end_time = datetime_obj = self.add_minutes_to_datetime(self._cycle_start_time, minutes)
-                    self._attributes['cycle_end_time'] = self._cycle_end_time
-                except:
-                    self._attributes['cycle_end_time'] = None
-
-                try:
-                    self._time_remaining = self.subtract_dates(datetime.datetime.now(), self._cycle_end_time)
-                    self._attributes['time_remaining'] = self._time_remaining
-                except:
-                    self._attributes['time_remaining'] = None
-
-            #For cyclobat device type device mapping
-            if self._device_type == "cyclobat":
-                if data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["main"]["state"] == 1:
-                    self._activity = VacuumActivity.CLEANING
-                    self.async_write_ha_state()
-                else:
-                    if data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["main"]["state"] == 3:
-                        self._activity = VacuumActivity.RETURNING
-                        self.async_write_ha_state()
-                    else:
-                        self._activity = VacuumActivity.IDLE
-                        self.async_write_ha_state()
-
-                self._total_hours = total_minutes = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["stats"]["totRunTime"]
-                self._attributes['total_hours'] = self._total_hours
-
-                self._battery_state = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["battery"]["state"]
-                self._attributes['battery_state'] = self._battery_state
-
-                self._user_charge_percentage = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["battery"]["userChargePerc"]
-                self._attributes['user_charge_percentage'] = self._user_charge_percentage
-
-                self._battery_cycles = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["battery"]["cycles"]
-                self._attributes['battery_cycles'] =  self._battery_cycles
-
-
-                self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['equipment']['robot']['main']['cycleStartTime'])) #Convert Epoch To Unix
-                self._attributes['cycle_start_time'] = self._cycle_start_time
-
-                self._cycle = data['payload']['robot']['state']['reported']['equipment']['robot']['lastCycle']['endCycleType']
-                self._attributes['cycle'] = self._cycle
-
-                cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot']['cycles']
-
-                self._cycle_duration = list(cycle_duration_values.values())[self._cycle]
-                self._attributes['cycle_duration'] = self._cycle_duration
-
-                minutes = self._cycle_duration
-
-                try:
-                    self._cycle_end_time = datetime_obj = self.add_minutes_to_datetime(self._cycle_start_time, minutes)
-                    self._attributes['cycle_end_time'] = self._cycle_end_time
-                except:
-                    self._attributes['cycle_end_time'] = None
-
-                try:
-                    self._time_remaining = self.subtract_dates(datetime.datetime.now(), self._cycle_end_time)
-                    self._attributes['time_remaining'] = self._time_remaining
-                except:
-                    self._attributes['time_remaining'] = None
-
-
-
-            #For cyclonext device type device mapping
-            if self._device_type == "cyclonext":
-            
-                if data['payload']['robot']['state']['reported']['equipment']['robot.1']['mode']== 1:
-                    self._activity = VacuumActivity.CLEANING
-                    self.async_write_ha_state()
-                else:
-                    self._activity = VacuumActivity.IDLE
-                    self.async_write_ha_state()
-
-                self._canister = data['payload']['robot']['state']['reported']['equipment']['robot.1']['canister']
-                self._attributes['canister'] = self._canister
-
-                self._error_state = data['payload']['robot']['state']['reported']['equipment']['robot.1']['errors']['code']
-                self._attributes['error_state'] = self._error_state
-
-                try:
-                    self._total_hours = data['payload']['robot']['state']['reported']['equipment']['robot.1']['totRunTime']
-                    self._attributes['total_hours'] = self._total_hours
-                except:
-                    self._attributes['total_hours'] = 0 #not supported by some cyclonex models
-
-                self._cycle_start_time = datetime_obj = datetime.datetime.fromtimestamp((data['payload']['robot']['state']['reported']['equipment']['robot.1']['cycleStartTime'])) #Convert Epoch To Unix
-                self._attributes['cycle_start_time'] = self._cycle_start_time
-
-                self._cycle = data['payload']['robot']['state']['reported']['equipment']['robot.1']['cycle']
-                self._attributes['cycle'] = self._cycle
-
-                cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot.1']['durations']
-
-                self._cycle_duration = list(cycle_duration_values.values())[self._cycle]
-                self._attributes['cycle_duration'] = self._cycle_duration
-
-                minutes = self._cycle_duration
-
-                try:
-                    self._cycle_end_time = datetime_obj = self.add_minutes_to_datetime(self._cycle_start_time, minutes)
-                    self._attributes['cycle_end_time'] = self._cycle_end_time
-                except:
-                    self._attributes['cycle_end_time'] = None
-
-                try:
-                    self._time_remaining = self.subtract_dates(datetime.datetime.now(), self._cycle_end_time)
-                    self._attributes['time_remaining'] = self._time_remaining
-                except:
-                    self._attributes['time_remaining'] = None
-
-        #Get model only first time to avoid load.
-            if self._model == None:
-                data = None
-                url = URL_GET_DEVICE_FEATURES + self._serial_number + "/features"
-                data =  await asyncio.wait_for(self.get_device_features(url), timeout=30)
-
-                try:
-                    self._model = data['model']
-                    self._attributes['model'] = self._model
-                except:
-                    self._model = 'Not Supported' #39 some models do not return a model number on the features call
-
-
-    async def send_login(self, data, headers):
-        """Post a login request to the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers=headers) as session:
-            try:
-                async with session.post(URL_LOGIN, data=data) as response:
-                    return await response.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
-
-    async def get_devices(self, params, headers):
-        """Get device list from the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers=headers) as session:
-            try:
-                async with session.get(URL_GET_DEVICES, params=params) as response:
-                    return await response.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
-
-
-    async def get_device_features(self, url):
-        """Get device list from the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            try:
-                async with session.get(url) as response:
-                    return await response.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
-
-    async def get_device_status(self, request):
-        """Get device status of the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            try:
-                async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
-                    await websocket.send_json(request)
-                    message = await websocket.receive()
-                return message.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
-
-    async def post_command_i2d(self, url, request):
-        """Get device status of the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers={"Authorization": self._id_token, "api_key": self._api_key}) as session:
-            try:
-                async with session.post(url,json = request) as response:
-                    return await response.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
-    
-    async def setCleanerState(self, request):
-        """Get device status of the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            try:
-                async with session.ws_connect("wss://prod-socket.zodiac-io.com/devices") as websocket:
-                    await websocket.send_json(request)
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
-                #wait 2 seconds to avoid flooding iaqualink server with fetching statusses again otherwise it causes empty message returns
-                await asyncio.sleep(2)
-                await self.async_update()
-
-    def add_minutes_to_datetime(self, dt, minutes):
-        return dt + datetime.timedelta(minutes=minutes)
-
-    def subtract_dates(self, date1, date2):
-        """ Subtract the two dates """
-        try:
-            time_diff = date2 - date1
-        except:
-            return 0
-
-        """ If the result is negative, return 0 """
-        if time_diff < timedelta():
-            return 0
-    
-        """ Otherwise, calculate the number of hours, minutes and remaining seconds """
-        total_seconds = time_diff.total_seconds()
-        hours = int(total_seconds // 3600)
-        minutes = int((total_seconds % 3600) // 60)
-        remaining_seconds = int(total_seconds % 60)
-
-        """ Create a string that includes the number of hours, minutes and remaining seconds """
-        time_str = f"{hours} Hour(s) {minutes} Minute(s) {remaining_seconds} Second(s)"
-
-        return time_str
+        if self._status != "connected":
+            return
+
+        self._activity = VacuumActivity.IDLE
+        
+        # Reset time remaining to zero and set end time to current time
+        self._time_remaining = timedelta(seconds=0)
+        current_time = datetime.datetime.now()
+        self._estimated_end_time = current_time
+        
+        # Update attributes
+        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+        
+        self.async_write_ha_state()
+
+        # Stop the cleaner and get reset values
+        await self._client.stop_cleaning()
+        # Force an immediate coordinator update to reflect the stopped state
+        await self.coordinator.async_refresh()
 
     async def async_set_fan_speed(self, fan_speed):
-        """ code to send fan speed to vacuum cleaner """
+        """Set fan speed (cleaning mode) for the vacuum cleaner."""
         if fan_speed not in self._fan_speed_list:
             raise ValueError('Invalid fan speed')
-        self._fan_speed = fan_speed
-        if self._device_type == "i2d_robot":
-            if fan_speed == "Walls only":
-                _cycle_speed = "0A1284"
-
-            if fan_speed == "Floor only":
-                _cycle_speed = "0A1280"
-
-            if fan_speed == "Floor and walls":
-                _cycle_speed = "0A1283"
-
-            request = { "command": "/command","params": "request=" + _cycle_speed + "&timeout=800","user_id": self._id }
-            url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
-            data= None
-            data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=800)
-        
-        else:
-            clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
-
-            if self._device_type == "vr":
-                if fan_speed == "Wall only":
-                    _cycle_speed = "0"
-
-                if fan_speed == "Floor only":
-                    _cycle_speed = "1"
-
-                if fan_speed == "SMART Floor and walls":
-                    _cycle_speed = "2"
-
-                if fan_speed == "Floor and walls":
-                    _cycle_speed = "3"
-
-                request = {"action":"setCleaningMode","version":1,"namespace":"vr","payload":{"state":{"desired":{"equipment":{"robot":{"prCyc":_cycle_speed}}}},"clientToken": clientToken},"service":"StateController","target": self._serial_number}
-
-            if self._device_type == "cyclobat":
-                if fan_speed == "Wall only":
-                    _cycle_speed = "3"
-
-                if fan_speed == "Floor only":
-                    _cycle_speed = "0"
-
-                if fan_speed == "SMART Floor and walls":
-                    _cycle_speed = "2"
-
-                if fan_speed == "Floor and walls":
-                    _cycle_speed = "1"
-
-                request = { "action": "setCleaningMode", "version":1, "namespace": "cyclobat", "payload": {"state": {"desired": {"equipment": {"robot": {"main": {"mode": _cycle_speed } } } } }, "clientToken": clientToken }, "service":"StateController", "target": self._serial_number}
-
-            if self._device_type == "cyclonext":
-                if fan_speed == "Floor only":
-                    _cycle_speed = "1"
-
-                if fan_speed == "Floor and walls":
-                    _cycle_speed = "3"
-
-                request = {"action":"setCleaningMode","namespace":"cyclonext","payload":{"clientToken":clientToken,"state":{"desired":{ "equipment":{"robot.1":{"cycle":_cycle_speed}}}}},"service":"StateController","target":self._serial_number,"version":1}
             
-            data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-
-        if self._debug_mode == True:
-            self._attributes['debug'] = self._debug
+        self._fan_speed = fan_speed
+        
+        await self._client.set_fan_speed(fan_speed, self._fan_speed_list)
+        await self.coordinator.async_request_refresh()
 
     async def async_return_to_base(self, **kwargs):
         """Set the vacuum cleaner to return to the dock."""
-        if self._status == "connected":
+        if self._status != "connected":
+            return
             
-            self._activity = VacuumActivity.RETURNING
-            self.async_write_ha_state()
+        self._activity = VacuumActivity.RETURNING
+        
+        # Reset time remaining to zero and set end time to current time
+        self._time_remaining = timedelta(seconds=0)
+        current_time = datetime.datetime.now()
+        self._estimated_end_time = current_time
+        
+        # Update attributes
+        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+        
+        self.async_write_ha_state()
 
-            #VR
-            if self._device_type == "vr":
-                clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
-                request = { "action": "setCleanerState", "namespace": "vr", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 3 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
-                        
-                data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-
-            #Cyclobat
-            if self._device_type == "cyclobat":
-                clientToken = str ( self._id ) + "|" + self._authentication_token + "|" + self._app_client_id
-                request = { "action": "setCleanerState", "namespace": "cyclobat", "payload": { "clientToken": clientToken, "state": { "desired": { "equipment": { "robot": { "state": 3 } } } } }, "service": "StateController", "target": self._serial_number, "version": 1 }
-                        
-                data = await asyncio.wait_for(self.setCleanerState(request), timeout=30)
-            
-            #I2D Robot
-            if self._device_type == "i2d_robot":
-                request = { "command": "/command","params": "request=0A1701&timeout=800","user_id": self._id }
-                url = "https://r-api.iaqualink.net/v2/devices/" + self._serial_number + "/control.json"
-                data= None
-
-                data = await asyncio.wait_for(self.post_command_i2d(url,request), timeout=800)
+        await self._client.return_to_base()
+        await self.coordinator.async_request_refresh()

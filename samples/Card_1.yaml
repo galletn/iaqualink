@@ -1,0 +1,187 @@
+type: custom:vertical-stack-in-card
+title: ''
+cards:
+  - type: picture-elements
+    image: /local/media/blankcopy.png
+    style:
+      '--ha-card-border-radius': 3px
+    elements:
+      - type: image
+        image: /local/media/EX_4000_iQ.png
+        style:
+          top: 50%
+          left: 50%
+          width: 60%
+      - type: conditional
+        conditions:
+          - entity: vacuum.sven_ii
+            state_not: unavailable
+        elements:
+          - type: state-badge
+            entity: sensor.pool_robot_status
+            style:
+              top: 25%
+              left: 90%
+              color: transparent
+              font-size: 12px
+              animation: var(--state-animation)
+              '--label-badge-background-color': var(--my-state-color)
+              '--label-badge-text-color': var(--my-state-text)
+              '--label-badge-red': var(--my-state-badge-color)
+              '--ha-label-badge-size': 60px
+              '--mdc-icon-size': 24px
+          - type: conditional
+            conditions:
+              - type: attribute
+                entity: vacuum.sven_ii
+                attribute: status
+                state_not: unknown
+            elements:
+              - type: state-badge
+                entity: vacuum.sven_ii
+                style:
+                  top: 86%
+                  left: 10%
+                  font-size: 10px
+                  color: transparent
+                  animation: var(--state-animation2)
+                  '--ha-label-badge-size': 50px
+                  '--label-badge-red': var(--my-state-badge-color2)
+                  '--label-badge-background-color': var(--my-state-color2)
+                  '--label-badge-text-color': var(--my-state-text2)
+          - type: conditional
+            conditions:
+              - entity: sensor.pool_robot_canister_full
+                state_not: OK
+            elements:
+              - type: state-badge
+                entity: sensor.pool_robot_canister_full
+                style:
+                  top: 40%
+                  left: 50%
+                  font-size: 8px
+                  color: transparent
+                  '--ha-label-badge-size': 30px
+                  '--label-badge-text-color': rgb(66 66 66)
+                  '--label-badge-red': red
+                  '--label-badge-background-color': red
+        card_mod:
+          style: |
+            ha-card {
+            {% if is_state('sensor.pool_robot_status', 'connected') %}
+            --my-state-color: transparent;
+            --my-state-text: rgb(68 115 158);    
+            --my-state-badge-color: rgb(68 115 158);
+            {% else %}
+            --my-state-color: red;
+            --my-state-badge-color: rgb(66 66 66);
+            --state-animation: opacity 0.6s ease-in-out infinite;
+            {% endif %}
+            {% if is_state('vacuum.sven_ii', 'cleaning') %}
+            --my-state-color2: transparent;
+            --my-state-text2: rgb(11 239 39);    
+            --my-state-badge-color2: rgb(11 239 39);
+            --state-animation2: opacity 1.5s ease-in-out infinite;
+            {% else %};
+            --my-state-color2: transparent;
+            --my-state-badge-color2: rgb(66 66 66);
+            {% endif %}
+            }
+            @keyframes opacity {
+              0% {
+                  opacity: 1;
+              }
+              50% {
+                opacity: 0
+              }
+              100% {
+                opacity: 1;
+              }
+            }              
+  - type: conditional
+    conditions:
+      - entity: vacuum.sven_ii
+        state_not: unavailable
+    card:
+      type: entities
+      entities:
+        - type: custom:vertical-stack-in-card
+          title: ''
+          cards:
+            - type: conditional
+              condition: and
+              conditions:
+                - entity: vacuum.sven_ii
+                  state_not: idle
+                - entity: script.vacuum_toggle
+                  state_not: 'on'
+              card:
+                type: custom:timer-bar-card
+                entity: vacuum.sven_ii
+                name: Progress
+                icon: mdi:progress-clock
+                bar_background: '#c2c2c2'
+                bar_foreground: green
+                active_state: cleaning
+                invert: false
+                bar_direction: ltr
+                bar_width: 60%
+                bar_radius: 3px
+                bar_height: 16px
+                duration:
+                  attribute: cycle_duration
+                  units: minutes
+                start_time:
+                  attribute: cycle_start_time
+                debug: false
+          card_mod: null
+          style: |
+            ha-card {
+              box-shadow: none;
+            }  
+        - type: section
+          label: Device
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: friendly_name
+          name: Name
+          icon: mdi:robot-mower-outline
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: status
+          name: Status
+          icon: mdi:connection
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: model
+          name: Model Number
+          icon: mdi:text-box-check-outline
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: device_type
+          name: Device Type
+          icon: mdi:devices
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: serial_number
+          name: Serial Number
+          icon: mdi:barcode-scan
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: last_online
+          name: Last Online
+          icon: mdi:connection
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: error_state
+          name: Error State
+          icon: mdi:list-status
+        - type: attribute
+          entity: vacuum.sven_ii
+          attribute: total_hours
+          name: Total Hours Operation
+          icon: mdi:archive-clock-outline
+        - entity: sensor.pool_robot_canister_full
+          name: Canister State
+          icon: mdi:beer
+      state_color: true

@@ -26,7 +26,8 @@ UNIT_MAP = {
     "canister":            "%",
     "temperature":         "°C",
     "cycle_duration":      "min",
-    "time_remaining_human":"min",
+    "time_remaining":      "min",  # Numeric minutes
+    "time_remaining_human": None,  # Human readable string, no unit
 }
 
 # All possible sensors

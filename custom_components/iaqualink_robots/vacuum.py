@@ -1,4 +1,6 @@
 import logging
+import datetime
+from datetime import timedelta
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,6 +95,10 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         self._fan_speed_list = ["Floor only", "Floor and walls"]
         self._fan_speed = self._fan_speed_list[0]
         self._status = None
+        self._start_time = None
+        self._cycle_duration = 120  # Default cycle duration in minutes
+        self._time_remaining = None
+        self._estimated_end_time = None
 
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator and set activity."""
@@ -109,12 +115,43 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
             activity = data.get("activity")
             if activity == "cleaning":
                 self._activity = VacuumActivity.CLEANING
+                
+                # If we have a cycle duration from the data, use it
+                if "cycle_duration" in data:
+                    self._cycle_duration = data.get("cycle_duration")
+                
+                # If we're cleaning and have a start time, update time remaining
+                if self._start_time and self._estimated_end_time:
+                    self._calculate_time_remaining()
+                    self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+                # If we're cleaning but don't have a start time (e.g., after HA restart),
+                # set it now based on the cycle_start_time from data if available
+                elif "cycle_start_time" in data:
+                    try:
+                        self._start_time = datetime.datetime.fromisoformat(data["cycle_start_time"])
+                        self._estimated_end_time = self._start_time + timedelta(minutes=self._cycle_duration)
+                        self._calculate_time_remaining()
+                        self._attributes["start_time"] = self._start_time.isoformat()
+                        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+                        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+                    except (ValueError, TypeError):
+                        # If we can't parse the cycle_start_time, just use current time
+                        self._start_time = datetime.datetime.now()
+                        self._estimated_end_time = self._start_time + timedelta(minutes=self._cycle_duration)
+                        self._calculate_time_remaining()
+                        self._attributes["start_time"] = self._start_time.isoformat()
+                        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+                        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
             elif activity == "returning":
                 self._activity = VacuumActivity.RETURNING
             elif activity == "error":
                 self._activity = VacuumActivity.ERROR
             else:
                 self._activity = VacuumActivity.IDLE
+                # Reset time remaining if we're idle and it was previously set
+                if self._time_remaining is not None:
+                    self._time_remaining = timedelta(seconds=0)
+                    self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
                 
             # Set device type specific attributes
             device_type = data.get("device_type")
@@ -193,12 +230,51 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         """Return the supported features of the vacuum."""
         return self._supported_features
 
+    def _format_time_remaining(self, time_delta):
+        """Format time remaining as a human-readable string."""
+        if not time_delta:
+            return "0:00"
+        
+        total_seconds = time_delta.total_seconds()
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = int(total_seconds % 60)
+        
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        else:
+            return f"{minutes}:{seconds:02d}"
+    
+    def _calculate_time_remaining(self):
+        """Calculate time remaining based on start time and cycle duration."""
+        if not self._start_time or not self._estimated_end_time:
+            self._time_remaining = None
+            return
+        
+        now = datetime.datetime.now()
+        if now >= self._estimated_end_time:
+            self._time_remaining = timedelta(seconds=0)
+        else:
+            self._time_remaining = self._estimated_end_time - now
+    
     async def async_start(self):
         """Start the vacuum."""
         if self._status != "connected":
             return
 
         self._activity = VacuumActivity.CLEANING
+        
+        # Set start time and calculate estimated end time
+        self._start_time = datetime.datetime.now()
+        self._estimated_end_time = self._start_time + timedelta(minutes=self._cycle_duration)
+        
+        # Calculate time remaining
+        self._calculate_time_remaining()
+        
+        # Update attributes
+        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+        
         self.async_write_ha_state()
 
         await self._client.start_cleaning()
@@ -210,10 +286,22 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
             return
 
         self._activity = VacuumActivity.IDLE
+        
+        # Reset time remaining to zero and set end time to current time
+        self._time_remaining = timedelta(seconds=0)
+        current_time = datetime.datetime.now()
+        self._estimated_end_time = current_time
+        
+        # Update attributes
+        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+        
         self.async_write_ha_state()
 
+        # Stop the cleaner and get reset values
         await self._client.stop_cleaning()
-        await self.coordinator.async_request_refresh()
+        # Force an immediate coordinator update to reflect the stopped state
+        await self.coordinator.async_refresh()
 
     async def async_set_fan_speed(self, fan_speed):
         """Set fan speed (cleaning mode) for the vacuum cleaner."""
@@ -231,6 +319,16 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
             return
             
         self._activity = VacuumActivity.RETURNING
+        
+        # Reset time remaining to zero and set end time to current time
+        self._time_remaining = timedelta(seconds=0)
+        current_time = datetime.datetime.now()
+        self._estimated_end_time = current_time
+        
+        # Update attributes
+        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
+        
         self.async_write_ha_state()
 
         await self._client.return_to_base()

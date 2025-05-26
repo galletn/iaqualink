@@ -40,7 +40,7 @@ class AqualinkClient:
             "Connection": "keep-alive", 
             "Accept": "*/*"
         }
-        self._debug_mode = True
+        self._debug_mode = False
 
     @property 
     def username(self) -> str:
@@ -338,7 +338,7 @@ class AqualinkClient:
             result["activity"] = "idle"
 
         # Extract other attributes
-        result["canister"] = data['payload']['robot']['state']['reported']['equipment']['robot']['canister']
+        result["canister"] = data['payload']['robot']['state']['reported']['equipment']['robot']['canister']*100
         result["error_state"] = data['payload']['robot']['state']['reported']['equipment']['robot']['errorState']
         result["total_hours"] = data['payload']['robot']['state']['reported']['equipment']['robot']['totalHours']
 
@@ -399,7 +399,7 @@ class AqualinkClient:
             result["activity"] = "idle"
 
         # Extract attributes
-        result["canister"] = data['payload']['robot']['state']['reported']['equipment']['robot.1']['canister']
+        result["canister"] = data['payload']['robot']['state']['reported']['equipment']['robot.1']['canister']*100
         result["error_state"] = data['payload']['robot']['state']['reported']['equipment']['robot.1']['errors']['code']
 
         try:
@@ -425,19 +425,57 @@ class AqualinkClient:
     def _calculate_times(self, start_time, duration_minutes, result):
         """Calculate end time and remaining time."""
         try:
+            # Calculate cycle end time
             cycle_end_time = self.add_minutes_to_datetime(start_time, duration_minutes)
             result["cycle_end_time"] = cycle_end_time.isoformat()
-        except Exception:
+            result["estimated_end_time"] = cycle_end_time.isoformat()
+            
+            # Calculate remaining time
+            now = datetime.datetime.now()
+            
+            # Only calculate time remaining if we have valid times
+            if start_time and cycle_end_time:
+                # If current time is before the cycle end time
+                if now < cycle_end_time:
+                    time_diff = cycle_end_time - now
+                    total_seconds = time_diff.total_seconds()
+                    
+                    # Store time remaining as integer minutes for numeric sensor
+                    total_minutes = max(0, int(total_seconds / 60))
+                    result["time_remaining"] = total_minutes  # This will be numeric minutes
+                    
+                    # Format human readable time for display
+                    hours = int(total_seconds // 3600)
+                    minutes = int((total_seconds % 3600) // 60)
+                    seconds = int(total_seconds % 60)
+                    result["time_remaining_human"] = f"{hours} Hour(s) {minutes} Minute(s) {seconds} Second(s)"
+                    
+                    _LOGGER.debug("Time remaining (minutes): %d, human readable: %s", 
+                                total_minutes, 
+                                result["time_remaining_human"])
+                else:
+                    # If end time has passed, set to 0 (numeric) for time_remaining
+                    result["time_remaining"] = 0
+                    result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
+            else:
+                # If we don't have valid times, set to None
+                result["time_remaining"] = 0
+                result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
+                
+            _LOGGER.debug(
+                "Time calculation: start=%s, end=%s, now=%s, remaining=%s",
+                start_time.isoformat() if start_time else None,
+                cycle_end_time.isoformat() if cycle_end_time else None,
+                now.isoformat(),
+                result.get("time_remaining")
+            )
+            
+        except Exception as e:
+            _LOGGER.warning(f"Error calculating times: {e}")
             result["cycle_end_time"] = None
-
-        if self._activity == VacuumActivity.CLEANING:
-            try:
-                time_remaining = self.subtract_dates(datetime.datetime.now(), cycle_end_time)
-                result["time_remaining"] = time_remaining
-            except Exception:
-                result["time_remaining"] = None
-        else:
+            result["estimated_end_time"] = None
             result["time_remaining"] = None
+            result["time_remaining_human"] = None
 
     def add_minutes_to_datetime(self, dt, minutes):
         """Add minutes to a datetime object."""
@@ -649,8 +687,20 @@ class AqualinkClient:
                     "version": 1
                 }
             
-            if request:
+        # Create result with reset time values always, regardless of robot type
+        now = datetime.datetime.now()
+        result = {
+            "estimated_end_time": now.isoformat(),
+            "time_remaining": 0,
+            "time_remaining_human": "0 Hour(s) 0 Minute(s) 0 Second(s)",
+            "cycle_start_time": now.isoformat(),
+            "activity": "idle"  # Also set activity to idle to ensure proper state
+        }
+        
+        if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+                _LOGGER.debug("Stop cleaning requested, reset time values: %s", result)
+                return result  # Return the reset values to be used in the coordinator's update
                 
     async def return_to_base(self):
         """Set the vacuum cleaner to return to the dock."""
@@ -790,24 +840,19 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self):
         try:
-            # Get new status data
+            # Get new status data - this call may include reset time values after stop_cleaning
             status = await self.client.fetch_status()
             
-            # If we have previous data, merge it with the new data
-            # This ensures that fields that might not be present in every update
-            # are preserved from previous updates
-            if self._last_data:
-                # Start with the previous data
-                merged_data = self._last_data.copy()
-                # Update with new data
-                merged_data.update(status)
-                # Save the merged data for next time
-                self._last_data = merged_data
-                return merged_data
-            else:
-                # First update, just use the status as is
-                self._last_data = status
-                return status
+            # Always use fresh status data
+            merged_data = status.copy()
+            
+            # Save data for next update
+            self._last_data = merged_data.copy()
+            return merged_data
+            
         except Exception as err:
-            _LOGGER.error(f"Error updating data: {err}")
-            raise UpdateFailed(err)
+            # Get detailed error information
+            import traceback
+            error_details = traceback.format_exc()
+            _LOGGER.error(f"Error updating data: {err}\nDetails:\n{error_details}")
+            raise UpdateFailed(f"{err} - See logs for details")

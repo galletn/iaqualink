@@ -72,17 +72,19 @@ class AqualinkClient:
         # Update device status based on device type
         if self._device_type == "i2d_robot":
             data = await self._update_i2d_robot()
+            # For i2d robots, model is not available via API, set to Hidden
+            data["model"] = "Hidden"
         else:
             data = await self._update_other_robots()
             
-        # Get model only first time to avoid load
-        if not self._model:
-            model = await self._get_device_model()
-            if model:
-                data["model"] = model
-        else:
-            # Make sure model is included in every update
-            data["model"] = self._model
+            # Get model only first time to avoid load
+            if not self._model:
+                model = await self._get_device_model()
+                if model:
+                    data["model"] = model
+            else:
+                # Make sure model is included in every update
+                data["model"] = self._model
                 
         return data
 
@@ -266,7 +268,9 @@ class AqualinkClient:
                 }
 
                 mode_map = {
+                    0x00: "Quick clean floor only (standard)",
                     0x03: "Deep clean floor + walls (high power)",
+                    0x04: "Waterline only (standard)",
                     0x08: "Quick – floor only (standard)",
                     0x09: "Custom – floor only (high power)",
                     0x0A: "Custom – floor + walls (standard)",
@@ -305,8 +309,19 @@ class AqualinkClient:
                 result["hardware_id"] = str(hardware_id)
                 result["firmware_id"] = str(firmware_id)
 
+                # Set fan speed based on mode code, regardless of activity state
+                if mode_code == 0x03:  # Deep clean mode
+                    self._fan_speed = 3
+                    result["fan_speed"] = "Floor and walls"
+                elif mode_code == 0x00:  # Quick clean floor only mode
+                    self._fan_speed = 1
+                    result["fan_speed"] = "Floor only"
+                elif mode_code == 0x04:  # Waterline only 
+                    self._fan_speed = 2
+                    result["fan_speed"] = "Walls only"
+
                 # Update activity state based on state code
-                if state_code == 0x04:  # Actively cleaning
+                if state_code == 0x04 or state_code == 0x02:  # Actively cleaning or Just started cleaning
                     self._activity = VacuumActivity.CLEANING
                     result["activity"] = "cleaning"
                 elif error_code != 0x00:
@@ -318,8 +333,18 @@ class AqualinkClient:
                     result["activity"] = "idle"
                     result["error_state"] = "no_error"
 
-                if mode_code == 0x03:  # Deep clean mode
-                    self._fan_speed = 3
+                # Update activity state based on state code
+                if state_code == 0x04 or state_code == 0x02:  # Actively cleaning or Just started cleaning
+                    self._activity = VacuumActivity.CLEANING
+                    result["activity"] = "cleaning"
+                elif error_code != 0x00:
+                    self._activity = VacuumActivity.ERROR
+                    result["activity"] = "error"
+                    result["error_state"] = error_map.get(error_code, f"unknown_{error_code:02X}")
+                else:
+                    self._activity = VacuumActivity.IDLE
+                    result["activity"] = "idle"
+                    result["error_state"] = "no_error"
 
                 # Calculate estimated end time if cleaning
                 if time_remaining > 0 and self._activity == VacuumActivity.CLEANING:
@@ -413,7 +438,20 @@ class AqualinkClient:
 
     def _update_cyclobat_robot_data(self, data, result):
         """Update status for cyclobat type robot."""
-        robot_state = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["main"]["state"]
+        robot_data = data['payload']['robot']['state']['reported']['equipment']['robot']
+        main_data = robot_data['main']
+        battery_data = robot_data['battery']
+        stats_data = robot_data['stats']
+        last_cycle_data = robot_data['lastCycle']
+        cycles_data = robot_data['cycles']
+
+        # Basic status and version info
+        result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+        result["version"] = robot_data.get('vr', 'Unknown')
+        result["serial"] = robot_data.get('sn', '')
+
+        # Main state information
+        robot_state = main_data['state']
         if robot_state == 1:
             self._activity = VacuumActivity.CLEANING
             result["activity"] = "cleaning"
@@ -424,25 +462,63 @@ class AqualinkClient:
             self._activity = VacuumActivity.IDLE
             result["activity"] = "idle"
 
-        # Extract attributes
-        result["total_hours"] = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["stats"]["totRunTime"]
-        result["battery_state"] = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["battery"]["state"]
-        result["user_charge_percentage"] = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["battery"]["userChargePerc"]
-        result["battery_cycles"] = data['payload']['robot']["state"]["reported"]["equipment"]["robot"]["battery"]["cycles"]
+        # Main control and mode information
+        result["control_state"] = str(main_data['ctrl'])
+        result["mode"] = str(main_data['mode'])
+        result["error_code"] = str(main_data['error'])
+        
+        # Battery information
+        result["battery_version"] = battery_data.get('vr', 'Unknown')
+        result["battery_state"] = str(battery_data['state'])
+        result["battery_percentage"] = str(battery_data['userChargePerc'])
+        result["battery_level"] = str(battery_data['userChargePerc'])
+        result["battery_charge_state"] = str(battery_data['userChargeState'])
+        result["battery_cycles"] = str(battery_data['cycles'])
+        result["battery_warning_code"] = str(battery_data['warning']['code'])
 
-        # Convert timestamp to datetime
-        timestamp = data['payload']['robot']['state']['reported']['equipment']['robot']['main']['cycleStartTime']
+        # Statistics
+        result["total_hours"] = str(stats_data['totRunTime'])
+        result["diagnostic_code"] = str(stats_data['diagnostic'])
+        result["temperature"] = str(stats_data['tmp'])
+        result["last_error_code"] = str(stats_data['lastError']['code'])
+        result["last_error_cycle"] = str(stats_data['lastError']['cycleNb'])
+
+        # Last cycle information
+        result["last_cycle_number"] = str(last_cycle_data['cycleNb'])
+        result["last_cycle_duration"] = str(last_cycle_data['duration'])
+        result["last_cycle_mode"] = str(last_cycle_data['mode'])
+        result["cycle"] = str(last_cycle_data['endCycleType'])
+        result["last_cycle_error"] = str(last_cycle_data['errorCode'])
+
+        # Cycle durations
+        result["floor_duration"] = str(cycles_data['floorTim']['duration'])
+        result["floor_walls_duration"] = str(cycles_data['floorWallsTim']['duration'])
+        result["smart_duration"] = str(cycles_data['smartTim']['duration'])
+        result["waterline_duration"] = str(cycles_data['waterlineTim']['duration'])
+        result["first_smart_done"] = str(cycles_data['firstSmartDone'])
+        result["lift_pattern_time"] = str(cycles_data['liftPatternTim'])
+
+        # Convert timestamp to datetime for cycle start time
+        timestamp = main_data['cycleStartTime']
         cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
         result["cycle_start_time"] = cycle_start_time.isoformat()
 
-        result["cycle"] = data['payload']['robot']['state']['reported']['equipment']['robot']['lastCycle']['endCycleType']
+        # Get the appropriate cycle duration based on the current cycle type
+        cycle_type = last_cycle_data['endCycleType']
+        cycle_duration = None
+        if cycle_type == 0:  # Floor only
+            cycle_duration = cycles_data['floorTim']['duration']
+        elif cycle_type == 1:  # Floor and walls
+            cycle_duration = cycles_data['floorWallsTim']['duration']
+        elif cycle_type == 2:  # Smart
+            cycle_duration = cycles_data['smartTim']['duration']
+        elif cycle_type == 3:  # Waterline
+            cycle_duration = cycles_data['waterlineTim']['duration']
 
-        cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot']['cycles']
-        cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
-        result["cycle_duration"] = cycle_duration
-
-        # Calculate end time and remaining time
-        self._calculate_times(cycle_start_time, cycle_duration, result)
+        if cycle_duration is not None:
+            result["cycle_duration"] = cycle_duration
+            # Calculate end time and remaining time
+            self._calculate_times(cycle_start_time, cycle_duration, result)
 
     def _update_cyclonext_robot_data(self, data, result):
         """Update status for cyclonext type robot."""
@@ -640,6 +716,12 @@ class AqualinkClient:
     async def start_cleaning(self):
         """Start the vacuum cleaning."""
         if self._device_type == "i2d_robot":
+            # Record the start time when starting cleaning for i2d robots
+            now = datetime.datetime.now()
+            result = {
+                "cycle_start_time": now.isoformat(),
+                "activity": "cleaning"
+            }
             request = {
                 "command": "/command",
                 "params": "request=0A1240&timeout=800",
@@ -647,6 +729,7 @@ class AqualinkClient:
             }
             url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
             await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
+            return result  # Return the time values to be used in the coordinator's update
         else:
             clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
             
@@ -900,6 +983,12 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             
             # Always use fresh status data
             merged_data = status.copy()
+            
+            # For i2d robot, preserve cycle start time while cleaning
+            if (self.client._device_type == "i2d_robot" and 
+                merged_data.get("activity") == "cleaning" and 
+                self._last_data.get("cycle_start_time")):
+                merged_data["cycle_start_time"] = self._last_data["cycle_start_time"]
             
             # Save data for next update
             self._last_data = merged_data.copy()

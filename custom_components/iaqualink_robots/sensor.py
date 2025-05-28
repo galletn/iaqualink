@@ -48,15 +48,24 @@ ALL_SENSOR_TYPES = [
 ]
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up sensors for an entry, filtering out battery unless cyclobat."""
+    """Set up sensors for an entry, filtering based on robot type."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     client = data["client"]
 
-    # Only include battery_level if this is a cyclobat
+    # Filter sensor types based on device type
     if client._device_type == "cyclobat":
+        # Include all sensors for cyclobat
         sensor_types = ALL_SENSOR_TYPES
+    elif client._device_type == "i2d_robot":
+        # Exclude specified sensors for i2d robots
+        excluded_sensors = ["cycle_duration", "cycle_start_time", "model", "temperature"]
+        sensor_types = [
+            (key, name) for key, name in ALL_SENSOR_TYPES
+            if key != "battery_level" and key not in excluded_sensors
+        ]
     else:
+        # For other types, just exclude battery
         sensor_types = [
             (key, name) for key, name in ALL_SENSOR_TYPES
             if key != "battery_level"

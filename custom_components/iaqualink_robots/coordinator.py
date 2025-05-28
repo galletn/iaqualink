@@ -25,13 +25,13 @@ class AqualinkClient:
         self._username = username
         self._password = password
         self._api_key = api_key
-        self._auth_token = None
-        self._id = None
-        self._id_token = None
-        self._app_client_id = None
-        self._serial = None
-        self._device_type = None
-        self._first_name = None
+        self._auth_token: str = ""
+        self._id: str = ""
+        self._id_token: str = ""
+        self._app_client_id: str = ""
+        self._serial: str = ""
+        self._device_type: str = ""
+        self._first_name: str = ""
         self._last_name = None
         self._model = None
         self._activity = VacuumActivity.IDLE
@@ -40,7 +40,7 @@ class AqualinkClient:
             "Connection": "keep-alive", 
             "Accept": "*/*"
         }
-        self._debug_mode = False
+        self._debug_mode = True
 
     @property 
     def username(self) -> str:
@@ -220,65 +220,120 @@ class AqualinkClient:
         data = await asyncio.wait_for(self.post_command_i2d(url, request), timeout=30)
 
         result = {
-            "serial_number": self._serial,
-            "device_type": self._device_type,
+            "serial_number": str(self._serial),
+            "device_type": str(self._device_type),
             "status": "offline"
         }
 
         try:
-            if data["command"]["request"] == "OA11":
+            if data.get("command", {}).get("request") == "OA11":
                 result["status"] = "connected"
-                debug = data["command"]["response"]
-                result["debug"] = debug if self._debug_mode else None
+                debug = data.get("command", {}).get("response", "")
+                result["debug"] = str(debug) if self._debug_mode else ""
 
-                response = debug
+                # Clean up response string and convert to bytes
+                hex_str = debug.replace(" ", "")
+                if len(hex_str) != 36:  # 18 bytes * 2 characters per byte
+                    raise ValueError(f"Expected 36 hex characters; got {len(hex_str)} characters.")
+                
+                try:
+                    data_val = bytes.fromhex(hex_str)
+                except ValueError as e:
+                    raise ValueError(f"Invalid hex string: {e}")
 
-                if isinstance(response, str) and len(response) >= 12:
-                    error_code = response[6:8].upper()
+                # Lookup tables for status codes
+                state_map = {
+                    0x01: "Idle / Docked",
+                    0x02: "Cleaning just started",
+                    0x03: "Finished",
+                    0x04: "Actively cleaning",
+                    0x0C: "Paused",
+                    0x0D: "Error state D",
+                    0x0E: "Error state E"
+                }
 
-                    error_map = {
-                        "00": "no_error",
-                        "01": "pump_short_circuit",
-                        "02": "right_drive_motor_short_circuit",
-                        "03": "left_drive_motor_short_circuit",
-                        "04": "pump_motor_overconsumption",
-                        "05": "right_drive_motor_overconsumption",
-                        "06": "left_drive_motor_overconsumption",
-                        "07": "floats_on_surface",
-                        "08": "running_out_of_water",
-                        "0A": "communication_error"
-                    }
+                error_map = {
+                    0x00: "no_error",
+                    0x01: "pump_short_circuit",
+                    0x02: "right_drive_motor_short_circuit",
+                    0x03: "left_drive_motor_short_circuit",
+                    0x04: "pump_motor_overconsumption",
+                    0x05: "right_drive_motor_overconsumption",
+                    0x06: "left_drive_motor_overconsumption",
+                    0x07: "floats_on_surface",
+                    0x08: "running_out_of_water",
+                    0x0A: "communication_error"
+                }
 
-                    error_text = error_map.get(error_code, f"unknown_{error_code}")
+                mode_map = {
+                    0x03: "Deep clean floor + walls (high power)",
+                    0x08: "Quick – floor only (standard)",
+                    0x09: "Custom – floor only (high power)",
+                    0x0A: "Custom – floor + walls (standard)",
+                    0x0B: "Custom – floor + walls (high power)",
+                    0x0C: "Waterline only (standard)",
+                    0x0D: "Custom – waterline (high power)",
+                    0x0E: "Custom – waterline (standard)"
+                }
 
-                    result["error_code"] = error_code
-                    result["error_text"] = error_text
+                # Parse fields
+                state_code = data_val[2]
+                error_code = data_val[3]
+                mode_byte = data_val[4]
+                # Extract mode code (lower nibble) and canister status (higher nibble)
+                mode_code = mode_byte & 0x0F  # Get lower 4 bits for mode
+                canister_full = (mode_byte & 0xF0) > 0  # Any non-zero value in upper nibble means canister is full
+                time_remaining = data_val[5]
+                uptime_min = int.from_bytes(data_val[6:9], byteorder='little')
+                total_hours = int.from_bytes(data_val[9:12], byteorder='little')
+                hardware_id = data_val[12:15].hex()
+                firmware_id = data_val[15:18].hex()
 
-                    if error_code != "00":
-                        self._activity = VacuumActivity.ERROR
-                        result["activity"] = "error"
-                else:
-                    result["error_code"] = "??"
-                    result["error_text"] = "unreadable"
+                # Update result dictionary with parsed values (convert all values to strings)
+                result["header"] = data_val[:2].hex()
+                result["state_code"] = str(state_code)
+                result["state"] = state_map.get(state_code, f"Unknown (0x{state_code:02X})")
+                result["error_code"] = str(error_code)
+                result["error"] = error_map.get(error_code, f"Unknown (0x{error_code:02X})")
+                result["mode_code"] = str(mode_code)
+                result["cycle"] = mode_map.get(mode_code, f"Unknown (0x{mode_code:02X})")
+                result["mode"] = mode_map.get(mode_code, f"Unknown (0x{mode_code:02X})")
+                result["canister"] = "100" if canister_full else "0"  # 100% if full, 0% if not full
+                result["time_remaining"] = str(time_remaining)
+                result["uptime_minutes"] = str(uptime_min)
+                result["total_hours"] = str(total_hours)
+                result["hardware_id"] = str(hardware_id)
+                result["firmware_id"] = str(firmware_id)
 
-                if self._activity == VacuumActivity.CLEANING:
+                # Update activity state based on state code
+                if state_code == 0x04:  # Actively cleaning
+                    self._activity = VacuumActivity.CLEANING
                     result["activity"] = "cleaning"
-                    try:
-                        response = data["command"]["response"]
-                        if isinstance(response, str) and len(response) >= 12:
-                            minutes_remaining = int(response[10:12], 16)
-                            estimated_end_time = self.add_minutes_to_datetime(
-                                datetime.datetime.now(), minutes_remaining)
-                            result["estimated_end_time"] = estimated_end_time.isoformat()
-                            result["time_remaining_human"] = f"{minutes_remaining // 60}:{minutes_remaining % 60:02d}"
-                    except Exception as e:
-                        _LOGGER.warning(f"Error while parsing remaining minutes: {e}")
-        except Exception:
-            try:
-                if data["status"] == "500":
-                    result["status"] = "offline"
-            except Exception:
-                result["debug"] = data if self._debug_mode else None
+                elif error_code != 0x00:
+                    self._activity = VacuumActivity.ERROR
+                    result["activity"] = "error"
+                    result["error_state"] = error_map.get(error_code, f"unknown_{error_code:02X}")
+                else:
+                    self._activity = VacuumActivity.IDLE
+                    result["activity"] = "idle"
+                    result["error_state"] = "no_error"
+
+                if mode_code == 0x03:  # Deep clean mode
+                    self._fan_speed = 3
+
+                # Calculate estimated end time if cleaning
+                if time_remaining > 0 and self._activity == VacuumActivity.CLEANING:
+                    estimated_end_time = self.add_minutes_to_datetime(
+                        datetime.datetime.now(), time_remaining)
+                    result["estimated_end_time"] = estimated_end_time.isoformat()
+                    result["time_remaining_human"] = f"{time_remaining // 60}:{time_remaining % 60:02d}"
+
+        except Exception as e:
+            _LOGGER.error(f"Error updating i2d robot status: {e}")
+            if isinstance(data, dict) and data.get("status") == "500":
+                result["status"] = "offline"
+            result["debug"] = str(data) if self._debug_mode else ""
+            result["error_state"] = "update_failed"
 
         return result
 

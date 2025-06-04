@@ -4,6 +4,7 @@ import datetime
 import aiohttp
 import logging
 import asyncio
+import re
 
 from datetime import timedelta
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -64,7 +65,7 @@ class AqualinkClient:
         return getattr(self, "_title", f"{self._device_type}_{self._serial}")
 
     async def fetch_status(self) -> dict:
-        """Authenticate, discover device, subscribe, and parse status."""
+        """Authenticate, discover device, and parse status."""
         await self._authenticate()
         if not self._serial:
             await self._discover_device()
@@ -77,14 +78,10 @@ class AqualinkClient:
         else:
             data = await self._update_other_robots()
             
-            # Get model only first time to avoid load
-            if not self._model:
-                model = await self._get_device_model()
-                if model:
-                    data["model"] = model
-            else:
-                # Make sure model is included in every update
-                data["model"] = self._model
+            # Get model for non-i2d robots, ensuring we always have a string
+            model = str(self._model or await self._get_device_model())
+            data["model"] = model
+            self._model = model  # Cache the model for future use
                 
         return data
 
@@ -119,7 +116,7 @@ class AqualinkClient:
         devices = await asyncio.wait_for(self.get_devices(params, self._headers), timeout=30)
 
         # Filter only devices that are compatible with the module
-        supported_device_types = ["i2d_robot", "cyclonext", "cyclobat", "vr"]
+        supported_device_types = ["i2d_robot", "cyclonext", "cyclobat", "vr", "vortrax"]
         compatible_devices = []
 
         for device in devices:
@@ -173,7 +170,7 @@ class AqualinkClient:
         devices = await asyncio.wait_for(client.get_devices(params, client._headers), timeout=30)
         
         # Filter only devices that are compatible with the module
-        supported_device_types = ["i2d_robot", "cyclonext", "cyclobat", "vr"]
+        supported_device_types = ["i2d_robot", "cyclonext", "cyclobat", "vr", "vortrax"]
         compatible_devices = []
         
         for device in devices:
@@ -199,17 +196,107 @@ class AqualinkClient:
         }
         return await asyncio.wait_for(self.get_device_status(req), timeout=30)
 
+    async def _get_vortrax_model_from_web(self, pn: str) -> str:
+        """Get vortrax model from the zodiac website using product number."""
+        # List of URLs to try
+        urls = [
+            f"https://www.zodiac-poolcare.com/search?key={pn}",
+            f"https://www.zodiac-poolcare.be/content/zodiac/be/nl_be/search.html?key={pn}",
+            f"https://www.zodiac-poolcare.fr/search?key={pn}"
+        ]
+
+        patterns = [
+            # Very specific container pattern from the site
+            r'container-[0-9a-f]+[^>]*>[^<]*<div[^>]*>[^<]*<div[^>]*>[^<]*<section[^>]*>[^<]*<div[^>]*>[^<]*<div[^>]*>[^<]*<ul[^>]*>[^<]*<li[^>]*>[^<]*<a[^>]*>[^<]*<h4[^>]*>([^<]+)</h4>',
+            # Product title in h4
+            r'<h4[^>]*>(?:VortraX|VORTRAX)\s*([\w-]+)[^<]*</h4>',
+            # Product title in div
+            r'<div[^>]*class="[^"]*product-title[^"]*"[^>]*>\s*(?:VortraX|VORTRAX)\s*([\w-]+)\s*</div>',
+            # Product name anywhere
+            r'product-name[^>]*>\s*(?:VortraX|VORTRAX)\s*([\w-]+)\s*</',
+            # Model in title
+            r'<title[^>]*>(?:VortraX|VORTRAX)\s*([\w-]+)',
+            # Fallback for any VortraX mention
+            r'(?:VortraX|VORTRAX)\s*([\w-]+)'
+        ]
+
+        timeout = aiohttp.ClientTimeout(total=5)  # 5 second timeout
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for url in urls:
+                try:
+                    _LOGGER.debug(f"Trying to fetch VortraX model from {url}")
+                    async with session.get(url) as response:
+                        if response.status != 200:
+                            _LOGGER.debug(f"Failed to fetch from {url}, status: {response.status}")
+                            continue
+
+                        html = await response.text()
+                        _LOGGER.debug(f"Got HTML content length: {len(html)}")
+                        
+                        # Try each pattern
+                        for pattern in patterns:
+                            matches = re.finditer(pattern, html, re.IGNORECASE | re.DOTALL)
+                            for match in matches:
+                                model = match.group(1).strip()
+                                # Clean up the model string
+                                model = re.sub(r'^(?:VortraX|VORTRAX)\s*', '', model, flags=re.IGNORECASE)
+                                if model:
+                                    _LOGGER.debug(f"Found VortraX model {model} for PN {pn} using pattern: {pattern}")
+                                    # Only accept model numbers that look valid
+                                    if re.match(r'^[A-Z0-9-]+$', model):
+                                        return f"VortraX {model}"
+
+                except asyncio.TimeoutError:
+                    _LOGGER.debug(f"Timeout fetching from {url}")
+                    continue
+                except Exception as e:
+                    _LOGGER.debug(f"Error fetching from {url}: {e}")
+                    continue
+
+        # If no model found after trying all URLs and patterns
+        _LOGGER.debug(f"No VortraX model found for PN {pn}")
+        return f"VortraX (PN: {pn})"
+
     async def _get_device_model(self) -> str:
         """Get device model information."""
+        # For vortrax robots, get model from web based on product number
+        if self._device_type == "vortrax":
+            data = await self._ws_subscribe()
+            try:
+                pn = data['payload']['robot']['state']['reported']['eboxData']['completeCleanerPn']
+                _LOGGER.debug(f"Found VortraX product number: {pn}")
+                if pn:
+                    model = await self._get_vortrax_model_from_web(pn)
+                    if model != "Unknown":
+                        self._model = model
+                        return model
+            except Exception as e:
+                _LOGGER.debug(f"Error getting vortrax product number: {e}, data: {data.get('payload',{}).get('robot',{}).get('state',{}).get('reported',{})}")
+
+        # For other robots, try the features API
         url = f"{URL_GET_DEVICE_FEATURES}{self._serial}/features"
         try:
             data = await asyncio.wait_for(self.get_device_features(url), timeout=30)
-            self._model = data.get('model', 'Not Supported')
-            return self._model
-        except Exception:
-            # Some models do not return a model number on the features call
-            self._model = 'Not Supported'
-            return self._model
+            
+            # Handle empty or malformed responses
+            if not data or not isinstance(data, dict):
+                _LOGGER.debug(f"Empty or invalid features response for device {self._serial}")
+                return "Unknown"
+            
+            # Try to get model, if not found or None, return Unknown
+            model = data.get('model')
+            if model is not None and model != "":
+                return str(model)
+                
+            # Only mark as "Not Supported" if we get an explicit indication
+            if data.get('modelSupported') is False:
+                return "Not Supported"
+                
+            return "Unknown"
+                
+        except Exception as e:
+            _LOGGER.debug(f"Error getting device model: {e}")
+            return "Unknown"
 
     async def _update_i2d_robot(self):
         """Update status for i2d_robot type."""
@@ -375,7 +462,7 @@ class AqualinkClient:
             result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
         except Exception:
             # Returns empty message sometimes, try second call
-            result["debug"] = data if self._debug_mode else None
+            result["debug"] = str(data) if self._debug_mode else ""  # Always store a string value
             
             data = await self._ws_subscribe()
             result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
@@ -388,6 +475,8 @@ class AqualinkClient:
         # Update based on device type
         if self._device_type == "vr":
             self._update_vr_robot_data(data, result)
+        elif self._device_type == "vortrax":
+            self._update_vortrax_robot_data(data, result)
         elif self._device_type == "cyclobat":
             self._update_cyclobat_robot_data(data, result)
         elif self._device_type == "cyclonext":
@@ -422,12 +511,28 @@ class AqualinkClient:
         result["error_state"] = data['payload']['robot']['state']['reported']['equipment']['robot']['errorState']
         result["total_hours"] = data['payload']['robot']['state']['reported']['equipment']['robot']['totalHours']
 
+        # Get current cycle (fan speed) and update it
+        try:
+            current_cycle = data['payload']['robot']['state']['reported']['equipment']['robot']['prCyc']
+            result["cycle"] = current_cycle
+            # Map cycle to fan speed
+            cycle_map = {
+                0: "Wall only",           # Wall only
+                1: "Floor only",          # Floor only
+                2: "SMART Floor and walls", # SMART mode
+                3: "Floor and walls"      # Floor and walls
+            }
+            self._fan_speed = cycle_map.get(current_cycle, "Floor only")
+            result["fan_speed"] = self._fan_speed
+        except Exception as e:
+            _LOGGER.debug(f"Error setting fan speed for VR robot: {e}")
+            self._fan_speed = "Floor only"  # Default to floor only if we can't determine
+            result["fan_speed"] = self._fan_speed
+
         # Convert timestamp to datetime
         timestamp = data['payload']['robot']['state']['reported']['equipment']['robot']['cycleStartTime']
         cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
         result["cycle_start_time"] = cycle_start_time.isoformat()
-
-        result["cycle"] = data['payload']['robot']['state']['reported']['equipment']['robot']['prCyc']
 
         cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot']['durations']
         cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
@@ -519,6 +624,53 @@ class AqualinkClient:
             result["cycle_duration"] = cycle_duration
             # Calculate end time and remaining time
             self._calculate_times(cycle_start_time, cycle_duration, result)
+
+    def _update_vortrax_robot_data(self, data, result):
+        """Update status for vortrax type robot."""
+        # Store product number if available
+        try:
+            result["product_number"] = data['payload']['robot']['state']['reported']['eboxData']['completeCleanerPn']
+        except Exception:
+            result["product_number"] = None
+
+        # Rest of the vortrax robot data update
+        try:
+            result["temperature"] = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['val']
+        except Exception:
+            try: 
+                result["temperature"] = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['state']
+            except Exception:
+                result["temperature"] = '0'
+
+        robot_state = data['payload']['robot']['state']['reported']['equipment']['robot']['state']
+        if robot_state == 1:
+            self._activity = VacuumActivity.CLEANING
+            result["activity"] = "cleaning"
+        elif robot_state == 3:
+            self._activity = VacuumActivity.RETURNING
+            result["activity"] = "returning"
+        else:
+            self._activity = VacuumActivity.IDLE
+            result["activity"] = "idle"
+
+        # Extract other attributes
+        result["canister"] = data['payload']['robot']['state']['reported']['equipment']['robot']['canister']*100
+        result["error_state"] = data['payload']['robot']['state']['reported']['equipment']['robot']['errorState']
+        result["total_hours"] = data['payload']['robot']['state']['reported']['equipment']['robot']['totalHours']
+
+        # Convert timestamp to datetime
+        timestamp = data['payload']['robot']['state']['reported']['equipment']['robot']['cycleStartTime']
+        cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
+        result["cycle_start_time"] = cycle_start_time.isoformat()
+
+        result["cycle"] = data['payload']['robot']['state']['reported']['equipment']['robot']['prCyc']
+
+        cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot']['durations']
+        cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
+        result["cycle_duration"] = cycle_duration
+
+        # Calculate end time and remaining time
+        self._calculate_times(cycle_start_time, cycle_duration, result)
 
     def _update_cyclonext_robot_data(self, data, result):
         """Update status for cyclonext type robot."""
@@ -734,10 +886,10 @@ class AqualinkClient:
             clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
             
             request = None
-            if self._device_type == "vr":
+            if self._device_type == "vr" or self._device_type == "vortrax":
                 request = {
                     "action": "setCleanerState",
-                    "namespace": "vr",
+                    "namespace": self._device_type,
                     "payload": {
                         "clientToken": clientToken,
                         "state": {"desired": {"equipment": {"robot": {"state": 1}}}}
@@ -788,10 +940,10 @@ class AqualinkClient:
             clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
             
             request = None
-            if self._device_type == "vr":
+            if self._device_type == "vr" or self._device_type == "vortrax":
                 request = {
                     "action": "setCleanerState",
-                    "namespace": "vr",
+                    "namespace": self._device_type,
                     "payload": {
                         "clientToken": clientToken,
                         "state": {"desired": {"equipment": {"robot": {"state": 0}}}}
@@ -850,7 +1002,7 @@ class AqualinkClient:
             }
             url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
             await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
-        elif self._device_type in ["vr", "cyclobat"]:
+        elif self._device_type in ["vr", "vortrax", "cyclobat"]:
             clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
             request = {
                 "action": "setCleanerState",
@@ -900,7 +1052,7 @@ class AqualinkClient:
         clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
         
         request = None
-        if self._device_type == "vr":
+        if self._device_type == "vr" or self._device_type == "vortrax":
             cycle_speed_map = {
                 "Wall only": "0",
                 "Floor only": "1",
@@ -912,7 +1064,7 @@ class AqualinkClient:
                 request = {
                     "action": "setCleaningMode",
                     "version": 1,
-                    "namespace": "vr",
+                    "namespace": self._device_type,
                     "payload": {
                         "state": {"desired": {"equipment": {"robot": {"prCyc": _cycle_speed}}}},
                         "clientToken": clientToken

@@ -34,6 +34,9 @@ api_key: EOOEMOW4YR6QNB07
 - OV 5490 iQ
 - RF 5600 iQ
 - P965 iQ
+- 9650iQ 
+- VortraX TRX 8500 iQ
+- Polaris Freedom Cordless
 
 ## Known Models to have issues:
 

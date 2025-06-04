@@ -43,6 +43,13 @@ ROBOT_FEATURES = {
         | VacuumEntityFeature.STATUS
         | VacuumEntityFeature.RETURN_HOME
     ),
+    "vortrax": (
+        VacuumEntityFeature.START
+        | VacuumEntityFeature.STOP
+        | VacuumEntityFeature.FAN_SPEED
+        | VacuumEntityFeature.STATUS
+        | VacuumEntityFeature.RETURN_HOME
+    ),
     "cyclobat": (
         VacuumEntityFeature.START
         | VacuumEntityFeature.STOP
@@ -159,7 +166,7 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
                 self._supported_features = ROBOT_FEATURES.get(device_type, ROBOT_FEATURES["default"])
                 
                 # Set fan speed list based on device type
-                if device_type == "vr" or device_type == "cyclobat":
+                if device_type == "vr" or device_type == "vortrax" or device_type == "cyclobat":
                     self._fan_speed_list = ["Wall only", "Floor only", "SMART Floor and walls", "Floor and walls"]
                 elif device_type == "cyclonext":
                     self._fan_speed_list = ["Floor only", "Floor and walls"]

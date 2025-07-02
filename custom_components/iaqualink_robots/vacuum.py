@@ -7,17 +7,9 @@ _LOGGER = logging.getLogger(__name__)
 from homeassistant.components.vacuum import (
     StateVacuumEntity,
     VacuumEntityFeature,
-    VacuumActivity
 )
 
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
-from homeassistant.const import (
-    ATTR_ENTITY_ID,
-    ATTR_SUPPORTED_FEATURES,
-    STATE_OFF,
-    STATE_ON,
-)
 
 from .const import (
     NAME,
@@ -28,7 +20,11 @@ from .const import (
     SCAN_INTERVAL
 )
 
-# Define the supported features for different robot types
+# Define vacuum activity states as constants since VacuumActivity may not be available
+VACUUM_ACTIVITY_IDLE = "idle"
+VACUUM_ACTIVITY_CLEANING = "cleaning"
+VACUUM_ACTIVITY_RETURNING = "returning"
+VACUUM_ACTIVITY_ERROR = "error"
 ROBOT_FEATURES = {
     "default": (
         VacuumEntityFeature.START
@@ -84,7 +80,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
     serial_number = entry.data.get("serial_number", client.robot_id)
     device_name = entry.data.get("name", entry.title)
     
-    async_add_entities([IAquaLinkRobotVacuum(coordinator, client, device_name, serial_number)], True)
+    vacuum = IAquaLinkRobotVacuum(coordinator, client, device_name, serial_number)
+    async_add_entities([vacuum], True)
 
 class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
     """Represents an iaqualink_robots vacuum."""
@@ -95,72 +92,36 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         self._name = device_name
         self._serial_number = serial_number
         self._attributes = {}
-        self._activity = VacuumActivity.IDLE
-        self._battery_level = None
+        self._activity = VACUUM_ACTIVITY_IDLE
         self._supported_features = ROBOT_FEATURES["default"]
         self._client = client
         self._fan_speed_list = ["Floor only", "Floor and walls"]
         self._fan_speed = self._fan_speed_list[0]
         self._status = None
-        self._start_time = None
-        self._cycle_duration = 120  # Default cycle duration in minutes
-        self._time_remaining = None
-        self._estimated_end_time = None
 
     def _handle_coordinator_update(self):
-        """Handle updated data from the coordinator and set activity."""
+        """Handle updated data from the coordinator."""
         super()._handle_coordinator_update()
         
-        # Update attributes from coordinator data
+        # Update all attributes from coordinator data - coordinator handles all business logic
         data = self.coordinator.data
         if data:
-            # Set basic attributes
+            # Get status and activity directly from coordinator
             self._status = data.get("status")
-            self._attributes.update(data)
+            self._attributes = data.copy()  # Use coordinator data as source of truth
             
-            # Set activity based on data
-            activity = data.get("activity")
+            # Map activity from coordinator to vacuum activity constants
+            activity = data.get("activity", "idle")
             if activity == "cleaning":
-                self._activity = VacuumActivity.CLEANING
-                
-                # If we have a cycle duration from the data, use it
-                if "cycle_duration" in data:
-                    self._cycle_duration = data.get("cycle_duration")
-                
-                # If we're cleaning and have a start time, update time remaining
-                if self._start_time and self._estimated_end_time:
-                    self._calculate_time_remaining()
-                    self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
-                # If we're cleaning but don't have a start time (e.g., after HA restart),
-                # set it now based on the cycle_start_time from data if available
-                elif "cycle_start_time" in data:
-                    try:
-                        self._start_time = datetime.datetime.fromisoformat(data["cycle_start_time"])
-                        self._estimated_end_time = self._start_time + timedelta(minutes=self._cycle_duration)
-                        self._calculate_time_remaining()
-                        self._attributes["start_time"] = self._start_time.isoformat()
-                        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
-                        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
-                    except (ValueError, TypeError):
-                        # If we can't parse the cycle_start_time, just use current time
-                        self._start_time = datetime.datetime.now()
-                        self._estimated_end_time = self._start_time + timedelta(minutes=self._cycle_duration)
-                        self._calculate_time_remaining()
-                        self._attributes["start_time"] = self._start_time.isoformat()
-                        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
-                        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+                self._activity = VACUUM_ACTIVITY_CLEANING
             elif activity == "returning":
-                self._activity = VacuumActivity.RETURNING
+                self._activity = VACUUM_ACTIVITY_RETURNING
             elif activity == "error":
-                self._activity = VacuumActivity.ERROR
+                self._activity = VACUUM_ACTIVITY_ERROR
             else:
-                self._activity = VacuumActivity.IDLE
-                # Reset time remaining if we're idle and it was previously set
-                if self._time_remaining is not None:
-                    self._time_remaining = timedelta(seconds=0)
-                    self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
+                self._activity = VACUUM_ACTIVITY_IDLE
                 
-            # Set device type specific attributes
+            # Set device type specific features and fan speed list
             device_type = data.get("device_type")
             if device_type:
                 self._supported_features = ROBOT_FEATURES.get(device_type, ROBOT_FEATURES["default"])
@@ -193,7 +154,7 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         }
 
     @property
-    def activity(self) -> VacuumActivity:
+    def activity(self) -> str:
         """Return the current activity of the vacuum."""
         return self._activity
 
@@ -237,80 +198,25 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         """Return the supported features of the vacuum."""
         return self._supported_features
 
-    def _format_time_remaining(self, time_delta):
-        """Format time remaining as a human-readable string."""
-        if not time_delta:
-            return "0:00"
-        
-        total_seconds = time_delta.total_seconds()
-        hours = int(total_seconds // 3600)
-        minutes = int((total_seconds % 3600) // 60)
-        seconds = int(total_seconds % 60)
-        
-        if hours > 0:
-            return f"{hours}:{minutes:02d}:{seconds:02d}"
-        else:
-            return f"{minutes}:{seconds:02d}"
-    
-    def _calculate_time_remaining(self):
-        """Calculate time remaining based on start time and cycle duration."""
-        if not self._start_time or not self._estimated_end_time:
-            self._time_remaining = None
-            return
-        
-        now = datetime.datetime.now()
-        if now >= self._estimated_end_time:
-            self._time_remaining = timedelta(seconds=0)
-        else:
-            self._time_remaining = self._estimated_end_time - now
-    
     async def async_start(self):
-        """Start the vacuum."""
+        """Start the vacuum - delegate to coordinator."""
         if self._status != "connected":
             return
-
-        self._activity = VacuumActivity.CLEANING
         
-        # Set start time and calculate estimated end time
-        self._start_time = datetime.datetime.now()
-        self._estimated_end_time = self._start_time + timedelta(minutes=self._cycle_duration)
-        
-        # Calculate time remaining
-        self._calculate_time_remaining()
-        
-        # Update attributes
-        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
-        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
-        
-        self.async_write_ha_state()
-
-        await self._client.start_cleaning()
+        # Delegate to coordinator for business logic
+        await self.coordinator.async_start_cleaning()
         await self.coordinator.async_request_refresh()
             
     async def async_stop(self, **kwargs):
-        """Stop the vacuum."""
+        """Stop the vacuum - delegate to coordinator."""
         if self._status != "connected":
             return
-
-        self._activity = VacuumActivity.IDLE
         
-        # Reset time remaining to zero and set end time to current time
-        self._time_remaining = timedelta(seconds=0)
-        current_time = datetime.datetime.now()
-        self._estimated_end_time = current_time
-        
-        # Update attributes
-        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
-        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
-        
-        self.async_write_ha_state()
-
-        # Stop the cleaner and get reset values
-        await self._client.stop_cleaning()
-        # Force an immediate coordinator update to reflect the stopped state
+        # Delegate to coordinator for business logic
+        await self.coordinator.async_stop_cleaning()
         await self.coordinator.async_refresh()
 
-    async def async_set_fan_speed(self, fan_speed):
+    async def async_set_fan_speed(self, fan_speed, **kwargs):
         """Set fan speed (cleaning mode) for the vacuum cleaner."""
         if fan_speed not in self._fan_speed_list:
             raise ValueError('Invalid fan speed')
@@ -321,22 +227,30 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         await self.coordinator.async_request_refresh()
 
     async def async_return_to_base(self, **kwargs):
-        """Set the vacuum cleaner to return to the dock."""
+        """Set the vacuum cleaner to return to the dock - delegate to coordinator."""
         if self._status != "connected":
             return
-            
-        self._activity = VacuumActivity.RETURNING
         
-        # Reset time remaining to zero and set end time to current time
-        self._time_remaining = timedelta(seconds=0)
-        current_time = datetime.datetime.now()
-        self._estimated_end_time = current_time
-        
-        # Update attributes
-        self._attributes["time_remaining"] = self._format_time_remaining(self._time_remaining)
-        self._attributes["estimated_end_time"] = self._estimated_end_time.isoformat()
-        
-        self.async_write_ha_state()
-
-        await self._client.return_to_base()
+        # Delegate to coordinator for business logic
+        await self.coordinator.async_return_to_base()
         await self.coordinator.async_request_refresh()
+
+    async def async_remote_forward(self, **kwargs):
+        """Send forward command to the robot for remote control - delegate to coordinator."""
+        await self.coordinator.async_remote_forward()
+
+    async def async_remote_backward(self, **kwargs):
+        """Send backward command to the robot for remote control - delegate to coordinator."""
+        await self.coordinator.async_remote_backward()
+
+    async def async_remote_rotate_left(self, **kwargs):
+        """Send rotate left command to the robot for remote control - delegate to coordinator."""
+        await self.coordinator.async_remote_rotate_left()
+
+    async def async_remote_rotate_right(self, **kwargs):
+        """Send rotate right command to the robot for remote control - delegate to coordinator."""
+        await self.coordinator.async_remote_rotate_right()
+
+    async def async_remote_stop(self, **kwargs):
+        """Send stop command to the robot for remote control - delegate to coordinator."""
+        await self.coordinator.async_remote_stop()

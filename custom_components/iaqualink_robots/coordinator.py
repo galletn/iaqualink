@@ -13,8 +13,6 @@ from .const import (
     URL_LOGIN, 
     URL_GET_DEVICES, 
     URL_WS, 
-    URL_FEATURES,
-    URL_GET_DEVICE_STATUS,
     URL_GET_DEVICE_FEATURES
 )
 
@@ -35,13 +33,17 @@ class AqualinkClient:
         self._first_name: str = ""
         self._last_name = None
         self._model = None
+        self._token_expires_at = None  # Track token expiration
+        self._model_fetch_attempts = 0  # Track model fetch attempts
+        self._model_last_attempt = None  # Track last model fetch attempt time
+        self._pending_stop_reset = None  # Store reset values from stop command
         self._activity = VacuumActivity.IDLE
         self._headers = {
             "Content-Type": "application/json; charset=utf-8", 
             "Connection": "keep-alive", 
             "Accept": "*/*"
         }
-        self._debug_mode = True
+        self._debug_mode = False  # Set to False for production
 
     @property 
     def username(self) -> str:
@@ -64,10 +66,20 @@ class AqualinkClient:
         # Use provided title if available
         return getattr(self, "_title", f"{self._device_type}_{self._serial}")
 
+    def _is_token_expired(self) -> bool:
+        """Check if authentication token is expired."""
+        if not self._token_expires_at:
+            return True
+        return datetime.datetime.now() >= self._token_expires_at
+
     async def fetch_status(self) -> dict:
         """Authenticate, discover device, and parse status."""
-        await self._authenticate()
-        if not self._serial:
+        # Only authenticate if we don't have a valid token
+        if not self._auth_token or self._is_token_expired():
+            await self._authenticate()
+            
+        # Only discover device if we don't have serial and device type
+        if not self._serial or not self._device_type:
             await self._discover_device()
             
         # Update device status based on device type
@@ -78,15 +90,22 @@ class AqualinkClient:
         else:
             data = await self._update_other_robots()
             
-            # Get model for non-i2d robots, ensuring we always have a string
-            model = str(self._model or await self._get_device_model())
-            data["model"] = model
-            self._model = model  # Cache the model for future use
+            # Get model for non-i2d robots, only if not already cached
+            if not self._model:
+                self._model = await self._get_device_model()
+            data["model"] = str(self._model)
+        
+        # Apply any pending reset values from stop command
+        if self._pending_stop_reset:
+            _LOGGER.debug("Applying pending stop reset values: %s", self._pending_stop_reset)
+            data.update(self._pending_stop_reset)
+            self._pending_stop_reset = None  # Clear after applying
                 
         return data
 
     async def _authenticate(self):
         """Authenticate with iAqualink API."""
+        _LOGGER.debug("Authenticating with iAqualink API...")
         data = {
             "apikey": self._api_key,
             "email": self._username,
@@ -101,6 +120,10 @@ class AqualinkClient:
         self._auth_token = auth["authentication_token"]
         self._id_token = auth["userPoolOAuth"]["IdToken"]
         self._app_client_id = auth["cognitoPool"]["appClientId"]
+        
+        # Set token expiration to 1 hour from now (conservative estimate)
+        self._token_expires_at = datetime.datetime.now() + datetime.timedelta(hours=1)
+        _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
 
     async def _discover_device(self, target_serial=None):
         """Get list of devices and pick the pool robot.
@@ -259,6 +282,23 @@ class AqualinkClient:
 
     async def _get_device_model(self) -> str:
         """Get device model information."""
+        # Return cached model if available and valid (not "Unknown" or "Not Supported")
+        if self._model and self._model not in ["Unknown", "Not Supported"]:
+            _LOGGER.debug(f"Using cached model: {self._model}")
+            return self._model
+            
+        # Check if we should retry fetching the model
+        should_retry = self._should_retry_model_fetch()
+        if not should_retry:
+            _LOGGER.debug(f"Skipping model fetch - too many recent attempts. Current model: {self._model or 'None'}")
+            return self._model or "Unknown"
+            
+        _LOGGER.debug(f"Fetching model for device type: {self._device_type}, serial: {self._serial} (attempt {self._model_fetch_attempts + 1})")
+        
+        # Record this attempt
+        self._model_fetch_attempts += 1
+        self._model_last_attempt = datetime.datetime.now()
+        
         # For vortrax robots, get model from web based on product number
         if self._device_type == "vortrax":
             data = await self._ws_subscribe()
@@ -268,10 +308,12 @@ class AqualinkClient:
                 if pn:
                     model = await self._get_vortrax_model_from_web(pn)
                     if model != "Unknown":
-                        self._model = model
+                        self._model = model  # Cache the successful result
+                        self._model_fetch_attempts = 0  # Reset attempts on success
+                        _LOGGER.debug(f"Successfully cached VortraX model: {self._model}")
                         return model
             except Exception as e:
-                _LOGGER.debug(f"Error getting vortrax product number: {e}, data: {data.get('payload',{}).get('robot',{}).get('state',{}).get('reported',{})}")
+                _LOGGER.debug(f"Error getting vortrax product number: {e}")
 
         # For other robots, try the features API
         url = f"{URL_GET_DEVICE_FEATURES}{self._serial}/features"
@@ -281,22 +323,71 @@ class AqualinkClient:
             # Handle empty or malformed responses
             if not data or not isinstance(data, dict):
                 _LOGGER.debug(f"Empty or invalid features response for device {self._serial}")
-                return "Unknown"
+                return self._handle_model_fetch_failure()
             
             # Try to get model, if not found or None, return Unknown
             model = data.get('model')
             if model is not None and model != "":
-                return str(model)
+                self._model = str(model)  # Cache the successful result
+                self._model_fetch_attempts = 0  # Reset attempts on success
+                _LOGGER.debug(f"Successfully cached model from features API: {self._model}")
+                return self._model
                 
             # Only mark as "Not Supported" if we get an explicit indication
             if data.get('modelSupported') is False:
-                return "Not Supported"
+                self._model = "Not Supported"
+                self._model_fetch_attempts = 0  # Don't retry for "Not Supported"
+                _LOGGER.debug(f"Model not supported for device {self._serial}")
+                return self._model
                 
-            return "Unknown"
+            return self._handle_model_fetch_failure()
                 
         except Exception as e:
             _LOGGER.debug(f"Error getting device model: {e}")
-            return "Unknown"
+            return self._handle_model_fetch_failure()
+
+    def _should_retry_model_fetch(self) -> bool:
+        """Determine if we should retry fetching the model."""
+        # Always try if we haven't attempted yet
+        if self._model_fetch_attempts == 0:
+            return True
+            
+        # If we have a valid model (not Unknown/Not Supported), don't retry
+        if self._model and self._model not in ["Unknown", "Not Supported"]:
+            return False
+            
+        # If we've tried too many times, give up
+        max_attempts = 5
+        if self._model_fetch_attempts >= max_attempts:
+            _LOGGER.debug(f"Max model fetch attempts ({max_attempts}) reached for device {self._serial}")
+            return False
+            
+        # If we haven't tried recently, allow retry
+        if not self._model_last_attempt:
+            return True
+            
+        # Implement exponential backoff: wait longer between retries
+        # Attempt 1: immediate, Attempt 2: 5 min, Attempt 3: 15 min, Attempt 4: 30 min, Attempt 5: 60 min
+        backoff_minutes = [0, 5, 15, 30, 60]
+        wait_minutes = backoff_minutes[min(self._model_fetch_attempts - 1, len(backoff_minutes) - 1)]
+        
+        time_since_last = datetime.datetime.now() - self._model_last_attempt
+        if time_since_last.total_seconds() >= (wait_minutes * 60):
+            _LOGGER.debug(f"Retrying model fetch after {wait_minutes} minute wait")
+            return True
+            
+        return False
+
+    def _handle_model_fetch_failure(self) -> str:
+        """Handle a failed model fetch attempt."""
+        # Only cache "Unknown" if we've exhausted all attempts
+        if self._model_fetch_attempts >= 5:
+            self._model = "Unknown"
+            _LOGGER.debug(f"Caching 'Unknown' model after {self._model_fetch_attempts} failed attempts")
+        else:
+            _LOGGER.debug(f"Model fetch failed (attempt {self._model_fetch_attempts}/5), will retry later")
+            
+        return self._model or "Unknown"
 
     async def _update_i2d_robot(self):
         """Update status for i2d_robot type."""
@@ -406,19 +497,6 @@ class AqualinkClient:
                 elif mode_code == 0x04:  # Waterline only 
                     self._fan_speed = 2
                     result["fan_speed"] = "Walls only"
-
-                # Update activity state based on state code
-                if state_code == 0x04 or state_code == 0x02:  # Actively cleaning or Just started cleaning
-                    self._activity = VacuumActivity.CLEANING
-                    result["activity"] = "cleaning"
-                elif error_code != 0x00:
-                    self._activity = VacuumActivity.ERROR
-                    result["activity"] = "error"
-                    result["error_state"] = error_map.get(error_code, f"unknown_{error_code:02X}")
-                else:
-                    self._activity = VacuumActivity.IDLE
-                    result["activity"] = "idle"
-                    result["error_state"] = "no_error"
 
                 # Update activity state based on state code
                 if state_code == 0x04 or state_code == 0x02:  # Actively cleaning or Just started cleaning
@@ -713,7 +791,16 @@ class AqualinkClient:
             result["cycle_end_time"] = cycle_end_time.isoformat()
             result["estimated_end_time"] = cycle_end_time.isoformat()
             
-            # Calculate remaining time
+            # If the device is idle (not cleaning/returning), always report 0 time remaining
+            # regardless of what the webservice reports for cycle start time
+            current_activity = result.get("activity", "idle")
+            if current_activity not in ["cleaning", "returning"]:
+                result["time_remaining"] = 0
+                result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
+                _LOGGER.debug("Device is idle (%s), setting time remaining to 0", current_activity)
+                return
+            
+            # Calculate remaining time only if device is actively cleaning or returning
             now = datetime.datetime.now()
             
             # Only calculate time remaining if we have valid times
@@ -741,12 +828,13 @@ class AqualinkClient:
                     result["time_remaining"] = 0
                     result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
             else:
-                # If we don't have valid times, set to None
+                # If we don't have valid times, set to 0
                 result["time_remaining"] = 0
                 result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
                 
             _LOGGER.debug(
-                "Time calculation: start=%s, end=%s, now=%s, remaining=%s",
+                "Time calculation: activity=%s, start=%s, end=%s, now=%s, remaining=%s",
+                current_activity,
                 start_time.isoformat() if start_time else None,
                 cycle_end_time.isoformat() if cycle_end_time else None,
                 now.isoformat(),
@@ -757,8 +845,8 @@ class AqualinkClient:
             _LOGGER.warning(f"Error calculating times: {e}")
             result["cycle_end_time"] = None
             result["estimated_end_time"] = None
-            result["time_remaining"] = None
-            result["time_remaining_human"] = None
+            result["time_remaining"] = 0
+            result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
 
     def add_minutes_to_datetime(self, dt, minutes):
         """Add minutes to a datetime object."""
@@ -788,82 +876,64 @@ class AqualinkClient:
     async def send_login(self, data, headers):
         """Post a login request to the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers=headers) as session:
-            try:
-                async with session.post(URL_LOGIN, data=data) as response:
-                    if response.status == 403:
-                        _LOGGER.error("Authentication failed: 403 Forbidden. Check your credentials or API key.")
-                        raise aiohttp.ClientResponseError(
-                            response.request_info,
-                            response.history,
-                            status=response.status,
-                            message="Authentication failed: 403 Forbidden",
-                            headers=response.headers
-                        )
-                    
-                    content_type = response.headers.get('Content-Type', '')
-                    if 'application/json' not in content_type:
-                        text = await response.text()
-                        _LOGGER.error(f"Unexpected content type: {content_type}. Response: {text[:200]}...")
-                        raise aiohttp.ClientResponseError(
-                            response.request_info,
-                            response.history,
-                            status=response.status,
-                            message=f"Unexpected content type: {content_type}",
-                            headers=response.headers
-                        )
-                    
-                    return await response.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
+            async with session.post(URL_LOGIN, data=data) as response:
+                if response.status == 403:
+                    _LOGGER.error("Authentication failed: 403 Forbidden. Check your credentials or API key.")
+                    raise aiohttp.ClientResponseError(
+                        response.request_info,
+                        response.history,
+                        status=response.status,
+                        message="Authentication failed: 403 Forbidden",
+                        headers=response.headers
+                    )
+                
+                content_type = response.headers.get('Content-Type', '')
+                if 'application/json' not in content_type:
+                    text = await response.text()
+                    _LOGGER.error(f"Unexpected content type: {content_type}. Response: {text[:200]}...")
+                    raise aiohttp.ClientResponseError(
+                        response.request_info,
+                        response.history,
+                        status=response.status,
+                        message=f"Unexpected content type: {content_type}",
+                        headers=response.headers
+                    )
+                
+                return await response.json()
 
     async def get_devices(self, params, headers):
         """Get device list from the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers=headers) as session:
-            try:
-                async with session.get(URL_GET_DEVICES, params=params) as response:
-                    return await response.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
+            async with session.get(URL_GET_DEVICES, params=params) as response:
+                return await response.json()
 
     async def get_device_features(self, url):
         """Get device features from the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            try:
-                async with session.get(url) as response:
-                    return await response.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
+            async with session.get(url) as response:
+                return await response.json()
 
     async def get_device_status(self, request):
         """Get device status from the iaqualink_robots API via websocket."""
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            try:
-                async with session.ws_connect(URL_WS) as websocket:
-                    await websocket.send_json(request)
-                    message = await websocket.receive(timeout=10)
-                return message.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
+            async with session.ws_connect(URL_WS) as websocket:
+                await websocket.send_json(request)
+                message = await websocket.receive(timeout=10)
+            return message.json()
 
     async def post_command_i2d(self, url, request):
         """Send command to i2d robot via the iaqualink_robots API."""
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token, "api_key": self._api_key}) as session:
-            try:
-                async with session.post(url, json=request) as response:
-                    return await response.json()
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
+            async with session.post(url, json=request) as response:
+                return await response.json()
     
     async def set_cleaner_state(self, request):
         """Set cleaner state via the iaqualink_robots API websocket."""
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            try:
-                async with session.ws_connect(URL_WS) as websocket:
-                    await websocket.send_json(request)
-            finally:
-                await asyncio.wait_for(session.close(), timeout=30)
-                # Wait 2 seconds to avoid flooding iaqualink server
-                await asyncio.sleep(2)
+            async with session.ws_connect(URL_WS) as websocket:
+                await websocket.send_json(request)
+            # Wait 2 seconds to avoid flooding iaqualink server
+            await asyncio.sleep(2)
                 
     async def start_cleaning(self):
         """Start the vacuum cleaning."""
@@ -979,7 +1049,7 @@ class AqualinkClient:
             
         # Create result with reset time values always, regardless of robot type
         now = datetime.datetime.now()
-        result = {
+        reset_values = {
             "estimated_end_time": now.isoformat(),
             "time_remaining": 0,
             "time_remaining_human": "0 Hour(s) 0 Minute(s) 0 Second(s)",
@@ -987,10 +1057,13 @@ class AqualinkClient:
             "activity": "idle"  # Also set activity to idle to ensure proper state
         }
         
+        # Store reset values to be applied in next status fetch
+        self._pending_stop_reset = reset_values.copy()
+        
         if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
-                _LOGGER.debug("Stop cleaning requested, reset time values: %s", result)
-                return result  # Return the reset values to be used in the coordinator's update
+                _LOGGER.debug("Stop cleaning requested, reset time values: %s", reset_values)
+                return reset_values  # Return the reset values for immediate use by vacuum entity
                 
     async def return_to_base(self):
         """Set the vacuum cleaner to return to the dock."""
@@ -1116,6 +1189,106 @@ class AqualinkClient:
         if request:
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
+    async def remote_forward(self):
+        """Send forward command to the robot for VR and VortraX robots."""
+        if self._device_type not in ["vr", "vortrax"]:
+            _LOGGER.warning(f"Remote forward not supported for device type: {self._device_type}")
+            return
+            
+        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        request = {
+            "action": "remoteControl",
+            "namespace": self._device_type,
+            "payload": {
+                "clientToken": clientToken,
+                "state": {"desired": {"equipment": {"robot": {"remoteControl": "forward"}}}}
+            },
+            "service": "StateController",
+            "target": self._serial,
+            "version": 1
+        }
+        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+
+    async def remote_backward(self):
+        """Send backward command to the robot for VR and VortraX robots."""
+        if self._device_type not in ["vr", "vortrax"]:
+            _LOGGER.warning(f"Remote backward not supported for device type: {self._device_type}")
+            return
+            
+        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        request = {
+            "action": "remoteControl",
+            "namespace": self._device_type,
+            "payload": {
+                "clientToken": clientToken,
+                "state": {"desired": {"equipment": {"robot": {"remoteControl": "backward"}}}}
+            },
+            "service": "StateController",
+            "target": self._serial,
+            "version": 1
+        }
+        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+
+    async def remote_rotate_left(self):
+        """Send rotate left command to the robot for VR and VortraX robots."""
+        if self._device_type not in ["vr", "vortrax"]:
+            _LOGGER.warning(f"Remote rotate left not supported for device type: {self._device_type}")
+            return
+            
+        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        request = {
+            "action": "remoteControl",
+            "namespace": self._device_type,
+            "payload": {
+                "clientToken": clientToken,
+                "state": {"desired": {"equipment": {"robot": {"remoteControl": "rotate_left"}}}}
+            },
+            "service": "StateController",
+            "target": self._serial,
+            "version": 1
+        }
+        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+
+    async def remote_rotate_right(self):
+        """Send rotate right command to the robot for VR and VortraX robots."""
+        if self._device_type not in ["vr", "vortrax"]:
+            _LOGGER.warning(f"Remote rotate right not supported for device type: {self._device_type}")
+            return
+            
+        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        request = {
+            "action": "remoteControl",
+            "namespace": self._device_type,
+            "payload": {
+                "clientToken": clientToken,
+                "state": {"desired": {"equipment": {"robot": {"remoteControl": "rotate_right"}}}}
+            },
+            "service": "StateController",
+            "target": self._serial,
+            "version": 1
+        }
+        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+
+    async def remote_stop(self):
+        """Send stop command to the robot for VR and VortraX robots."""
+        if self._device_type not in ["vr", "vortrax"]:
+            _LOGGER.warning(f"Remote stop not supported for device type: {self._device_type}")
+            return
+            
+        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        request = {
+            "action": "remoteControl",
+            "namespace": self._device_type,
+            "payload": {
+                "clientToken": clientToken,
+                "state": {"desired": {"equipment": {"robot": {"remoteControl": "stop"}}}}
+            },
+            "service": "StateController",
+            "target": self._serial,
+            "version": 1
+        }
+        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+
 class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     """Coordinator to poll AqualinkClient and update data."""
     def __init__(self, hass, client: AqualinkClient, interval: float):
@@ -1127,6 +1300,8 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         )
         self.client = client
         self._last_data = {}
+        self._consecutive_failures = 0
+        self._max_failures_before_unavailable = 3  # Allow 3 failures before marking unavailable
 
     async def _async_update_data(self):
         try:
@@ -1142,13 +1317,77 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                 self._last_data.get("cycle_start_time")):
                 merged_data["cycle_start_time"] = self._last_data["cycle_start_time"]
             
+            # Reset failure count on successful update
+            self._consecutive_failures = 0
+            
             # Save data for next update
             self._last_data = merged_data.copy()
             return merged_data
             
         except Exception as err:
+            self._consecutive_failures += 1
+            
             # Get detailed error information
             import traceback
             error_details = traceback.format_exc()
-            _LOGGER.error(f"Error updating data: {err}\nDetails:\n{error_details}")
-            raise UpdateFailed(f"{err} - See logs for details")
+            
+            # Only log as error after multiple failures to reduce log spam
+            if self._consecutive_failures <= self._max_failures_before_unavailable:
+                _LOGGER.warning(f"Update failed (attempt {self._consecutive_failures}/{self._max_failures_before_unavailable}): {err}")
+                
+                # Return last known good data if available to keep entity available
+                if self._last_data:
+                    _LOGGER.debug("Returning last known good data to keep entity available")
+                    return self._last_data.copy()
+            else:
+                _LOGGER.error(f"Update failed after {self._consecutive_failures} attempts: {err}\nDetails:\n{error_details}")
+            
+            # Only raise UpdateFailed after max failures to mark entity unavailable
+            raise UpdateFailed(f"Failed after {self._consecutive_failures} attempts: {err}")
+    
+    async def async_start_cleaning(self):
+        """Start cleaning - centralized business logic."""
+        await self.client.start_cleaning()
+        
+    async def async_stop_cleaning(self):
+        """Stop cleaning - centralized business logic."""
+        await self.client.stop_cleaning()
+        
+    async def async_return_to_base(self):
+        """Return to base - centralized business logic."""
+        await self.client.return_to_base()
+        
+    async def async_remote_forward(self):
+        """Send forward command to the robot for remote control - centralized business logic."""
+        if self.client._device_type not in ["vr", "vortrax"]:
+            return
+        await self.client.remote_forward()
+        await self.async_request_refresh()
+
+    async def async_remote_backward(self):
+        """Send backward command to the robot for remote control - centralized business logic."""
+        if self.client._device_type not in ["vr", "vortrax"]:
+            return
+        await self.client.remote_backward()
+        await self.async_request_refresh()
+
+    async def async_remote_rotate_left(self):
+        """Send rotate left command to the robot for remote control - centralized business logic."""
+        if self.client._device_type not in ["vr", "vortrax"]:
+            return
+        await self.client.remote_rotate_left()
+        await self.async_request_refresh()
+
+    async def async_remote_rotate_right(self):  
+        """Send rotate right command to the robot for remote control - centralized business logic."""
+        if self.client._device_type not in ["vr", "vortrax"]:
+            return
+        await self.client.remote_rotate_right()
+        await self.async_request_refresh()
+
+    async def async_remote_stop(self):
+        """Send stop command to the robot for remote control - centralized business logic."""
+        if self.client._device_type not in ["vr", "vortrax"]:
+            return
+        await self.client.remote_stop()
+        await self.async_request_refresh()

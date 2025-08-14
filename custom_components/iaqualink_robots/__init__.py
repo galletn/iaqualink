@@ -23,7 +23,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     target_serial = entry.data.get("serial_number")
     
     # Create a client for this specific device using the constant API key
-    client = AqualinkClient(username, password, API_KEY)
+    # Debug mode disabled by default to reduce log verbosity
+    # To enable debug mode for troubleshooting, change False to True below
+    debug_mode = False
+    client = AqualinkClient(username, password, API_KEY, debug_mode=debug_mode)
     
     # If a specific serial is provided, use it for device discovery
     if target_serial:
@@ -37,8 +40,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return False
     
     # Create coordinator with this client
-    coordinator = AqualinkDataUpdateCoordinator(hass, client, SCAN_INTERVAL.total_seconds())
-    coordinator._title = entry.title
+    coordinator = AqualinkDataUpdateCoordinator(hass, client, SCAN_INTERVAL.total_seconds(), debug_mode=debug_mode)
+    coordinator._title = entry.title  # type: ignore  # Dynamic attribute used for display name
     
     # Initial refresh to get data
     await coordinator.async_config_entry_first_refresh()
@@ -51,6 +54,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # Clean up resources before unloading
+    if entry.entry_id in hass.data[DOMAIN]:
+        entry_data = hass.data[DOMAIN][entry.entry_id]
+        if "coordinator" in entry_data:
+            coordinator = entry_data["coordinator"]
+            try:
+                # Clean up any persistent connections
+                await coordinator.cleanup()
+            except Exception as e:
+                _LOGGER.warning(f"Error during coordinator cleanup: {e}")
+    
+    # Unload the platforms
     unload_ok = await asyncio.gather(
         *[
             hass.config_entries.async_forward_entry_unload(entry, platform)

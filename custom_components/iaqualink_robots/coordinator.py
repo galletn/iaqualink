@@ -7,8 +7,9 @@ import asyncio
 import re
 
 from datetime import timedelta
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.components.vacuum import VacuumActivity
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed  # type: ignore # noqa
+# Note: This import requires Home Assistant 2025.1 or later
+from homeassistant.components.vacuum import VacuumActivity  # type: ignore # noqa
 from .const import (
     URL_LOGIN, 
     URL_GET_DEVICES, 
@@ -20,7 +21,7 @@ _LOGGER = logging.getLogger(__name__)
 
 class AqualinkClient:
     """Client to interact with iAqualink API for multiple robot types."""
-    def __init__(self, username: str, password: str, api_key: str):
+    def __init__(self, username: str, password: str, api_key: str, debug_mode: bool = False):
         self._username = username
         self._password = password
         self._api_key = api_key
@@ -37,13 +38,17 @@ class AqualinkClient:
         self._model_fetch_attempts = 0  # Track model fetch attempts
         self._model_last_attempt = None  # Track last model fetch attempt time
         self._pending_stop_reset = None  # Store reset values from stop command
-        self._activity = VacuumActivity.IDLE
+        self._activity = VacuumActivity.IDLE  # Default activity state
         self._headers = {
             "Content-Type": "application/json; charset=utf-8", 
             "Connection": "keep-alive", 
             "Accept": "*/*"
         }
-        self._debug_mode = False  # Set to False for production
+        self._debug_mode = debug_mode  # Debug mode configurable
+        # Persistent websocket connection
+        self._ws_connection = None
+        self._ws_session = None
+        self._last_ws_activity = None
 
     @property 
     def username(self) -> str:
@@ -105,7 +110,8 @@ class AqualinkClient:
 
     async def _authenticate(self):
         """Authenticate with iAqualink API."""
-        _LOGGER.debug("Authenticating with iAqualink API...")
+        if self._debug_mode:
+            _LOGGER.debug("Authenticating with iAqualink API...")
         data = {
             "apikey": self._api_key,
             "email": self._username,
@@ -123,7 +129,8 @@ class AqualinkClient:
         
         # Set token expiration to 1 hour from now (conservative estimate)
         self._token_expires_at = datetime.datetime.now() + datetime.timedelta(hours=1)
-        _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
+        if self._debug_mode:
+            _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
 
     async def _discover_device(self, target_serial=None):
         """Get list of devices and pick the pool robot.
@@ -207,6 +214,62 @@ class AqualinkClient:
                 
         return compatible_devices
 
+    async def _ensure_websocket_connection(self):
+        """Ensure we have an active websocket connection, creating one if needed."""
+        # Initialize websocket connection timeout - 5 minutes
+        ws_timeout = 300  # seconds
+        current_time = datetime.datetime.now()  # Single call for consistency
+        
+        # Check if we already have an active websocket connection
+        if (self._ws_connection and 
+            self._ws_session and 
+            self._last_ws_activity and
+            hasattr(self._ws_connection, 'closed') and
+            not self._ws_connection.closed and
+            (current_time - self._last_ws_activity).total_seconds() < ws_timeout):
+            # Connection exists and is active and not timed out
+            _LOGGER.debug("Reusing existing websocket connection")
+            return
+            
+        # Close any existing connection
+        await self._close_websocket()
+        
+        # Create a new session and connection with proper error handling
+        _LOGGER.debug("Creating new websocket connection")
+        try:
+            self._ws_session = aiohttp.ClientSession(headers={"Authorization": self._id_token})
+            # Create a connection with default timeout settings
+            self._ws_connection = await self._ws_session.ws_connect(URL_WS)
+            self._last_ws_activity = current_time
+        except Exception as e:
+            # Log this error regardless of debug mode since it indicates a real issue
+            _LOGGER.warning(f"Failed to establish websocket connection: {e}")
+            await self._close_websocket()
+            # Don't raise the exception, just set connection to None
+            self._ws_connection = None
+            return
+            
+    async def _close_websocket(self):
+        """Close the websocket connection and session if they exist."""
+        try:
+            if self._ws_connection and hasattr(self._ws_connection, 'closed') and not self._ws_connection.closed:
+                await self._ws_connection.close()
+                _LOGGER.debug("Websocket connection closed")
+        except Exception as e:
+            _LOGGER.debug(f"Error closing websocket connection: {e}")
+            
+        try:
+            if self._ws_session and hasattr(self._ws_session, 'closed') and not self._ws_session.closed:
+                await self._ws_session.close()
+                _LOGGER.debug("Websocket session closed")
+        except Exception as e:
+            _LOGGER.debug(f"Error closing websocket session: {e}")
+            
+        # Always reset these to None to prevent reuse
+        self._ws_connection = None
+        self._ws_session = None
+        self._last_ws_activity = None
+    
     async def _ws_subscribe(self):
         """Subscribe via websocket to get live updates."""
         req = {
@@ -217,7 +280,53 @@ class AqualinkClient:
             "target": self._serial,
             "version": 1
         }
+        
+        # Use the persistent connection if possible
+        try:
+            await self._ensure_websocket_connection()
+            
+            # Send request and get response if connection exists
+            if self._ws_connection and not self._ws_connection.closed:
+                await self._ws_connection.send_json(req)
+                self._last_ws_activity = datetime.datetime.now()
+                response = await asyncio.wait_for(self._ws_connection.receive(), timeout=30)
+            else:
+                # No valid connection available, fall back to HTTP method
+                return await self.get_device_status(req)
+            
+            # Check if connection was closed
+            if response.type == aiohttp.WSMsgType.CLOSED:
+                _LOGGER.debug("Websocket connection was closed by server")
+                await self._close_websocket()  # Clean up
+                return await self.get_device_status(req)  # Fall back to non-persistent method
+                
+            # Parse response
+            if response.type == aiohttp.WSMsgType.TEXT:
+                return response.json()
+                
+            # Handle unexpected response types
+            if self._debug_mode:
+                _LOGGER.warning(f"Unexpected websocket response type: {response.type}")
+            await self._close_websocket()  # Clean up
+            
+        except Exception as e:
+            _LOGGER.debug(f"Error using persistent websocket: {e}, falling back to standard method")
+            await self._close_websocket()  # Clean up on error
+            
+        # Fall back to the original method if persistent connection fails
         return await asyncio.wait_for(self.get_device_status(req), timeout=30)
+
+    # Cache compiled regex patterns for better performance
+    _VORTRAX_PATTERNS = [
+        re.compile(pattern, re.IGNORECASE | re.DOTALL) for pattern in [
+            r'container-[0-9a-f]+[^>]*>[^<]*<div[^>]*>[^<]*<div[^>]*>[^<]*<section[^>]*>[^<]*<div[^>]*>[^<]*<div[^>]*>[^<]*<ul[^>]*>[^<]*<li[^>]*>[^<]*<a[^>]*>[^<]*<h4[^>]*>([^<]+)</h4>',
+            r'<h4[^>]*>(?:VortraX|VORTRAX)\s*([\w-]+)[^<]*</h4>',
+            r'<div[^>]*class="[^"]*product-title[^"]*"[^>]*>\s*(?:VortraX|VORTRAX)\s*([\w-]+)\s*</div>',
+            r'product-name[^>]*>\s*(?:VortraX|VORTRAX)\s*([\w-]+)\s*</',
+            r'<title[^>]*>(?:VortraX|VORTRAX)\s*([\w-]+)',
+            r'(?:VortraX|VORTRAX)\s*([\w-]+)'
+        ]
+    ]
 
     async def _get_vortrax_model_from_web(self, pn: str) -> str:
         """Get vortrax model from the zodiac website using product number."""
@@ -226,21 +335,6 @@ class AqualinkClient:
             f"https://www.zodiac-poolcare.com/search?key={pn}",
             f"https://www.zodiac-poolcare.be/content/zodiac/be/nl_be/search.html?key={pn}",
             f"https://www.zodiac-poolcare.fr/search?key={pn}"
-        ]
-
-        patterns = [
-            # Very specific container pattern from the site
-            r'container-[0-9a-f]+[^>]*>[^<]*<div[^>]*>[^<]*<div[^>]*>[^<]*<section[^>]*>[^<]*<div[^>]*>[^<]*<div[^>]*>[^<]*<ul[^>]*>[^<]*<li[^>]*>[^<]*<a[^>]*>[^<]*<h4[^>]*>([^<]+)</h4>',
-            # Product title in h4
-            r'<h4[^>]*>(?:VortraX|VORTRAX)\s*([\w-]+)[^<]*</h4>',
-            # Product title in div
-            r'<div[^>]*class="[^"]*product-title[^"]*"[^>]*>\s*(?:VortraX|VORTRAX)\s*([\w-]+)\s*</div>',
-            # Product name anywhere
-            r'product-name[^>]*>\s*(?:VortraX|VORTRAX)\s*([\w-]+)\s*</',
-            # Model in title
-            r'<title[^>]*>(?:VortraX|VORTRAX)\s*([\w-]+)',
-            # Fallback for any VortraX mention
-            r'(?:VortraX|VORTRAX)\s*([\w-]+)'
         ]
 
         timeout = aiohttp.ClientTimeout(total=5)  # 5 second timeout
@@ -256,15 +350,15 @@ class AqualinkClient:
                         html = await response.text()
                         _LOGGER.debug(f"Got HTML content length: {len(html)}")
                         
-                        # Try each pattern
-                        for pattern in patterns:
-                            matches = re.finditer(pattern, html, re.IGNORECASE | re.DOTALL)
+                        # Try each pre-compiled pattern
+                        for pattern in self._VORTRAX_PATTERNS:
+                            matches = pattern.finditer(html)
                             for match in matches:
                                 model = match.group(1).strip()
                                 # Clean up the model string
                                 model = re.sub(r'^(?:VortraX|VORTRAX)\s*', '', model, flags=re.IGNORECASE)
                                 if model:
-                                    _LOGGER.debug(f"Found VortraX model {model} for PN {pn} using pattern: {pattern}")
+                                    _LOGGER.debug(f"Found VortraX model {model} for PN {pn}")
                                     # Only accept model numbers that look valid
                                     if re.match(r'^[A-Z0-9-]+$', model):
                                         return f"VortraX {model}"
@@ -301,8 +395,9 @@ class AqualinkClient:
         
         # For vortrax robots, get model from web based on product number
         if self._device_type == "vortrax":
-            data = await self._ws_subscribe()
             try:
+                # Use the persistent websocket connection
+                data = await self._ws_subscribe()
                 pn = data['payload']['robot']['state']['reported']['eboxData']['completeCleanerPn']
                 _LOGGER.debug(f"Found VortraX product number: {pn}")
                 if pn:
@@ -519,7 +614,8 @@ class AqualinkClient:
                     result["time_remaining_human"] = f"{time_remaining // 60}:{time_remaining % 60:02d}"
 
         except Exception as e:
-            _LOGGER.error(f"Error updating i2d robot status: {e}")
+            if self._debug_mode:
+                _LOGGER.error(f"Error updating i2d robot status: {e}")
             if isinstance(data, dict) and data.get("status") == "500":
                 result["status"] = "offline"
             result["debug"] = str(data) if self._debug_mode else ""
@@ -842,7 +938,8 @@ class AqualinkClient:
             )
             
         except Exception as e:
-            _LOGGER.warning(f"Error calculating times: {e}")
+            if self._debug_mode:
+                _LOGGER.warning(f"Error calculating times: {e}")
             result["cycle_end_time"] = None
             result["estimated_end_time"] = None
             result["time_remaining"] = 0
@@ -878,7 +975,8 @@ class AqualinkClient:
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.post(URL_LOGIN, data=data) as response:
                 if response.status == 403:
-                    _LOGGER.error("Authentication failed: 403 Forbidden. Check your credentials or API key.")
+                    if self._debug_mode:
+                        _LOGGER.error("Authentication failed: 403 Forbidden. Check your credentials or API key.")
                     raise aiohttp.ClientResponseError(
                         response.request_info,
                         response.history,
@@ -890,7 +988,8 @@ class AqualinkClient:
                 content_type = response.headers.get('Content-Type', '')
                 if 'application/json' not in content_type:
                     text = await response.text()
-                    _LOGGER.error(f"Unexpected content type: {content_type}. Response: {text[:200]}...")
+                    if self._debug_mode:
+                        _LOGGER.error(f"Unexpected content type: {content_type}. Response: {text[:200]}...")
                     raise aiohttp.ClientResponseError(
                         response.request_info,
                         response.history,
@@ -914,7 +1013,8 @@ class AqualinkClient:
                 return await response.json()
 
     async def get_device_status(self, request):
-        """Get device status from the iaqualink_robots API via websocket."""
+        """Get device status from the iaqualink_robots API via websocket.
+        This is a fallback method when the persistent connection fails."""
         async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
             async with session.ws_connect(URL_WS) as websocket:
                 await websocket.send_json(request)
@@ -929,11 +1029,27 @@ class AqualinkClient:
     
     async def set_cleaner_state(self, request):
         """Set cleaner state via the iaqualink_robots API websocket."""
-        async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            async with session.ws_connect(URL_WS) as websocket:
-                await websocket.send_json(request)
-            # Wait 2 seconds to avoid flooding iaqualink server
-            await asyncio.sleep(2)
+        try:
+            # Try to use the persistent connection
+            await self._ensure_websocket_connection()
+            if self._ws_connection and not self._ws_connection.closed:
+                await self._ws_connection.send_json(request)
+                self._last_ws_activity = datetime.datetime.now()
+            else:
+                # No valid connection available, fall back to standard method
+                raise RuntimeError("No valid websocket connection available")
+        except Exception as e:
+            if self._debug_mode:
+                _LOGGER.debug(f"Error using persistent websocket for command: {e}, falling back to standard method")
+            await self._close_websocket()
+            
+            # Fall back to non-persistent connection
+            async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
+                async with session.ws_connect(URL_WS) as websocket:
+                    await websocket.send_json(request)
+                
+        # Wait 2 seconds to avoid flooding iaqualink server
+        await asyncio.sleep(2)
                 
     async def start_cleaning(self):
         """Start the vacuum cleaning."""
@@ -1291,7 +1407,7 @@ class AqualinkClient:
 
 class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     """Coordinator to poll AqualinkClient and update data."""
-    def __init__(self, hass, client: AqualinkClient, interval: float):
+    def __init__(self, hass, client: AqualinkClient, interval: float, debug_mode: bool = False):
         super().__init__(
             hass,
             _LOGGER,
@@ -1299,9 +1415,12 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=interval),
         )
         self.client = client
+        self._debug_mode = debug_mode
         self._last_data = {}
         self._consecutive_failures = 0
-        self._max_failures_before_unavailable = 3  # Allow 3 failures before marking unavailable
+        self._title = None  # Add this property to store the device title/name
+        # Increasing from 3 to 30 - this is 15 minutes with default 30 second scan interval
+        self._max_failures_before_unavailable = 30  # Allow 30 failures before marking unavailable
 
     async def _async_update_data(self):
         try:
@@ -1333,7 +1452,8 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             
             # Only log as error after multiple failures to reduce log spam
             if self._consecutive_failures <= self._max_failures_before_unavailable:
-                _LOGGER.warning(f"Update failed (attempt {self._consecutive_failures}/{self._max_failures_before_unavailable}): {err}")
+                if self._debug_mode:
+                    _LOGGER.warning(f"Update failed (attempt {self._consecutive_failures}/{self._max_failures_before_unavailable}): {err}")
                 
                 # Return last known good data if available to keep entity available
                 if self._last_data:
@@ -1357,37 +1477,36 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         """Return to base - centralized business logic."""
         await self.client.return_to_base()
         
+    async def _execute_remote_command(self, command_method):
+        """Execute a remote command with device type checking."""
+        if self.client._device_type not in {"vr", "vortrax"}:
+            return
+        await command_method()
+        # Only refresh once at the end to avoid multiple API calls
+        await self.async_request_refresh()
+
     async def async_remote_forward(self):
         """Send forward command to the robot for remote control - centralized business logic."""
-        if self.client._device_type not in ["vr", "vortrax"]:
-            return
-        await self.client.remote_forward()
-        await self.async_request_refresh()
+        await self._execute_remote_command(self.client.remote_forward)
 
     async def async_remote_backward(self):
         """Send backward command to the robot for remote control - centralized business logic."""
-        if self.client._device_type not in ["vr", "vortrax"]:
-            return
-        await self.client.remote_backward()
-        await self.async_request_refresh()
+        await self._execute_remote_command(self.client.remote_backward)
 
     async def async_remote_rotate_left(self):
         """Send rotate left command to the robot for remote control - centralized business logic."""
-        if self.client._device_type not in ["vr", "vortrax"]:
-            return
-        await self.client.remote_rotate_left()
-        await self.async_request_refresh()
+        await self._execute_remote_command(self.client.remote_rotate_left)
 
     async def async_remote_rotate_right(self):  
         """Send rotate right command to the robot for remote control - centralized business logic."""
-        if self.client._device_type not in ["vr", "vortrax"]:
-            return
-        await self.client.remote_rotate_right()
-        await self.async_request_refresh()
+        await self._execute_remote_command(self.client.remote_rotate_right)
 
     async def async_remote_stop(self):
         """Send stop command to the robot for remote control - centralized business logic."""
-        if self.client._device_type not in ["vr", "vortrax"]:
-            return
-        await self.client.remote_stop()
-        await self.async_request_refresh()
+        await self._execute_remote_command(self.client.remote_stop)
+        
+    async def cleanup(self):
+        """Clean up resources when coordinator is being unloaded."""
+        # Close any open websocket connections
+        if hasattr(self.client, '_close_websocket'):
+            await self.client._close_websocket()

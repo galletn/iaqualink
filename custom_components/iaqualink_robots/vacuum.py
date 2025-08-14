@@ -1,15 +1,19 @@
 import logging
 import datetime
 from datetime import timedelta
+from typing import Any, Dict, List, Mapping, Optional
 
 _LOGGER = logging.getLogger(__name__)
 
-from homeassistant.components.vacuum import (
+from homeassistant.components.vacuum import ( 
     StateVacuumEntity,
     VacuumEntityFeature,
+    VacuumActivity,  # Note: This requires Home Assistant 2025.1 or later
 )
 
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .coordinator import AqualinkDataUpdateCoordinator
 
 from .const import (
     NAME,
@@ -19,12 +23,6 @@ from .const import (
     STARTUP,
     SCAN_INTERVAL
 )
-
-# Define vacuum activity states as constants since VacuumActivity may not be available
-VACUUM_ACTIVITY_IDLE = "idle"
-VACUUM_ACTIVITY_CLEANING = "cleaning"
-VACUUM_ACTIVITY_RETURNING = "returning"
-VACUUM_ACTIVITY_ERROR = "error"
 ROBOT_FEATURES = {
     "default": (
         VacuumEntityFeature.START
@@ -83,21 +81,21 @@ async def async_setup_entry(hass, entry, async_add_entities):
     vacuum = IAquaLinkRobotVacuum(coordinator, client, device_name, serial_number)
     async_add_entities([vacuum], True)
 
-class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
+class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], StateVacuumEntity):
     """Represents an iaqualink_robots vacuum."""
 
-    def __init__(self, coordinator, client, device_name, serial_number):
+    def __init__(self, coordinator: AqualinkDataUpdateCoordinator, client, device_name: str, serial_number: str):
         """Initialize the vacuum."""
         super().__init__(coordinator)
         self._name = device_name
         self._serial_number = serial_number
-        self._attributes = {}
-        self._activity = VACUUM_ACTIVITY_IDLE
+        self._attributes: Dict[str, Any] = {}
+        self._activity = VacuumActivity.IDLE
         self._supported_features = ROBOT_FEATURES["default"]
         self._client = client
-        self._fan_speed_list = ["Floor only", "Floor and walls"]
+        self._fan_speed_list: List[str] = ["Floor only", "Floor and walls"]
         self._fan_speed = self._fan_speed_list[0]
-        self._status = None
+        self._status: Optional[str] = None
 
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
@@ -108,18 +106,20 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         if data:
             # Get status and activity directly from coordinator
             self._status = data.get("status")
-            self._attributes = data.copy()  # Use coordinator data as source of truth
+            # Only update attributes if data has changed to avoid unnecessary copying
+            if self._attributes != data:
+                self._attributes = data  # Reference instead of copy for performance
             
-            # Map activity from coordinator to vacuum activity constants
+            # Map activity from coordinator to VacuumActivity enum
             activity = data.get("activity", "idle")
             if activity == "cleaning":
-                self._activity = VACUUM_ACTIVITY_CLEANING
+                self._activity = VacuumActivity.CLEANING
             elif activity == "returning":
-                self._activity = VACUUM_ACTIVITY_RETURNING
+                self._activity = VacuumActivity.RETURNING
             elif activity == "error":
-                self._activity = VACUUM_ACTIVITY_ERROR
+                self._activity = VacuumActivity.ERROR
             else:
-                self._activity = VACUUM_ACTIVITY_IDLE
+                self._activity = VacuumActivity.IDLE
                 
             # Set device type specific features and fan speed list
             device_type = data.get("device_type")
@@ -127,7 +127,7 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
                 self._supported_features = ROBOT_FEATURES.get(device_type, ROBOT_FEATURES["default"])
                 
                 # Set fan speed list based on device type
-                if device_type == "vr" or device_type == "vortrax" or device_type == "cyclobat":
+                if device_type in ("vr", "vortrax", "cyclobat"):
                     self._fan_speed_list = ["Wall only", "Floor only", "SMART Floor and walls", "Floor and walls"]
                 elif device_type == "cyclonext":
                     self._fan_speed_list = ["Floor only", "Floor and walls"]
@@ -137,12 +137,12 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         self.async_write_ha_state()
 
     @property
-    def unique_id(self):
+    def unique_id(self) -> str:
         """Return a unique ID for this entity."""
         return f"{DOMAIN}_{self._serial_number}"
 
     @property
-    def device_info(self):
+    def device_info(self) -> Dict[str, Any]:
         """Return device information about this entity."""
         data = self.coordinator.data or {}
         return {
@@ -154,69 +154,70 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         }
 
     @property
-    def activity(self) -> str:
+    def activity(self) -> VacuumActivity:
         """Return the current activity of the vacuum."""
         return self._activity
 
     @property
-    def fan_speed(self):
+    def fan_speed(self) -> Optional[str]:
         """Return the current fan speed."""
         return self._fan_speed
 
     @property
-    def fan_speed_list(self):
+    def fan_speed_list(self) -> List[str]:
         """Return the list of available fan speeds."""
         return self._fan_speed_list
 
     @property
-    def name(self):
+    def name(self) -> str:
         """Return the name of the vacuum."""
         return self._name
 
     @property
-    def should_poll(self):
+    def should_poll(self) -> bool:
         """Return True if the vacuum should be polled for state updates."""
         return False  # Coordinator handles polling
 
     @property
-    def device_state_attributes(self):
+    def device_state_attributes(self) -> Dict[str, Any]:
         """Return device specific state attributes."""
         return self._attributes
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> Dict[str, Any]:
         """Return entity specific state attributes."""
         return self._attributes
 
     @property
-    def status(self):
+    def status(self) -> Optional[str]:
         """Return the status of the vacuum."""
         return self._status
 
     @property
-    def supported_features(self):
+    def supported_features(self) -> int:
         """Return the supported features of the vacuum."""
         return self._supported_features
 
-    async def async_start(self):
+    async def async_start(self) -> None:
         """Start the vacuum - delegate to coordinator."""
         if self._status != "connected":
             return
         
         # Delegate to coordinator for business logic
-        await self.coordinator.async_start_cleaning()
+        # Type ignore because mypy doesn't recognize the custom methods
+        await self.coordinator.async_start_cleaning()  # type: ignore
         await self.coordinator.async_request_refresh()
             
-    async def async_stop(self, **kwargs):
+    async def async_stop(self, **kwargs) -> None:
         """Stop the vacuum - delegate to coordinator."""
         if self._status != "connected":
             return
         
         # Delegate to coordinator for business logic
-        await self.coordinator.async_stop_cleaning()
+        await self.coordinator.async_stop_cleaning()  # type: ignore
         await self.coordinator.async_refresh()
 
-    async def async_set_fan_speed(self, fan_speed, **kwargs):
+    async def async_set_fan_speed(self, fan_speed: str, **kwargs) -> None:
         """Set fan speed (cleaning mode) for the vacuum cleaner."""
         if fan_speed not in self._fan_speed_list:
             raise ValueError('Invalid fan speed')
@@ -226,31 +227,31 @@ class IAquaLinkRobotVacuum(CoordinatorEntity, StateVacuumEntity):
         await self._client.set_fan_speed(fan_speed, self._fan_speed_list)
         await self.coordinator.async_request_refresh()
 
-    async def async_return_to_base(self, **kwargs):
+    async def async_return_to_base(self, **kwargs) -> None:
         """Set the vacuum cleaner to return to the dock - delegate to coordinator."""
         if self._status != "connected":
             return
         
         # Delegate to coordinator for business logic
-        await self.coordinator.async_return_to_base()
+        await self.coordinator.async_return_to_base()  # type: ignore
         await self.coordinator.async_request_refresh()
 
-    async def async_remote_forward(self, **kwargs):
+    async def async_remote_forward(self, **kwargs) -> None:
         """Send forward command to the robot for remote control - delegate to coordinator."""
-        await self.coordinator.async_remote_forward()
+        await self.coordinator.async_remote_forward()  # type: ignore
 
-    async def async_remote_backward(self, **kwargs):
+    async def async_remote_backward(self, **kwargs) -> None:
         """Send backward command to the robot for remote control - delegate to coordinator."""
-        await self.coordinator.async_remote_backward()
+        await self.coordinator.async_remote_backward()  # type: ignore
 
-    async def async_remote_rotate_left(self, **kwargs):
+    async def async_remote_rotate_left(self, **kwargs) -> None:
         """Send rotate left command to the robot for remote control - delegate to coordinator."""
-        await self.coordinator.async_remote_rotate_left()
+        await self.coordinator.async_remote_rotate_left()  # type: ignore
 
-    async def async_remote_rotate_right(self, **kwargs):
+    async def async_remote_rotate_right(self, **kwargs) -> None:
         """Send rotate right command to the robot for remote control - delegate to coordinator."""
-        await self.coordinator.async_remote_rotate_right()
+        await self.coordinator.async_remote_rotate_right()  # type: ignore
 
-    async def async_remote_stop(self, **kwargs):
+    async def async_remote_stop(self, **kwargs) -> None:
         """Send stop command to the robot for remote control - delegate to coordinator."""
-        await self.coordinator.async_remote_stop()
+        await self.coordinator.async_remote_stop()  # type: ignore

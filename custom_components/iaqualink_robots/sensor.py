@@ -1,6 +1,7 @@
 """Sensor platform for iaqualinkRobots integration."""
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 
 ICON_MAP = {
@@ -53,16 +54,18 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = data["coordinator"]
     client = data["client"]
 
-    # Filter sensor types based on device type
-    if client._device_type == "cyclobat":
+    # Efficiently filter sensor types based on device type
+    device_type = client._device_type
+    
+    if device_type == "cyclobat":
         # Include all sensors for cyclobat
         sensor_types = ALL_SENSOR_TYPES
-    elif client._device_type == "i2d_robot":
+    elif device_type == "i2d_robot":
         # Exclude specified sensors for i2d robots
-        excluded_sensors = ["cycle_duration", "cycle_start_time", "model", "temperature"]
+        excluded_sensors = {"cycle_duration", "cycle_start_time", "model", "temperature", "battery_level"}
         sensor_types = [
             (key, name) for key, name in ALL_SENSOR_TYPES
-            if key != "battery_level" and key not in excluded_sensors
+            if key not in excluded_sensors
         ]
     else:
         # For other types, just exclude battery
@@ -77,10 +80,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
     ]
     async_add_entities(entities)
 
-class AqualinkSensor(SensorEntity):
+class AqualinkSensor(CoordinatorEntity, SensorEntity):
     """Representation of a sensor tied to the vacuum data coordinator."""
 
     def __init__(self, coordinator, client, key, name):
+        super().__init__(coordinator)
         self.coordinator = coordinator
         self.client = client
         self._key = key
@@ -89,6 +93,7 @@ class AqualinkSensor(SensorEntity):
         self._attr_name = f"{device_name} {name}"
         self._attr_unique_id = f"{client.robot_id}_{key}"
         self._attr_icon = ICON_MAP.get(key)
+        self._attr_should_poll = False  # Use coordinator updates only
         # Set unit if defined
         unit = UNIT_MAP.get(key)
         if unit:
@@ -110,6 +115,3 @@ class AqualinkSensor(SensorEntity):
             "manufacturer": "Zodiac",
             "model": self.coordinator.data.get("model"),
         }
-
-    async def async_update(self):
-        await self.coordinator.async_request_refresh()

@@ -1,0 +1,200 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "iAqualink Robot Installatie",
+        "description": "Voer uw iAquaLink account gegevens in.",
+        "data": {
+          "name": "Apparaatnaam",
+          "username": "Gebruikersnaam",
+          "password": "Wachtwoord"
+        },
+        "data_description": {
+          "name": "Naam voor uw zwembadrobot in Home Assistant",
+          "username": "Uw iAquaLink account gebruikersnaam",
+          "password": "Uw iAquaLink account wachtwoord"
+        }
+      },
+      "select_device": {
+        "title": "Robot Selecteren",
+        "description": "Selecteer welke robot u wilt toevoegen aan Home Assistant.",
+        "data": {
+          "device": "Robot",
+          "name": "Apparaatnaam"
+        },
+        "data_description": {
+          "device": "Kies de robot die u wilt toevoegen",
+          "name": "Optioneel: Overschrijf de standaardnaam voor deze robot"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kan geen verbinding maken met iAquaLink service. Controleer uw gegevens en probeer opnieuw.",
+      "no_devices": "Geen robots gevonden op uw account. Controleer of uw robot correct geregistreerd is bij iAquaLink.",
+      "device_not_found": "Geselecteerde apparaat kon niet gevonden worden. Probeer opnieuw.",
+      "unknown": "Er is een onverwachte fout opgetreden. Probeer opnieuw."
+    },
+    "abort": {
+      "already_configured": "Deze robot is al geconfigureerd in Home Assistant."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "serial_number": {
+        "name": "Serienummer"
+      },
+      "device_type": {
+        "name": "Apparaattype"
+      },
+      "cycle_start_time": {
+        "name": "Cyclus Starttijd"
+      },
+      "cycle_duration": {
+        "name": "Cyclusduur"
+      },
+      "cycle": {
+        "name": "Cyclus"
+      },
+      "battery_level": {
+        "name": "Batterijniveau"
+      },
+      "total_hours": {
+        "name": "Totale Uren"
+      },
+      "canister": {
+        "name": "Filterhouder Niveau"
+      },
+      "error_state": {
+        "name": "Foutstatus"
+      },
+      "temperature": {
+        "name": "Temperatuur"
+      },
+      "time_remaining_human": {
+        "name": "Resterende Tijd"
+      },
+      "estimated_end_time": {
+        "name": "Geschatte Eindtijd"
+      },
+      "model": {
+        "name": "Model"
+      },
+      "fan_speed": {
+        "name": "Ventilatorsnelheid",
+        "state": {
+          "floor_only": "Alleen bodem",
+          "wall_only": "Alleen wand", 
+          "walls_only": "Alleen wanden",
+          "floor_and_walls": "Bodem en wanden",
+          "smart_floor_and_walls": "SMART Bodem en wanden"
+        }
+      },
+      "activity": {
+        "name": "Activiteit",
+        "state": {
+          "cleaning": "Schoonmaken",
+          "error": "Fout",
+          "idle": "Inactief",
+          "returning": "Terugkeren",
+          "docking": "Dokken",
+          "paused": "Gepauzeerd"
+        }
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "connected": "Verbonden",
+          "disconnected": "Losgekoppeld",
+          "offline": "Offline",
+          "online": "Online"
+        }
+      },
+      "time_remaining": {
+        "name": "Resterende Tijd (Minuten)"
+      }
+    },
+    "button": {
+      "remote_forward": {
+        "name": "Afstandsbediening Vooruit"
+      },
+      "remote_backward": {
+        "name": "Afstandsbediening Achteruit"
+      },
+      "remote_rotate_left": {
+        "name": "Afstandsbediening Draai Links"
+      },
+      "remote_rotate_right": {
+        "name": "Afstandsbediening Draai Rechts"
+      },
+      "remote_stop": {
+        "name": "Afstandsbediening Stop"
+      }
+    },
+    "vacuum": {
+      "fan_speed": {
+        "floor_only": "Alleen bodem",
+        "wall_only": "Alleen wand",
+        "walls_only": "Alleen wanden",
+        "floor_and_walls": "Bodem en wanden",
+        "smart_floor_and_walls": "SMART Bodem en wanden"
+      },
+      "time_format": {
+        "hours": "Uur/Uren",
+        "minutes": "Minuut/Minuten",
+        "seconds": "Seconde/Seconden"
+      }
+    }
+  },
+  "services": {
+    "remote_forward": {
+      "name": "Afstandsbediening Vooruit",
+      "description": "Stuur vooruit commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
+      "fields": {
+        "entity_id": {
+          "name": "Entiteit",
+          "description": "Stofzuiger entiteit om te besturen"
+        }
+      }
+    },
+    "remote_backward": {
+      "name": "Afstandsbediening Achteruit",
+      "description": "Stuur achteruit commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
+      "fields": {
+        "entity_id": {
+          "name": "Entiteit",
+          "description": "Stofzuiger entiteit om te besturen"
+        }
+      }
+    },
+    "remote_rotate_left": {
+      "name": "Afstandsbediening Draai Links",
+      "description": "Stuur draai links commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
+      "fields": {
+        "entity_id": {
+          "name": "Entiteit",
+          "description": "Stofzuiger entiteit om te besturen"
+        }
+      }
+    },
+    "remote_rotate_right": {
+      "name": "Afstandsbediening Draai Rechts",
+      "description": "Stuur draai rechts commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
+      "fields": {
+        "entity_id": {
+          "name": "Entiteit",
+          "description": "Stofzuiger entiteit om te besturen"
+        }
+      }
+    },
+    "remote_stop": {
+      "name": "Afstandsbediening Stop",
+      "description": "Stuur stop commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
+      "fields": {
+        "entity_id": {
+          "name": "Entiteit",
+          "description": "Stofzuiger entiteit om te besturen"
+        }
+      }
+    }
+  }
+}

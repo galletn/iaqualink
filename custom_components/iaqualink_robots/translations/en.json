@@ -1,0 +1,179 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "iAqualink Robot Setup",
+        "description": "Enter your iAquaLink account credentials.",
+        "data": {
+          "name": "Device Name",
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "name": "Name for your pool robot in Home Assistant",
+          "username": "Your iAquaLink account username",
+          "password": "Your iAquaLink account password"
+        }
+      },
+      "select_device": {
+        "title": "Select Robot",
+        "description": "Select which robot to add to Home Assistant.",
+        "data": {
+          "device": "Robot",
+          "name": "Device Name"
+        },
+        "data_description": {
+          "device": "Choose the robot you want to add",
+          "name": "Optional: Override the default name for this robot"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to iAquaLink service. Please check your credentials and try again.",
+      "no_devices": "No robots found on your account. Please check that your robot is properly registered with iAquaLink.",
+      "device_not_found": "Selected device could not be found. Please try again.",
+      "unknown": "Unexpected error occurred. Please try again."
+    },
+    "abort": {
+      "already_configured": "This robot is already configured in Home Assistant."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "serial_number": {
+        "name": "Serial Number"
+      },
+      "device_type": {
+        "name": "Device Type"
+      },
+      "cycle_start_time": {
+        "name": "Cycle Start Time"
+      },
+      "cycle_duration": {
+        "name": "Cycle Duration"
+      },
+      "cycle": {
+        "name": "Cycle"
+      },
+      "battery_level": {
+        "name": "Battery Level"
+      },
+      "total_hours": {
+        "name": "Total Hours"
+      },
+      "canister": {
+        "name": "Canister Level"
+      },
+      "error_state": {
+        "name": "Error State"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "time_remaining_human": {
+        "name": "Time Remaining"
+      },
+      "estimated_end_time": {
+        "name": "Estimated End Time"
+      },
+      "model": {
+        "name": "Model"
+      },
+      "time_remaining": {
+        "name": "Time Remaining (Minutes)"
+      },
+      "fan_speed": {
+        "name": "Fan Speed"
+      },
+      "activity": {
+        "name": "Activity"
+      },
+      "status": {
+        "name": "Status"
+      }
+    },
+    "button": {
+      "remote_forward": {
+        "name": "Remote Forward"
+      },
+      "remote_backward": {
+        "name": "Remote Backward"
+      },
+      "remote_rotate_left": {
+        "name": "Remote Rotate Left"
+      },
+      "remote_rotate_right": {
+        "name": "Remote Rotate Right"
+      },
+      "remote_stop": {
+        "name": "Remote Stop"
+      }
+    },
+    "vacuum": {
+      "fan_speed": {
+        "floor_only": "Floor only",
+        "wall_only": "Wall only", 
+        "walls_only": "Walls only",
+        "floor_and_walls": "Floor and walls",
+        "smart_floor_and_walls": "SMART Floor and walls"
+      },
+      "time_format": {
+        "hours": "Hour(s)",
+        "minutes": "Minute(s)", 
+        "seconds": "Second(s)"
+      }
+    }
+  },
+  "services": {
+    "remote_forward": {
+      "name": "Remote Forward",
+      "description": "Send forward command to the robot for remote control (VR and VortraX robots only)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Vacuum entity to control"
+        }
+      }
+    },
+    "remote_backward": {
+      "name": "Remote Backward", 
+      "description": "Send backward command to the robot for remote control (VR and VortraX robots only)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Vacuum entity to control"
+        }
+      }
+    },
+    "remote_rotate_left": {
+      "name": "Remote Rotate Left",
+      "description": "Send rotate left command to the robot for remote control (VR and VortraX robots only)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity", 
+          "description": "Vacuum entity to control"
+        }
+      }
+    },
+    "remote_rotate_right": {
+      "name": "Remote Rotate Right",
+      "description": "Send rotate right command to the robot for remote control (VR and VortraX robots only)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Vacuum entity to control"
+        }
+      }
+    },
+    "remote_stop": {
+      "name": "Remote Stop",
+      "description": "Send stop command to the robot for remote control (VR and VortraX robots only)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Vacuum entity to control"
+        }
+      }
+    }
+  }
+}

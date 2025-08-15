@@ -1,0 +1,179 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configuração do Robô iAqualink",
+        "description": "Digite suas credenciais da conta iAquaLink.",
+        "data": {
+          "name": "Nome do dispositivo",
+          "username": "Nome de usuário",
+          "password": "Senha"
+        },
+        "data_description": {
+          "name": "Nome do seu robô de piscina no Home Assistant",
+          "username": "Seu nome de usuário da conta iAquaLink",
+          "password": "Sua senha da conta iAquaLink"
+        }
+      },
+      "select_device": {
+        "title": "Selecionar Robô",
+        "description": "Selecione o robô a ser adicionado ao Home Assistant.",
+        "data": {
+          "device": "Robô",
+          "name": "Nome do dispositivo"
+        },
+        "data_description": {
+          "device": "Escolha o robô que deseja adicionar",
+          "name": "Opcional: Substituir o nome padrão deste robô"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Falha ao conectar ao serviço iAquaLink. Verifique suas credenciais e tente novamente.",
+      "no_devices": "Nenhum robô encontrado em sua conta. Verifique se seu robô está devidamente registrado no iAquaLink.",
+      "device_not_found": "O dispositivo selecionado não pôde ser encontrado. Tente novamente.",
+      "unknown": "Ocorreu um erro inesperado. Tente novamente."
+    },
+    "abort": {
+      "already_configured": "Este robô já está configurado no Home Assistant."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "serial_number": {
+        "name": "Número de Série"
+      },
+      "device_type": {
+        "name": "Tipo de Dispositivo"
+      },
+      "cycle_start_time": {
+        "name": "Hora de Início do Ciclo"
+      },
+      "cycle_duration": {
+        "name": "Duração do Ciclo"
+      },
+      "cycle": {
+        "name": "Ciclo"
+      },
+      "battery_level": {
+        "name": "Nível da Bateria"
+      },
+      "total_hours": {
+        "name": "Horas Totais"
+      },
+      "canister": {
+        "name": "Nível do Recipiente"
+      },
+      "error_state": {
+        "name": "Estado de Erro"
+      },
+      "temperature": {
+        "name": "Temperatura"
+      },
+      "time_remaining_human": {
+        "name": "Tempo Restante"
+      },
+      "estimated_end_time": {
+        "name": "Hora Estimada de Término"
+      },
+      "model": {
+        "name": "Modelo"
+      },
+      "time_remaining": {
+        "name": "Tempo restante (Minutos)"
+      },
+      "fan_speed": {
+        "name": "Velocidade da ventoinha"
+      },
+      "activity": {
+        "name": "Atividade"
+      },
+      "status": {
+        "name": "Status"
+      }
+    },
+    "button": {
+      "remote_forward": {
+        "name": "Controle Remoto Avançar"
+      },
+      "remote_backward": {
+        "name": "Controle Remoto Recuar"
+      },
+      "remote_rotate_left": {
+        "name": "Controle Remoto Girar Esquerda"
+      },
+      "remote_rotate_right": {
+        "name": "Controle Remoto Girar Direita"
+      },
+      "remote_stop": {
+        "name": "Controle Remoto Parar"
+      }
+    },
+    "vacuum": {
+      "fan_speed": {
+        "floor_only": "Apenas piso",
+        "wall_only": "Apenas parede",
+        "walls_only": "Apenas paredes",
+        "floor_and_walls": "Piso e paredes",
+        "smart_floor_and_walls": "INTELIGENTE Piso e paredes"
+      },
+      "time_format": {
+        "hours": "Hora(s)",
+        "minutes": "Minuto(s)", 
+        "seconds": "Segundo(s)"
+      }
+    }
+  },
+  "services": {
+    "remote_forward": {
+      "name": "Controle Remoto Avançar",
+      "description": "Enviar comando de avanço para o robô para controle remoto (apenas robôs VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entidade",
+          "description": "Entidade do aspirador para controlar"
+        }
+      }
+    },
+    "remote_backward": {
+      "name": "Controle Remoto Recuar",
+      "description": "Enviar comando de recuo para o robô para controle remoto (apenas robôs VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entidade",
+          "description": "Entidade do aspirador para controlar"
+        }
+      }
+    },
+    "remote_rotate_left": {
+      "name": "Controle Remoto Girar Esquerda",
+      "description": "Enviar comando de girar à esquerda para o robô para controle remoto (apenas robôs VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entidade",
+          "description": "Entidade do aspirador para controlar"
+        }
+      }
+    },
+    "remote_rotate_right": {
+      "name": "Controle Remoto Girar Direita",
+      "description": "Enviar comando de girar à direita para o robô para controle remoto (apenas robôs VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entidade",
+          "description": "Entidade do aspirador para controlar"
+        }
+      }
+    },
+    "remote_stop": {
+      "name": "Controle Remoto Parar",
+      "description": "Enviar comando de parada para o robô para controle remoto (apenas robôs VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entidade",
+          "description": "Entidade do aspirador para controlar"
+        }
+      }
+    }
+  }
+}

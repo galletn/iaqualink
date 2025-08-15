@@ -68,9 +68,6 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=data_schema,
             errors=errors,
-            description_placeholders={
-                "info": "Enter your iAquaLink account credentials."
-            }
         )
         
     async def async_step_select_device(self, user_input=None):
@@ -116,7 +113,4 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="select_device",
             data_schema=data_schema,
             errors=errors,
-            description_placeholders={
-                "info": "Select which device to add."
-            }
         )

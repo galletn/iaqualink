@@ -1,0 +1,179 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Nastavení iAqualink robota",
+        "description": "Zadejte přihlašovací údaje k účtu iAquaLink.",
+        "data": {
+          "name": "Název zařízení",
+          "username": "Uživatelské jméno",
+          "password": "Heslo"
+        },
+        "data_description": {
+          "name": "Název pro vašeho bazénového robota v Home Assistantovi",
+          "username": "Uživatelské jméno k vašemu účtu iAquaLink",
+          "password": "Heslo k vašemu účtu iAquaLink"
+        }
+      },
+      "select_device": {
+        "title": "Vyberte robota",
+        "description": "Vyberte robota, kterého chcete přidat do Home Assistanta.",
+        "data": {
+          "device": "Robot",
+          "name": "Název zařízení"
+        },
+        "data_description": {
+          "device": "Vyberte robota, kterého chcete přidat",
+          "name": "Volitelné: Přepište výchozí název pro tohoto robota"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nepodařilo se připojit k službě iAquaLink. Zkontrolujte své přihlašovací údaje a zkuste to znovu.",
+      "no_devices": "Na vašem účtu nebyli nalezeni žádní roboti. Zkontrolujte, zda je váš robot správně registrován v iAquaLink.",
+      "device_not_found": "Vybrané zařízení nebylo nalezeno. Zkuste to znovu.",
+      "unknown": "Došlo k neočekávané chybě. Zkuste to znovu."
+    },
+    "abort": {
+      "already_configured": "Tento robot je již v Home Assistantovi nakonfigurován."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "serial_number": {
+        "name": "Sériové číslo"
+      },
+      "device_type": {
+        "name": "Typ zařízení"
+      },
+      "cycle_start_time": {
+        "name": "Čas začátku cyklu"
+      },
+      "cycle_duration": {
+        "name": "Délka cyklu"
+      },
+      "cycle": {
+        "name": "Cyklus"
+      },
+      "battery_level": {
+        "name": "Úroveň baterie"
+      },
+      "total_hours": {
+        "name": "Celkový počet hodin"
+      },
+      "canister": {
+        "name": "Úroveň zásobníku"
+      },
+      "error_state": {
+        "name": "Chybový stav"
+      },
+      "temperature": {
+        "name": "Teplota"
+      },
+      "time_remaining_human": {
+        "name": "Zbývající čas"
+      },
+      "estimated_end_time": {
+        "name": "Odhadovaný čas dokončení"
+      },
+      "model": {
+        "name": "Model"
+      },
+      "time_remaining": {
+        "name": "Zbývající čas (minuty)"
+      },
+      "fan_speed": {
+        "name": "Rychlost turbíny"
+      },
+      "activity": {
+        "name": "Aktivita"
+      },
+      "status": {
+        "name": "Stav"
+      }
+    },
+    "button": {
+      "remote_forward": {
+        "name": "Dálkové vpřed"
+      },
+      "remote_backward": {
+        "name": "Dálkové vzad"
+      },
+      "remote_rotate_left": {
+        "name": "Dálkové otočení doleva"
+      },
+      "remote_rotate_right": {
+        "name": "Dálkové otočení doprava"
+      },
+      "remote_stop": {
+        "name": "Dálkové zastavení"
+      }
+    },
+    "vacuum": {
+      "fan_speed": {
+        "floor_only": "Pouze podlaha",
+        "wall_only": "Pouze stěna",
+        "walls_only": "Pouze stěny",
+        "floor_and_walls": "Podlaha a stěny",
+        "smart_floor_and_walls": "SMART podlaha a stěny"
+      },
+      "time_format": {
+        "hours": "Hodina(y)",
+        "minutes": "Minuta(y)",
+        "seconds": "Sekunda(y)"
+      }
+    }
+  },
+  "services": {
+    "remote_forward": {
+      "name": "Dálkové vpřed",
+      "description": "Odešle příkaz vpřed robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysavače k ovládání"
+        }
+      }
+    },
+    "remote_backward": {
+      "name": "Dálkové vzad",
+      "description": "Odešle příkaz vzad robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysavače k ovládání"
+        }
+      }
+    },
+    "remote_rotate_left": {
+      "name": "Dálkové otočení doleva",
+      "description": "Odešle příkaz k otočení doleva robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysavače k ovládání"
+        }
+      }
+    },
+    "remote_rotate_right": {
+      "name": "Dálkové otočení doprava",
+      "description": "Odešle příkaz k otočení doprava robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysavače k ovládání"
+        }
+      }
+    },
+    "remote_stop": {
+      "name": "Dálkové zastavení",
+      "description": "Odešle příkaz k zastavení robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysavače k ovládání"
+        }
+      }
+    }
+  }
+}

@@ -39,16 +39,79 @@ class AqualinkClient:
         self._model_last_attempt = None  # Track last model fetch attempt time
         self._pending_stop_reset = None  # Store reset values from stop command
         self._activity = VacuumActivity.IDLE  # Default activity state
+        self._hass = None  # Will be set by coordinator
         self._headers = {
             "Content-Type": "application/json; charset=utf-8", 
             "Connection": "keep-alive", 
             "Accept": "*/*"
         }
         self._debug_mode = debug_mode  # Debug mode configurable
-        # Persistent websocket connection
-        self._ws_connection = None
-        self._ws_session = None
-        self._last_ws_activity = None
+        # Note: Persistent websocket connection disabled - using fresh connections for reliability
+        # self._ws_connection = None
+        # self._ws_session = None
+        # self._last_ws_activity = None
+        # Websocket failure tracking for resilient status reporting
+        self._ws_consecutive_failures = 0
+        self._last_known_status = None
+        self._max_ws_failures_before_offline = 5  # Allow 5 websocket failures before marking offline
+        # Simple instance ID for logging purposes
+        self._instance_id = f"ha-{hash(username + str(id(self))) % 10000:04d}"
+
+    def _get_resilient_status(self, error_context: str) -> str:
+        """Get status that's resilient to temporary websocket failures.
+        
+        Args:
+            error_context: Context of the error (e.g., 'update_failed', 'setup_cancelled')
+            
+        Returns:
+            Status string - preserves last known status for temporary failures,
+            returns 'offline' only after multiple consecutive failures
+        """
+        if self._ws_consecutive_failures >= self._max_ws_failures_before_offline:
+            # Multiple consecutive failures - device is likely offline
+            _LOGGER.warning(f"Device marked offline after {self._ws_consecutive_failures} consecutive websocket failures")
+            return "offline"
+        elif self._last_known_status:
+            # Temporary failure - preserve last known status
+            _LOGGER.debug(f"Preserving last known status '{self._last_known_status}' during temporary failure ({error_context})")
+            return self._last_known_status
+        else:
+            # No previous status available - default to a neutral status
+            _LOGGER.debug(f"No previous status available, using 'unknown' for {error_context}")
+            return "unknown"
+    
+    def _get_close_code_info(self, close_code):
+        """Get human-readable information about websocket close codes."""
+        close_codes = {
+            1000: "Normal Closure - Connection closed normally",
+            1001: "Going Away - Server going down or browser navigating away",  
+            1002: "Protocol Error - Websocket protocol error",
+            1003: "Unsupported Data - Server received unsupported data type",
+            1005: "No Status - No status code was provided", 
+            1006: "Abnormal Closure - Connection closed abnormally without close frame",
+            1007: "Invalid Data - Invalid UTF-8 or inconsistent data received",
+            1008: "Policy Violation - Message violates policy",
+            1009: "Message Too Big - Message too large to process",
+            1011: "Server Error - Unexpected server condition",
+            1012: "Service Restart - Service is restarting",
+            1013: "Try Again Later - Service is overloaded",
+            1014: "Bad Gateway - Server acting as gateway received invalid response",
+            1015: "TLS Handshake Failed - TLS handshake failure"
+        }
+        
+        return close_codes.get(close_code, f"Unknown close code: {close_code}")
+
+    def _log_connection_context(self):
+        """Log additional context to help troubleshoot websocket issues."""
+        import socket
+        try:
+            hostname = socket.gethostname()
+            local_ip = socket.gethostbyname(hostname)
+            _LOGGER.debug(
+                f"Connection context - Hostname: {hostname}, IP: {local_ip}, Account: {self._username}"
+            )
+        except Exception as e:
+            _LOGGER.debug(f"Could not gather connection context: {e}")
 
     @property 
     def username(self) -> str:
@@ -77,8 +140,33 @@ class AqualinkClient:
             return True
         return datetime.datetime.now() >= self._token_expires_at
 
-    async def fetch_status(self) -> dict:
-        """Authenticate, discover device, and parse status."""
+    def set_hass(self, hass):
+        """Set Home Assistant instance for translations."""
+        self._hass = hass
+
+    def _format_time_human(self, hours: int, minutes: int, seconds: int) -> str:
+        """Format time in human readable format with translations."""
+        if not self._hass:
+            # Fallback to English if no hass instance
+            return f"{hours} Hour(s) {minutes} Minute(s) {seconds} Second(s)"
+        
+        try:
+            # Try to get translated time format strings
+            hours_text = self._hass.localize("component.iaqualinkRobots.entity.vacuum.time_format.hours") or "Hour(s)"
+            minutes_text = self._hass.localize("component.iaqualinkRobots.entity.vacuum.time_format.minutes") or "Minute(s)"
+            seconds_text = self._hass.localize("component.iaqualinkRobots.entity.vacuum.time_format.seconds") or "Second(s)"
+            
+            return f"{hours} {hours_text} {minutes} {minutes_text} {seconds} {seconds_text}"
+        except (KeyError, AttributeError):
+            # Fallback to English if translation fails
+            return f"{hours} Hour(s) {minutes} Minute(s) {seconds} Second(s)"
+
+    async def fetch_status(self, quick_setup=False) -> dict:
+        """Authenticate, discover device, and parse status.
+        
+        Args:
+            quick_setup: If True, skip websocket operations for faster initial setup
+        """
         # Only authenticate if we don't have a valid token
         if not self._auth_token or self._is_token_expired():
             await self._authenticate()
@@ -86,6 +174,17 @@ class AqualinkClient:
         # Only discover device if we don't have serial and device type
         if not self._serial or not self._device_type:
             await self._discover_device()
+            
+        # During quick setup, return minimal data without websocket operations
+        if quick_setup:
+            return {
+                "serial_number": self._serial,
+                "device_type": self._device_type,
+                "status": "ready",
+                "model": "Unknown",
+                "activity": "unknown",
+                "setup_mode": True
+            }
             
         # Update device status based on device type
         if self._device_type == "i2d_robot":
@@ -112,25 +211,30 @@ class AqualinkClient:
         """Authenticate with iAqualink API."""
         if self._debug_mode:
             _LOGGER.debug("Authenticating with iAqualink API...")
-        data = {
-            "apikey": self._api_key,
-            "email": self._username,
-            "password": self._password
-        }
-        data = json.dumps(data)
-        auth = await asyncio.wait_for(self.send_login(data, self._headers), timeout=30)
-        
-        self._first_name = auth["first_name"]
-        self._last_name = auth["last_name"]
-        self._id = auth["id"]
-        self._auth_token = auth["authentication_token"]
-        self._id_token = auth["userPoolOAuth"]["IdToken"]
-        self._app_client_id = auth["cognitoPool"]["appClientId"]
-        
-        # Set token expiration to 1 hour from now (conservative estimate)
-        self._token_expires_at = datetime.datetime.now() + datetime.timedelta(hours=1)
-        if self._debug_mode:
-            _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
+        try:
+            data = {
+                "apikey": self._api_key,
+                "email": self._username,
+                "password": self._password
+            }
+            data = json.dumps(data)
+            auth = await asyncio.wait_for(self.send_login(data, self._headers), timeout=30)
+            
+            self._first_name = auth["first_name"]
+            self._last_name = auth["last_name"]
+            self._id = auth["id"]
+            self._auth_token = auth["authentication_token"]
+            self._id_token = auth["userPoolOAuth"]["IdToken"]
+            self._app_client_id = auth["cognitoPool"]["appClientId"]
+            
+            # Set token expiration to 1 hour from now (conservative estimate)
+            self._token_expires_at = datetime.datetime.now() + datetime.timedelta(hours=1)
+            if self._debug_mode:
+                _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
+        except asyncio.CancelledError:
+            if self._debug_mode:
+                _LOGGER.debug("Authentication cancelled")
+            raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def _discover_device(self, target_serial=None):
         """Get list of devices and pick the pool robot.
@@ -138,50 +242,55 @@ class AqualinkClient:
         If target_serial is provided, select that specific device.
         Otherwise, select the first compatible device found.
         """
-        params = {
-            "authentication_token": self._auth_token,
-            "user_id": self._id,
-            "api_key": self._api_key
-        }
-        devices = await asyncio.wait_for(self.get_devices(params, self._headers), timeout=30)
+        try:
+            params = {
+                "authentication_token": self._auth_token,
+                "user_id": self._id,
+                "api_key": self._api_key
+            }
+            devices = await asyncio.wait_for(self.get_devices(params, self._headers), timeout=30)
 
-        # Filter only devices that are compatible with the module
-        supported_device_types = ["i2d_robot", "cyclonext", "cyclobat", "vr", "vortrax"]
-        compatible_devices = []
+            # Filter only devices that are compatible with the module
+            supported_device_types = ["i2d_robot", "cyclonext", "cyclobat", "vr", "vortrax"]
+            compatible_devices = []
 
-        for device in devices:
-            device_type = device.get("device_type")
-            _LOGGER.debug("🔍 Devices found : %s", device)
-            if device_type in supported_device_types:
-                serial = device["serial_number"]
-                compatible_devices.append(device)
-                
-                # If we're looking for a specific device and found it, select it
-                if target_serial and serial == target_serial:
-                    self._serial = serial
-                    self._device_type = device_type
-                    _LOGGER.debug(f"✅ Target device selected: {device_type} - {serial}")
-                    return
-            else:
-                _LOGGER.debug(f"⏩ Device ignored (unsupported type): {device_type}")
-        
-        # If we have compatible devices but weren't looking for a specific one,
-        # select the first compatible device
-        if compatible_devices and not target_serial:
-            device = compatible_devices[0]
-            self._serial = device["serial_number"]
-            self._device_type = device["device_type"]
-            _LOGGER.debug(f"✅ Device selected: {self._device_type} - {self._serial}")
-            return
+            for device in devices:
+                device_type = device.get("device_type")
+                _LOGGER.debug("🔍 Devices found : %s", device)
+                if device_type in supported_device_types:
+                    serial = device["serial_number"]
+                    compatible_devices.append(device)
+                    
+                    # If we're looking for a specific device and found it, select it
+                    if target_serial and serial == target_serial:
+                        self._serial = serial
+                        self._device_type = device_type
+                        _LOGGER.debug(f"✅ Target device selected: {device_type} - {serial}")
+                        return
+                else:
+                    _LOGGER.debug(f"⏩ Device ignored (unsupported type): {device_type}")
             
-        # If we were looking for a specific device but didn't find it,
-        # or if we found no compatible devices at all
-        if target_serial:
-            _LOGGER.error(f"❌ Target device {target_serial} not found in the device list.")
-            raise RuntimeError(f"Target device {target_serial} not found")
-        else:
-            _LOGGER.error("❌ No compatible robot found in the device list.")
-            raise RuntimeError("No supported robot found")
+            # If we have compatible devices but weren't looking for a specific one,
+            # select the first compatible device
+            if compatible_devices and not target_serial:
+                device = compatible_devices[0]
+                self._serial = device["serial_number"]
+                self._device_type = device["device_type"]
+                _LOGGER.debug(f"✅ Device selected: {self._device_type} - {self._serial}")
+                return
+                
+            # If we were looking for a specific device but didn't find it,
+            # or if we found no compatible devices at all
+            if target_serial:
+                _LOGGER.error(f"❌ Target device {target_serial} not found in the device list.")
+                raise RuntimeError(f"Target device {target_serial} not found")
+            else:
+                _LOGGER.error("❌ No compatible robot found in the device list.")
+                raise RuntimeError("No supported robot found")
+        except asyncio.CancelledError:
+            if self._debug_mode:
+                _LOGGER.debug("Device discovery cancelled")
+            raise  # Re-raise cancellation to preserve shutdown behavior
             
     @classmethod
     async def discover_devices(cls, username, password, api_key):
@@ -214,61 +323,16 @@ class AqualinkClient:
                 
         return compatible_devices
 
-    async def _ensure_websocket_connection(self):
-        """Ensure we have an active websocket connection, creating one if needed."""
-        # Initialize websocket connection timeout - 5 minutes
-        ws_timeout = 300  # seconds
-        current_time = datetime.datetime.now()  # Single call for consistency
-        
-        # Check if we already have an active websocket connection
-        if (self._ws_connection and 
-            self._ws_session and 
-            self._last_ws_activity and
-            hasattr(self._ws_connection, 'closed') and
-            not self._ws_connection.closed and
-            (current_time - self._last_ws_activity).total_seconds() < ws_timeout):
-            # Connection exists and is active and not timed out
-            _LOGGER.debug("Reusing existing websocket connection")
-            return
-            
-        # Close any existing connection
-        await self._close_websocket()
-        
-        # Create a new session and connection with proper error handling
-        _LOGGER.debug("Creating new websocket connection")
-        try:
-            self._ws_session = aiohttp.ClientSession(headers={"Authorization": self._id_token})
-            # Create a connection with default timeout settings
-            self._ws_connection = await self._ws_session.ws_connect(URL_WS)
-            self._last_ws_activity = current_time
-        except Exception as e:
-            # Log this error regardless of debug mode since it indicates a real issue
-            _LOGGER.warning(f"Failed to establish websocket connection: {e}")
-            await self._close_websocket()
-            # Don't raise the exception, just set connection to None
-            self._ws_connection = None
-            return
-            
-    async def _close_websocket(self):
-        """Close the websocket connection and session if they exist."""
-        try:
-            if self._ws_connection and hasattr(self._ws_connection, 'closed') and not self._ws_connection.closed:
-                await self._ws_connection.close()
-                _LOGGER.debug("Websocket connection closed")
-        except Exception as e:
-            _LOGGER.debug(f"Error closing websocket connection: {e}")
-            
-        try:
-            if self._ws_session and hasattr(self._ws_session, 'closed') and not self._ws_session.closed:
-                await self._ws_session.close()
-                _LOGGER.debug("Websocket session closed")
-        except Exception as e:
-            _LOGGER.debug(f"Error closing websocket session: {e}")
-            
-        # Always reset these to None to prevent reuse
-        self._ws_connection = None
-        self._ws_session = None
-        self._last_ws_activity = None
+    # Note: Persistent websocket connection methods disabled for fresh connection approach
+    # async def _ensure_websocket_connection(self):
+    #     """Ensure we have an active websocket connection, creating one if needed."""
+    #     # This method is commented out as we now use fresh connections for each request
+    #     pass
+    
+    # async def _close_websocket(self):
+    #     """Close the websocket connection and session if they exist."""
+    #     # This method is commented out as we now use fresh connections for each request
+    #     pass
     
     async def _ws_subscribe(self):
         """Subscribe via websocket to get live updates."""
@@ -281,39 +345,8 @@ class AqualinkClient:
             "version": 1
         }
         
-        # Use the persistent connection if possible
-        try:
-            await self._ensure_websocket_connection()
-            
-            # Send request and get response if connection exists
-            if self._ws_connection and not self._ws_connection.closed:
-                await self._ws_connection.send_json(req)
-                self._last_ws_activity = datetime.datetime.now()
-                response = await asyncio.wait_for(self._ws_connection.receive(), timeout=30)
-            else:
-                # No valid connection available, fall back to HTTP method
-                return await self.get_device_status(req)
-            
-            # Check if connection was closed
-            if response.type == aiohttp.WSMsgType.CLOSED:
-                _LOGGER.debug("Websocket connection was closed by server")
-                await self._close_websocket()  # Clean up
-                return await self.get_device_status(req)  # Fall back to non-persistent method
-                
-            # Parse response
-            if response.type == aiohttp.WSMsgType.TEXT:
-                return response.json()
-                
-            # Handle unexpected response types
-            if self._debug_mode:
-                _LOGGER.warning(f"Unexpected websocket response type: {response.type}")
-            await self._close_websocket()  # Clean up
-            
-        except Exception as e:
-            _LOGGER.debug(f"Error using persistent websocket: {e}, falling back to standard method")
-            await self._close_websocket()  # Clean up on error
-            
-        # Fall back to the original method if persistent connection fails
+        # Always use fresh connection for data requests to ensure we get current data
+        # This restores the original working behavior
         return await asyncio.wait_for(self.get_device_status(req), timeout=30)
 
     # Cache compiled regex patterns for better performance
@@ -398,15 +431,18 @@ class AqualinkClient:
             try:
                 # Use the persistent websocket connection
                 data = await self._ws_subscribe()
-                pn = data['payload']['robot']['state']['reported']['eboxData']['completeCleanerPn']
-                _LOGGER.debug(f"Found VortraX product number: {pn}")
-                if pn:
-                    model = await self._get_vortrax_model_from_web(pn)
-                    if model != "Unknown":
-                        self._model = model  # Cache the successful result
-                        self._model_fetch_attempts = 0  # Reset attempts on success
-                        _LOGGER.debug(f"Successfully cached VortraX model: {self._model}")
-                        return model
+                if data and 'payload' in data and data['payload'].get('robot', {}).get('state', {}).get('reported', {}).get('eboxData', {}).get('completeCleanerPn'):
+                    pn = data['payload']['robot']['state']['reported']['eboxData']['completeCleanerPn']
+                    _LOGGER.debug(f"Found VortraX product number: {pn}")
+                    if pn:
+                        model = await self._get_vortrax_model_from_web(pn)
+                        if model != "Unknown":
+                            self._model = model  # Cache the successful result
+                            self._model_fetch_attempts = 0  # Reset attempts on success
+                            _LOGGER.debug(f"Successfully cached VortraX model: {self._model}")
+                            return model
+                else:
+                    _LOGGER.debug("No product number data available for VortraX model detection")
             except Exception as e:
                 _LOGGER.debug(f"Error getting vortrax product number: {e}")
 
@@ -582,16 +618,16 @@ class AqualinkClient:
                 result["hardware_id"] = str(hardware_id)
                 result["firmware_id"] = str(firmware_id)
 
-                # Set fan speed based on mode code, regardless of activity state
+                # Set fan speed based on mode code, regardless of activity state (using translation keys)
                 if mode_code == 0x03:  # Deep clean mode
                     self._fan_speed = 3
-                    result["fan_speed"] = "Floor and walls"
+                    result["fan_speed"] = "floor_and_walls"
                 elif mode_code == 0x00:  # Quick clean floor only mode
                     self._fan_speed = 1
-                    result["fan_speed"] = "Floor only"
+                    result["fan_speed"] = "floor_only"
                 elif mode_code == 0x04:  # Waterline only 
                     self._fan_speed = 2
-                    result["fan_speed"] = "Walls only"
+                    result["fan_speed"] = "walls_only"
 
                 # Update activity state based on state code
                 if state_code == 0x04 or state_code == 0x02:  # Actively cleaning or Just started cleaning
@@ -611,7 +647,7 @@ class AqualinkClient:
                     estimated_end_time = self.add_minutes_to_datetime(
                         datetime.datetime.now(), time_remaining)
                     result["estimated_end_time"] = estimated_end_time.isoformat()
-                    result["time_remaining_human"] = f"{time_remaining // 60}:{time_remaining % 60:02d}"
+                    result["time_remaining_human"] = self._format_time_human(time_remaining // 60, time_remaining % 60, 0)
 
         except Exception as e:
             if self._debug_mode:
@@ -625,7 +661,41 @@ class AqualinkClient:
 
     async def _update_other_robots(self):
         """Update status for non-i2d robot types."""
-        data = await self._ws_subscribe()
+        try:
+            data = await self._ws_subscribe()
+            # Check if we got valid data
+            if data is None:
+                _LOGGER.debug("No data received from websocket subscribe")
+                self._ws_consecutive_failures += 1
+                return {
+                    "serial_number": self._serial,
+                    "device_type": self._device_type,
+                    "status": self._get_resilient_status("no_data"),
+                    "error_state": "no_data"
+                }
+            # Reset failure count on successful websocket operation
+            self._ws_consecutive_failures = 0
+        except asyncio.CancelledError:
+            # If cancelled during setup, return minimal data to allow integration to continue
+            _LOGGER.debug("Robot update cancelled - returning minimal data")
+            self._ws_consecutive_failures += 1
+            return {
+                "serial_number": self._serial,
+                "device_type": self._device_type,
+                "status": self._get_resilient_status("setup_cancelled"),
+                "error_state": "setup_cancelled"
+            }
+        except Exception as e:
+            # If websocket fails, increment failure count
+            self._ws_consecutive_failures += 1
+            _LOGGER.debug(f"Robot update failed (attempt {self._ws_consecutive_failures}): {e}")
+            
+            return {
+                "serial_number": self._serial,
+                "device_type": self._device_type,
+                "status": self._get_resilient_status("update_failed"),
+                "error_state": "update_failed"
+            }
 
         result = {
             "serial_number": self._serial,
@@ -633,251 +703,419 @@ class AqualinkClient:
         }
 
         try:
-            result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+            if data and 'payload' in data:
+                result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+                # Store the last known good status
+                self._last_known_status = result["status"]
+            else:
+                result["status"] = self._get_resilient_status("no_data")
+                result["debug"] = f"No data received: {data}" if self._debug_mode else ""
         except Exception:
             # Returns empty message sometimes, try second call
             result["debug"] = str(data) if self._debug_mode else ""  # Always store a string value
             
-            data = await self._ws_subscribe()
-            result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+            try:
+                data = await self._ws_subscribe()
+                if data and 'payload' in data:
+                    result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+                    # Store the last known good status
+                    self._last_known_status = result["status"]
+                else:
+                    result["status"] = self._get_resilient_status("no_data_retry")
+            except asyncio.CancelledError:
+                # If second call is also cancelled, return what we have
+                self._ws_consecutive_failures += 1
+                result["status"] = self._get_resilient_status("setup_cancelled")
+                result["error_state"] = "setup_cancelled"
+                return result
+            except Exception:
+                self._ws_consecutive_failures += 1
+                result["status"] = self._get_resilient_status("update_failed")
+                result["error_state"] = "update_failed"
+                return result
 
-        # Convert timestamp to datetime
-        timestamp = data['payload']['robot']['state']['reported']['aws']['timestamp'] / 1000
-        last_online = datetime.datetime.fromtimestamp(timestamp)
-        result["last_online"] = last_online.isoformat()
-
-        # Update based on device type
-        if self._device_type == "vr":
-            self._update_vr_robot_data(data, result)
-        elif self._device_type == "vortrax":
-            self._update_vortrax_robot_data(data, result)
-        elif self._device_type == "cyclobat":
-            self._update_cyclobat_robot_data(data, result)
-        elif self._device_type == "cyclonext":
-            self._update_cyclonext_robot_data(data, result)
+        # Convert timestamp to datetime (only if we have valid data)
+        if data and 'payload' in data:
+            timestamp = data['payload']['robot']['state']['reported']['aws']['timestamp'] / 1000
+            last_online = datetime.datetime.fromtimestamp(timestamp)
+            result["last_online"] = last_online.isoformat()
+            
+            # Only update device-specific data if we have valid payload data
+            # Update based on device type
+            if self._device_type == "vr":
+                self._update_vr_robot_data(data, result)
+            elif self._device_type == "vortrax":
+                self._update_vortrax_robot_data(data, result)
+            elif self._device_type == "cyclobat":
+                self._update_cyclobat_robot_data(data, result)
+            elif self._device_type == "cyclonext":
+                self._update_cyclonext_robot_data(data, result)
+        else:
+            result["last_online"] = "unknown"
+            # Don't call device-specific update methods when we don't have valid data
+            # Set default values for missing data
+            result["activity"] = "unknown"
+            result["error_state"] = result.get("error_state", "no_data")
 
         return result
 
     def _update_vr_robot_data(self, data, result):
         """Update status for VR type robot."""
+        # Ensure we have valid data structure before proceeding
+        if not data or 'payload' not in data:
+            _LOGGER.debug("Invalid data structure for VR robot update")
+            result["activity"] = "unknown"
+            result["error_state"] = "no_data"
+            return
+            
         try:
-            result["temperature"] = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['val']
+            robot_data = data['payload']['robot']['state']['reported']['equipment']['robot']
+        except (KeyError, TypeError):
+            _LOGGER.debug("Missing robot data structure for VR robot")
+            result["activity"] = "unknown"
+            result["error_state"] = "no_data"
+            return
+            
+        try:
+            result["temperature"] = robot_data['sensors']['sns_1']['val']
         except Exception:
             try: 
-                result["temperature"] = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['state']
+                result["temperature"] = robot_data['sensors']['sns_1']['state']
             except Exception:
                 # Zodiac XA 5095 iQ does not support temp
                 result["temperature"] = '0'
 
-        robot_state = data['payload']['robot']['state']['reported']['equipment']['robot']['state']
-        if robot_state == 1:
-            self._activity = VacuumActivity.CLEANING
-            result["activity"] = "cleaning"
-        elif robot_state == 3:
-            self._activity = VacuumActivity.RETURNING
-            result["activity"] = "returning"
-        else:
-            self._activity = VacuumActivity.IDLE
-            result["activity"] = "idle"
+        try:
+            robot_state = robot_data['state']
+            if robot_state == 1:
+                self._activity = VacuumActivity.CLEANING
+                result["activity"] = "cleaning"
+            elif robot_state == 3:
+                self._activity = VacuumActivity.RETURNING
+                result["activity"] = "returning"
+            else:
+                self._activity = VacuumActivity.IDLE
+                result["activity"] = "idle"
+        except (KeyError, TypeError):
+            result["activity"] = "unknown"
 
-        # Extract other attributes
-        result["canister"] = data['payload']['robot']['state']['reported']['equipment']['robot']['canister']*100
-        result["error_state"] = data['payload']['robot']['state']['reported']['equipment']['robot']['errorState']
-        result["total_hours"] = data['payload']['robot']['state']['reported']['equipment']['robot']['totalHours']
+        # Extract other attributes with safe access
+        try:
+            result["canister"] = robot_data['canister']*100
+        except (KeyError, TypeError):
+            result["canister"] = 0
+            
+        try:
+            result["error_state"] = robot_data['errorState']
+        except (KeyError, TypeError):
+            result["error_state"] = "unknown"
+            
+        try:
+            result["total_hours"] = robot_data['totalHours']
+        except (KeyError, TypeError):
+            result["total_hours"] = 0
 
         # Get current cycle (fan speed) and update it
         try:
-            current_cycle = data['payload']['robot']['state']['reported']['equipment']['robot']['prCyc']
+            current_cycle = robot_data['prCyc']
             result["cycle"] = current_cycle
-            # Map cycle to fan speed
+            # Map cycle to fan speed (using translation keys)
             cycle_map = {
-                0: "Wall only",           # Wall only
-                1: "Floor only",          # Floor only
-                2: "SMART Floor and walls", # SMART mode
-                3: "Floor and walls"      # Floor and walls
+                0: "wall_only",           # Wall only
+                1: "floor_only",          # Floor only
+                2: "smart_floor_and_walls", # SMART mode
+                3: "floor_and_walls"      # Floor and walls
             }
-            self._fan_speed = cycle_map.get(current_cycle, "Floor only")
+            self._fan_speed = cycle_map.get(current_cycle, "floor_only")
             result["fan_speed"] = self._fan_speed
         except Exception as e:
             _LOGGER.debug(f"Error setting fan speed for VR robot: {e}")
-            self._fan_speed = "Floor only"  # Default to floor only if we can't determine
+            self._fan_speed = "floor_only"  # Default to floor only if we can't determine
             result["fan_speed"] = self._fan_speed
 
         # Convert timestamp to datetime
-        timestamp = data['payload']['robot']['state']['reported']['equipment']['robot']['cycleStartTime']
-        cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
-        result["cycle_start_time"] = cycle_start_time.isoformat()
+        try:
+            timestamp = robot_data['cycleStartTime']
+            cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
+            result["cycle_start_time"] = cycle_start_time.isoformat()
 
-        cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot']['durations']
-        cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
-        result["cycle_duration"] = cycle_duration
+            cycle_duration_values = robot_data['durations']
+            cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
+            result["cycle_duration"] = cycle_duration
 
-        # Calculate end time and remaining time
-        self._calculate_times(cycle_start_time, cycle_duration, result)
+            # Calculate end time and remaining time
+            self._calculate_times(cycle_start_time, cycle_duration, result)
+        except Exception as e:
+            _LOGGER.debug(f"Error processing cycle times for VR robot: {e}")
+            result["cycle_start_time"] = datetime.datetime.now().isoformat()
+            result["cycle_duration"] = 0
+            result["time_remaining"] = 0
+            result["time_remaining_human"] = self._format_time_human(0, 0, 0)
 
     def _update_cyclobat_robot_data(self, data, result):
         """Update status for cyclobat type robot."""
-        robot_data = data['payload']['robot']['state']['reported']['equipment']['robot']
-        main_data = robot_data['main']
-        battery_data = robot_data['battery']
-        stats_data = robot_data['stats']
-        last_cycle_data = robot_data['lastCycle']
-        cycles_data = robot_data['cycles']
+        # Ensure we have valid data structure before proceeding
+        if not data or 'payload' not in data:
+            _LOGGER.debug("Invalid data structure for cyclobat robot update")
+            result["activity"] = "unknown"
+            result["error_state"] = "no_data"
+            return
+            
+        try:
+            robot_data = data['payload']['robot']['state']['reported']['equipment']['robot']
+            main_data = robot_data['main']
+            battery_data = robot_data['battery']
+            stats_data = robot_data['stats']
+            last_cycle_data = robot_data['lastCycle']
+            cycles_data = robot_data['cycles']
+        except (KeyError, TypeError):
+            _LOGGER.debug("Missing robot data structure for cyclobat robot")
+            result["activity"] = "unknown"
+            result["error_state"] = "no_data"
+            return
 
-        # Basic status and version info
-        result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+        # Basic status and version info with safe access
+        try:
+            result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+        except (KeyError, TypeError):
+            pass  # Status already set in calling method
+            
         result["version"] = robot_data.get('vr', 'Unknown')
         result["serial"] = robot_data.get('sn', '')
 
-        # Main state information
-        robot_state = main_data['state']
-        if robot_state == 1:
-            self._activity = VacuumActivity.CLEANING
-            result["activity"] = "cleaning"
-        elif robot_state == 3:
-            self._activity = VacuumActivity.RETURNING
-            result["activity"] = "returning"
-        else:
-            self._activity = VacuumActivity.IDLE
-            result["activity"] = "idle"
+        # Main state information with safe access
+        try:
+            robot_state = main_data['state']
+            if robot_state == 1:
+                self._activity = VacuumActivity.CLEANING
+                result["activity"] = "cleaning"
+            elif robot_state == 3:
+                self._activity = VacuumActivity.RETURNING
+                result["activity"] = "returning"
+            else:
+                self._activity = VacuumActivity.IDLE
+                result["activity"] = "idle"
+        except (KeyError, TypeError):
+            result["activity"] = "unknown"
 
-        # Main control and mode information
-        result["control_state"] = str(main_data['ctrl'])
-        result["mode"] = str(main_data['mode'])
-        result["error_code"] = str(main_data['error'])
+        # Main control and mode information with safe access
+        result["control_state"] = str(main_data.get('ctrl', 'unknown'))
+        result["mode"] = str(main_data.get('mode', 'unknown'))
+        result["error_code"] = str(main_data.get('error', 'unknown'))
         
-        # Battery information
+        # Battery information with safe access
         result["battery_version"] = battery_data.get('vr', 'Unknown')
-        result["battery_state"] = str(battery_data['state'])
-        result["battery_percentage"] = str(battery_data['userChargePerc'])
-        result["battery_level"] = str(battery_data['userChargePerc'])
-        result["battery_charge_state"] = str(battery_data['userChargeState'])
-        result["battery_cycles"] = str(battery_data['cycles'])
-        result["battery_warning_code"] = str(battery_data['warning']['code'])
+        result["battery_state"] = str(battery_data.get('state', 'unknown'))
+        result["battery_percentage"] = str(battery_data.get('userChargePerc', '0'))
+        result["battery_level"] = str(battery_data.get('userChargePerc', '0'))
+        result["battery_charge_state"] = str(battery_data.get('userChargeState', 'unknown'))
+        result["battery_cycles"] = str(battery_data.get('cycles', '0'))
+        result["battery_warning_code"] = str(battery_data.get('warning', {}).get('code', 'unknown'))
 
-        # Statistics
-        result["total_hours"] = str(stats_data['totRunTime'])
-        result["diagnostic_code"] = str(stats_data['diagnostic'])
-        result["temperature"] = str(stats_data['tmp'])
-        result["last_error_code"] = str(stats_data['lastError']['code'])
-        result["last_error_cycle"] = str(stats_data['lastError']['cycleNb'])
+        # Statistics with safe access
+        result["total_hours"] = str(stats_data.get('totRunTime', '0'))
+        result["diagnostic_code"] = str(stats_data.get('diagnostic', 'unknown'))
+        result["temperature"] = str(stats_data.get('tmp', '0'))
+        result["last_error_code"] = str(stats_data.get('lastError', {}).get('code', 'unknown'))
+        result["last_error_cycle"] = str(stats_data.get('lastError', {}).get('cycleNb', 'unknown'))
 
-        # Last cycle information
-        result["last_cycle_number"] = str(last_cycle_data['cycleNb'])
-        result["last_cycle_duration"] = str(last_cycle_data['duration'])
-        result["last_cycle_mode"] = str(last_cycle_data['mode'])
-        result["cycle"] = str(last_cycle_data['endCycleType'])
-        result["last_cycle_error"] = str(last_cycle_data['errorCode'])
+        # Last cycle information with safe access
+        result["last_cycle_number"] = str(last_cycle_data.get('cycleNb', 'unknown'))
+        result["last_cycle_duration"] = str(last_cycle_data.get('duration', '0'))
+        result["last_cycle_mode"] = str(last_cycle_data.get('mode', 'unknown'))
+        result["cycle"] = str(last_cycle_data.get('endCycleType', '0'))
+        result["last_cycle_error"] = str(last_cycle_data.get('errorCode', 'unknown'))
 
-        # Cycle durations
-        result["floor_duration"] = str(cycles_data['floorTim']['duration'])
-        result["floor_walls_duration"] = str(cycles_data['floorWallsTim']['duration'])
-        result["smart_duration"] = str(cycles_data['smartTim']['duration'])
-        result["waterline_duration"] = str(cycles_data['waterlineTim']['duration'])
-        result["first_smart_done"] = str(cycles_data['firstSmartDone'])
-        result["lift_pattern_time"] = str(cycles_data['liftPatternTim'])
+        # Cycle durations with safe access
+        result["floor_duration"] = str(cycles_data.get('floorTim', {}).get('duration', '0'))
+        result["floor_walls_duration"] = str(cycles_data.get('floorWallsTim', {}).get('duration', '0'))
+        result["smart_duration"] = str(cycles_data.get('smartTim', {}).get('duration', '0'))
+        result["waterline_duration"] = str(cycles_data.get('waterlineTim', {}).get('duration', '0'))
+        result["first_smart_done"] = str(cycles_data.get('firstSmartDone', 'false'))
+        result["lift_pattern_time"] = str(cycles_data.get('liftPatternTim', '0'))
 
-        # Convert timestamp to datetime for cycle start time
-        timestamp = main_data['cycleStartTime']
-        cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
-        result["cycle_start_time"] = cycle_start_time.isoformat()
+        # Convert timestamp to datetime for cycle start time with safe access
+        try:
+            timestamp = main_data['cycleStartTime']
+            cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
+            result["cycle_start_time"] = cycle_start_time.isoformat()
 
-        # Get the appropriate cycle duration based on the current cycle type
-        cycle_type = last_cycle_data['endCycleType']
-        cycle_duration = None
-        if cycle_type == 0:  # Floor only
-            cycle_duration = cycles_data['floorTim']['duration']
-        elif cycle_type == 1:  # Floor and walls
-            cycle_duration = cycles_data['floorWallsTim']['duration']
-        elif cycle_type == 2:  # Smart
-            cycle_duration = cycles_data['smartTim']['duration']
-        elif cycle_type == 3:  # Waterline
-            cycle_duration = cycles_data['waterlineTim']['duration']
+            # Get the appropriate cycle duration based on the current cycle type
+            cycle_type = last_cycle_data['endCycleType']
+            cycle_duration = None
+            if cycle_type == 0:  # Floor only
+                cycle_duration = cycles_data['floorTim']['duration']
+            elif cycle_type == 1:  # Floor and walls
+                cycle_duration = cycles_data['floorWallsTim']['duration']
+            elif cycle_type == 2:  # Smart
+                cycle_duration = cycles_data['smartTim']['duration']
+            elif cycle_type == 3:  # Waterline
+                cycle_duration = cycles_data['waterlineTim']['duration']
 
-        if cycle_duration is not None:
-            result["cycle_duration"] = cycle_duration
-            # Calculate end time and remaining time
-            self._calculate_times(cycle_start_time, cycle_duration, result)
+            if cycle_duration is not None:
+                result["cycle_duration"] = cycle_duration
+                # Calculate end time and remaining time
+                self._calculate_times(cycle_start_time, cycle_duration, result)
+            else:
+                result["cycle_duration"] = 0
+                result["time_remaining"] = 0
+                result["time_remaining_human"] = self._format_time_human(0, 0, 0)
+        except Exception as e:
+            _LOGGER.debug(f"Error processing cycle times for cyclobat robot: {e}")
+            result["cycle_start_time"] = datetime.datetime.now().isoformat()
+            result["cycle_duration"] = 0
+            result["time_remaining"] = 0
+            result["time_remaining_human"] = self._format_time_human(0, 0, 0)
 
     def _update_vortrax_robot_data(self, data, result):
         """Update status for vortrax type robot."""
+        # Ensure we have valid data structure before proceeding
+        if not data or 'payload' not in data:
+            _LOGGER.debug("Invalid data structure for vortrax robot update")
+            result["activity"] = "unknown"
+            result["error_state"] = "no_data"
+            return
+            
         # Store product number if available
         try:
             result["product_number"] = data['payload']['robot']['state']['reported']['eboxData']['completeCleanerPn']
         except Exception:
             result["product_number"] = None
 
-        # Rest of the vortrax robot data update
         try:
-            result["temperature"] = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['val']
+            robot_data = data['payload']['robot']['state']['reported']['equipment']['robot']
+        except (KeyError, TypeError):
+            _LOGGER.debug("Missing robot data structure for vortrax robot")
+            result["activity"] = "unknown"
+            result["error_state"] = "no_data"
+            return
+
+        # Rest of the vortrax robot data update with safe access
+        try:
+            result["temperature"] = robot_data['sensors']['sns_1']['val']
         except Exception:
             try: 
-                result["temperature"] = data['payload']['robot']['state']['reported']['equipment']['robot']['sensors']['sns_1']['state']
+                result["temperature"] = robot_data['sensors']['sns_1']['state']
             except Exception:
                 result["temperature"] = '0'
 
-        robot_state = data['payload']['robot']['state']['reported']['equipment']['robot']['state']
-        if robot_state == 1:
-            self._activity = VacuumActivity.CLEANING
-            result["activity"] = "cleaning"
-        elif robot_state == 3:
-            self._activity = VacuumActivity.RETURNING
-            result["activity"] = "returning"
-        else:
-            self._activity = VacuumActivity.IDLE
-            result["activity"] = "idle"
+        try:
+            robot_state = robot_data['state']
+            if robot_state == 1:
+                self._activity = VacuumActivity.CLEANING
+                result["activity"] = "cleaning"
+            elif robot_state == 3:
+                self._activity = VacuumActivity.RETURNING
+                result["activity"] = "returning"
+            else:
+                self._activity = VacuumActivity.IDLE
+                result["activity"] = "idle"
+        except (KeyError, TypeError):
+            result["activity"] = "unknown"
 
-        # Extract other attributes
-        result["canister"] = data['payload']['robot']['state']['reported']['equipment']['robot']['canister']*100
-        result["error_state"] = data['payload']['robot']['state']['reported']['equipment']['robot']['errorState']
-        result["total_hours"] = data['payload']['robot']['state']['reported']['equipment']['robot']['totalHours']
+        # Extract other attributes with safe access
+        try:
+            result["canister"] = robot_data['canister']*100
+        except (KeyError, TypeError):
+            result["canister"] = 0
+            
+        try:
+            result["error_state"] = robot_data['errorState']
+        except (KeyError, TypeError):
+            result["error_state"] = "unknown"
+            
+        try:
+            result["total_hours"] = robot_data['totalHours']
+        except (KeyError, TypeError):
+            result["total_hours"] = 0
 
-        # Convert timestamp to datetime
-        timestamp = data['payload']['robot']['state']['reported']['equipment']['robot']['cycleStartTime']
-        cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
-        result["cycle_start_time"] = cycle_start_time.isoformat()
+        # Convert timestamp to datetime with safe access
+        try:
+            timestamp = robot_data['cycleStartTime']
+            cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
+            result["cycle_start_time"] = cycle_start_time.isoformat()
 
-        result["cycle"] = data['payload']['robot']['state']['reported']['equipment']['robot']['prCyc']
+            result["cycle"] = robot_data['prCyc']
 
-        cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot']['durations']
-        cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
-        result["cycle_duration"] = cycle_duration
+            cycle_duration_values = robot_data['durations']
+            cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
+            result["cycle_duration"] = cycle_duration
 
-        # Calculate end time and remaining time
-        self._calculate_times(cycle_start_time, cycle_duration, result)
+            # Calculate end time and remaining time
+            self._calculate_times(cycle_start_time, cycle_duration, result)
+        except Exception as e:
+            _LOGGER.debug(f"Error processing cycle times for vortrax robot: {e}")
+            result["cycle_start_time"] = datetime.datetime.now().isoformat()
+            result["cycle"] = 0
+            result["cycle_duration"] = 0
+            result["time_remaining"] = 0
+            result["time_remaining_human"] = self._format_time_human(0, 0, 0)
 
     def _update_cyclonext_robot_data(self, data, result):
         """Update status for cyclonext type robot."""
-        if data['payload']['robot']['state']['reported']['equipment']['robot.1']['mode'] == 1:
-            self._activity = VacuumActivity.CLEANING
-            result["activity"] = "cleaning"
-        else:
-            self._activity = VacuumActivity.IDLE
-            result["activity"] = "idle"
-
-        # Extract attributes
-        result["canister"] = data['payload']['robot']['state']['reported']['equipment']['robot.1']['canister']*100
-        result["error_state"] = data['payload']['robot']['state']['reported']['equipment']['robot.1']['errors']['code']
+        # Ensure we have valid data structure before proceeding
+        if not data or 'payload' not in data:
+            _LOGGER.debug("Invalid data structure for cyclonext robot update")
+            result["activity"] = "unknown"
+            result["error_state"] = "no_data"
+            return
+            
+        try:
+            robot_data = data['payload']['robot']['state']['reported']['equipment']['robot.1']
+        except (KeyError, TypeError):
+            _LOGGER.debug("Missing robot.1 data structure for cyclonext robot")
+            result["activity"] = "unknown"
+            result["error_state"] = "no_data"
+            return
 
         try:
-            result["total_hours"] = data['payload']['robot']['state']['reported']['equipment']['robot.1']['totRunTime']
+            if robot_data['mode'] == 1:
+                self._activity = VacuumActivity.CLEANING
+                result["activity"] = "cleaning"
+            else:
+                self._activity = VacuumActivity.IDLE
+                result["activity"] = "idle"
+        except (KeyError, TypeError):
+            result["activity"] = "unknown"
+
+        # Extract attributes with safe access
+        try:
+            result["canister"] = robot_data['canister']*100
+        except (KeyError, TypeError):
+            result["canister"] = 0
+            
+        try:
+            result["error_state"] = robot_data['errors']['code']
+        except (KeyError, TypeError):
+            result["error_state"] = "unknown"
+
+        try:
+            result["total_hours"] = robot_data['totRunTime']
         except Exception:
             # Not supported by some cyclonext models
             result["total_hours"] = 0
 
-        # Convert timestamp to datetime
-        timestamp = data['payload']['robot']['state']['reported']['equipment']['robot.1']['cycleStartTime']
-        cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
-        result["cycle_start_time"] = cycle_start_time.isoformat()
+        # Convert timestamp to datetime with safe access
+        try:
+            timestamp = robot_data['cycleStartTime']
+            cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
+            result["cycle_start_time"] = cycle_start_time.isoformat()
 
-        result["cycle"] = data['payload']['robot']['state']['reported']['equipment']['robot.1']['cycle']
+            result["cycle"] = robot_data['cycle']
 
-        cycle_duration_values = data['payload']['robot']['state']['reported']['equipment']['robot.1']['durations']
-        cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
-        result["cycle_duration"] = cycle_duration
+            cycle_duration_values = robot_data['durations']
+            cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
+            result["cycle_duration"] = cycle_duration
 
-        # Calculate end time and remaining time
-        self._calculate_times(cycle_start_time, cycle_duration, result)
+            # Calculate end time and remaining time
+            self._calculate_times(cycle_start_time, cycle_duration, result)
+        except Exception as e:
+            _LOGGER.debug(f"Error processing cycle times for cyclonext robot: {e}")
+            result["cycle_start_time"] = datetime.datetime.now().isoformat()
+            result["cycle"] = 0
+            result["cycle_duration"] = 0
+            result["time_remaining"] = 0
+            result["time_remaining_human"] = self._format_time_human(0, 0, 0)
 
     def _calculate_times(self, start_time, duration_minutes, result):
         """Calculate end time and remaining time."""
@@ -892,7 +1130,7 @@ class AqualinkClient:
             current_activity = result.get("activity", "idle")
             if current_activity not in ["cleaning", "returning"]:
                 result["time_remaining"] = 0
-                result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
+                result["time_remaining_human"] = self._format_time_human(0, 0, 0)
                 _LOGGER.debug("Device is idle (%s), setting time remaining to 0", current_activity)
                 return
             
@@ -914,7 +1152,7 @@ class AqualinkClient:
                     hours = int(total_seconds // 3600)
                     minutes = int((total_seconds % 3600) // 60)
                     seconds = int(total_seconds % 60)
-                    result["time_remaining_human"] = f"{hours} Hour(s) {minutes} Minute(s) {seconds} Second(s)"
+                    result["time_remaining_human"] = self._format_time_human(hours, minutes, seconds)
                     
                     _LOGGER.debug("Time remaining (minutes): %d, human readable: %s", 
                                 total_minutes, 
@@ -922,11 +1160,11 @@ class AqualinkClient:
                 else:
                     # If end time has passed, set to 0 (numeric) for time_remaining
                     result["time_remaining"] = 0
-                    result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
+                    result["time_remaining_human"] = self._format_time_human(0, 0, 0)
             else:
                 # If we don't have valid times, set to 0
                 result["time_remaining"] = 0
-                result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
+                result["time_remaining_human"] = self._format_time_human(0, 0, 0)
                 
             _LOGGER.debug(
                 "Time calculation: activity=%s, start=%s, end=%s, now=%s, remaining=%s",
@@ -943,7 +1181,7 @@ class AqualinkClient:
             result["cycle_end_time"] = None
             result["estimated_end_time"] = None
             result["time_remaining"] = 0
-            result["time_remaining_human"] = "0 Hour(s) 0 Minute(s) 0 Second(s)"
+            result["time_remaining_human"] = self._format_time_human(0, 0, 0)
 
     def add_minutes_to_datetime(self, dt, minutes):
         """Add minutes to a datetime object."""
@@ -972,84 +1210,129 @@ class AqualinkClient:
 
     async def send_login(self, data, headers):
         """Post a login request to the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.post(URL_LOGIN, data=data) as response:
-                if response.status == 403:
-                    if self._debug_mode:
-                        _LOGGER.error("Authentication failed: 403 Forbidden. Check your credentials or API key.")
-                    raise aiohttp.ClientResponseError(
-                        response.request_info,
-                        response.history,
-                        status=response.status,
-                        message="Authentication failed: 403 Forbidden",
-                        headers=response.headers
-                    )
-                
-                content_type = response.headers.get('Content-Type', '')
-                if 'application/json' not in content_type:
-                    text = await response.text()
-                    if self._debug_mode:
-                        _LOGGER.error(f"Unexpected content type: {content_type}. Response: {text[:200]}...")
-                    raise aiohttp.ClientResponseError(
-                        response.request_info,
-                        response.history,
-                        status=response.status,
-                        message=f"Unexpected content type: {content_type}",
-                        headers=response.headers
-                    )
-                
-                return await response.json()
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.post(URL_LOGIN, data=data) as response:
+                    if response.status == 403:
+                        if self._debug_mode:
+                            _LOGGER.error("Authentication failed: 403 Forbidden. Check your credentials or API key.")
+                        raise aiohttp.ClientResponseError(
+                            response.request_info,
+                            response.history,
+                            status=response.status,
+                            message="Authentication failed: 403 Forbidden",
+                            headers=response.headers
+                        )
+                    
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'application/json' not in content_type:
+                        text = await response.text()
+                        if self._debug_mode:
+                            _LOGGER.error(f"Unexpected content type: {content_type}. Response: {text[:200]}...")
+                        raise aiohttp.ClientResponseError(
+                            response.request_info,
+                            response.history,
+                            status=response.status,
+                            message=f"Unexpected content type: {content_type}",
+                            headers=response.headers
+                        )
+                    
+                    return await response.json()
+        except asyncio.CancelledError:
+            if self._debug_mode:
+                _LOGGER.debug("Login request cancelled")
+            raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def get_devices(self, params, headers):
         """Get device list from the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(URL_GET_DEVICES, params=params) as response:
-                return await response.json()
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(URL_GET_DEVICES, params=params) as response:
+                    return await response.json()
+        except asyncio.CancelledError:
+            if self._debug_mode:
+                _LOGGER.debug("Get devices request cancelled")
+            raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def get_device_features(self, url):
         """Get device features from the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            async with session.get(url) as response:
-                return await response.json()
+        try:
+            async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
+                async with session.get(url) as response:
+                    return await response.json()
+        except asyncio.CancelledError:
+            if self._debug_mode:
+                _LOGGER.debug("Get device features request cancelled")
+            raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def get_device_status(self, request):
         """Get device status from the iaqualink_robots API via websocket.
-        This is a fallback method when the persistent connection fails."""
-        async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-            async with session.ws_connect(URL_WS) as websocket:
-                await websocket.send_json(request)
-                message = await websocket.receive(timeout=10)
-            return message.json()
-
-    async def post_command_i2d(self, url, request):
-        """Send command to i2d robot via the iaqualink_robots API."""
-        async with aiohttp.ClientSession(headers={"Authorization": self._id_token, "api_key": self._api_key}) as session:
-            async with session.post(url, json=request) as response:
-                return await response.json()
-    
-    async def set_cleaner_state(self, request):
-        """Set cleaner state via the iaqualink_robots API websocket."""
+        This creates a fresh websocket connection for each request to ensure current data."""
         try:
-            # Try to use the persistent connection
-            await self._ensure_websocket_connection()
-            if self._ws_connection and not self._ws_connection.closed:
-                await self._ws_connection.send_json(request)
-                self._last_ws_activity = datetime.datetime.now()
-            else:
-                # No valid connection available, fall back to standard method
-                raise RuntimeError("No valid websocket connection available")
-        except Exception as e:
-            if self._debug_mode:
-                _LOGGER.debug(f"Error using persistent websocket for command: {e}, falling back to standard method")
-            await self._close_websocket()
-            
-            # Fall back to non-persistent connection
             async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
                 async with session.ws_connect(URL_WS) as websocket:
                     await websocket.send_json(request)
+                    message = await asyncio.wait_for(websocket.receive(), timeout=10)
+                    if message.type == aiohttp.WSMsgType.TEXT:
+                        return message.json()
+                    elif message.type == aiohttp.WSMsgType.CLOSED:
+                        _LOGGER.debug("Websocket connection closed during device status request")
+                        return None
+                    elif message.type == aiohttp.WSMsgType.ERROR:
+                        _LOGGER.debug(f"Websocket error during device status request: {message.data}")
+                        return None
+                    else:
+                        _LOGGER.debug(f"Unexpected websocket message type {message.type} ({message.type.name if hasattr(message.type, 'name') else 'unknown'}) in device status request")
+                        return None
+        except asyncio.CancelledError:
+            if self._debug_mode:
+                _LOGGER.debug("Get device status request cancelled")
+            raise  # Re-raise cancellation to preserve shutdown behavior
+        except Exception as e:
+            _LOGGER.debug(f"Device status websocket connection failed: {e}")
+            # Return None instead of raising to let callers handle gracefully
+            return None
+
+    async def post_command_i2d(self, url, request):
+        """Send command to i2d robot via the iaqualink_robots API."""
+        try:
+            async with aiohttp.ClientSession(headers={"Authorization": self._id_token, "api_key": self._api_key}) as session:
+                async with session.post(url, json=request) as response:
+                    return await response.json()
+        except asyncio.CancelledError:
+            if self._debug_mode:
+                _LOGGER.debug("Post command i2d request cancelled")
+            raise  # Re-raise cancellation to preserve shutdown behavior
+    
+    async def set_cleaner_state(self, request):
+        """Set cleaner state via the iaqualink_robots API websocket."""
+        response_data = None
+        try:
+            # Use fresh websocket connection for each command to ensure reliability
+            async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
+                async with session.ws_connect(URL_WS) as websocket:
+                    await websocket.send_json(request)
+                    
+                    # Try to get response to confirm command was received
+                    try:
+                        response = await asyncio.wait_for(websocket.receive(), timeout=10)
+                        if response.type == aiohttp.WSMsgType.TEXT:
+                            response_data = response.json()
+                            _LOGGER.debug(f"Command response received: {response_data}")
+                    except asyncio.TimeoutError:
+                        _LOGGER.debug("No response received within timeout, command may still succeed")
+                    except Exception as e:
+                        _LOGGER.debug(f"Error receiving response: {e}")
+                        
+        except Exception as e:
+            if self._debug_mode:
+                _LOGGER.debug(f"Error sending websocket command: {e}")
                 
         # Wait 2 seconds to avoid flooding iaqualink server
         await asyncio.sleep(2)
+        return response_data
+        
+    # Note: _listen_for_updates method disabled - using fresh connections for reliability
                 
     async def start_cleaning(self):
         """Start the vacuum cleaning."""
@@ -1168,7 +1451,7 @@ class AqualinkClient:
         reset_values = {
             "estimated_end_time": now.isoformat(),
             "time_remaining": 0,
-            "time_remaining_human": "0 Hour(s) 0 Minute(s) 0 Second(s)",
+            "time_remaining_human": self._format_time_human(0, 0, 0),
             "cycle_start_time": now.isoformat(),
             "activity": "idle"  # Also set activity to idle to ensure proper state
         }
@@ -1206,27 +1489,65 @@ class AqualinkClient:
             }
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
             
+    def _extract_fan_speed_from_response(self, response_data, requested_fan_speed):
+        """Extract current fan speed from websocket response if available."""
+        if not response_data:
+            return None
+            
+        try:
+            payload = response_data.get("payload", {})
+            
+            # For different robot types, the fan speed might be in different locations
+            if self._device_type == "vr" or self._device_type == "vortrax":
+                # Look for prCyc (program cycle) in the response
+                robot_state = payload.get("robot", {}).get("state", {}).get("reported", {}).get("equipment", {}).get("robot", {})
+                pr_cyc = robot_state.get("prCyc")
+                if pr_cyc is not None:
+                    cycle_map = {0: "wall_only", 1: "floor_only", 2: "smart_floor_and_walls", 3: "floor_and_walls"}
+                    return cycle_map.get(pr_cyc, requested_fan_speed)
+                    
+            elif self._device_type == "cyclobat":
+                # Look for mode in cyclobat response
+                robot_state = payload.get("robot", {}).get("state", {}).get("reported", {}).get("equipment", {}).get("robot", {}).get("main", {})
+                mode = robot_state.get("mode")
+                if mode is not None:
+                    cycle_map = {3: "wall_only", 0: "floor_only", 2: "smart_floor_and_walls", 1: "floor_and_walls"}
+                    return cycle_map.get(mode, requested_fan_speed)
+                    
+            elif self._device_type == "cyclonext":
+                # Look for cycle in cyclonext response
+                robot_state = payload.get("robot", {}).get("state", {}).get("reported", {}).get("equipment", {}).get("robot.1", {})
+                cycle = robot_state.get("cycle")
+                if cycle is not None:
+                    cycle_map = {1: "floor_only", 3: "floor_and_walls"}
+                    return cycle_map.get(cycle, requested_fan_speed)
+                    
+        except Exception as e:
+            _LOGGER.debug(f"Error extracting fan speed from response: {e}")
+            
+        return None
+
     async def set_fan_speed(self, fan_speed, fan_speed_list):
         """Set fan speed (cleaning mode) for the vacuum cleaner."""
         if fan_speed not in fan_speed_list:
             raise ValueError('Invalid fan speed')
             
         if self._device_type == "i2d_robot":
-            await self._set_i2d_fan_speed(fan_speed)
+            return await self._set_i2d_fan_speed(fan_speed)
         else:
-            await self._set_other_fan_speed(fan_speed)
+            return await self._set_other_fan_speed(fan_speed)
             
     async def _set_i2d_fan_speed(self, fan_speed):
         """Set fan speed for i2d robot."""
         cycle_speed_map = {
-            "Walls only": "0A1284",
-            "Floor only": "0A1280",
-            "Floor and walls": "0A1283"
+            "walls_only": "0A1284",
+            "floor_only": "0A1280",
+            "floor_and_walls": "0A1283"
         }
         
         _cycle_speed = cycle_speed_map.get(fan_speed)
         if not _cycle_speed:
-            return
+            return None
             
         request = {
             "command": "/command",
@@ -1234,7 +1555,14 @@ class AqualinkClient:
             "user_id": self._id
         }
         url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
-        await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
+        response = await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
+        
+        # For i2d robots, extract success/failure from response
+        if response and response.get("command", {}).get("response"):
+            _LOGGER.debug(f"i2d fan speed command response: {response}")
+            return {"success": True, "fan_speed": fan_speed, "response": response}
+        
+        return {"success": False, "fan_speed": fan_speed}
         
     async def _set_other_fan_speed(self, fan_speed):
         """Set fan speed for non-i2d robots."""
@@ -1243,10 +1571,10 @@ class AqualinkClient:
         request = None
         if self._device_type == "vr" or self._device_type == "vortrax":
             cycle_speed_map = {
-                "Wall only": "0",
-                "Floor only": "1",
-                "SMART Floor and walls": "2",
-                "Floor and walls": "3"
+                "wall_only": "0",
+                "floor_only": "1",
+                "smart_floor_and_walls": "2",
+                "floor_and_walls": "3"
             }
             _cycle_speed = cycle_speed_map.get(fan_speed)
             if _cycle_speed:
@@ -1264,10 +1592,10 @@ class AqualinkClient:
                 
         elif self._device_type == "cyclobat":
             cycle_speed_map = {
-                "Wall only": "3",
-                "Floor only": "0",
-                "SMART Floor and walls": "2",
-                "Floor and walls": "1"
+                "wall_only": "3",
+                "floor_only": "0",
+                "smart_floor_and_walls": "2",
+                "floor_and_walls": "1"
             }
             _cycle_speed = cycle_speed_map.get(fan_speed)
             if _cycle_speed:
@@ -1303,7 +1631,28 @@ class AqualinkClient:
                 }
         
         if request:
-            await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+            response_data = await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+            
+            # Extract relevant information from the websocket response
+            result = {"success": True, "fan_speed": fan_speed}
+            if response_data:
+                _LOGGER.debug(f"Fan speed command response: {response_data}")
+                result["response"] = response_data
+                
+                # Try to extract the actual fan speed from the response
+                confirmed_fan_speed = self._extract_fan_speed_from_response(response_data, fan_speed)
+                if confirmed_fan_speed:
+                    result["confirmed_fan_speed"] = confirmed_fan_speed
+                    _LOGGER.debug(f"Websocket confirmed fan speed: {confirmed_fan_speed}")
+                
+                # For some robot types, we might get immediate state confirmation
+                payload = response_data.get("payload", {})
+                if payload:
+                    result["payload"] = payload
+                    
+            return result
+        
+        return {"success": False, "fan_speed": fan_speed, "error": "No valid request generated"}
 
     async def remote_forward(self):
         """Send forward command to the robot for VR and VortraX robots."""
@@ -1415,17 +1764,39 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=interval),
         )
         self.client = client
+        self.client.set_hass(hass)  # Set hass reference for translations
         self._debug_mode = debug_mode
         self._last_data = {}
         self._consecutive_failures = 0
         self._title = None  # Add this property to store the device title/name
         # Increasing from 3 to 30 - this is 15 minutes with default 30 second scan interval
         self._max_failures_before_unavailable = 30  # Allow 30 failures before marking unavailable
+        self._setup_complete = False  # Flag to track if initial setup is complete
+        
+        # Note: Background websocket listener disabled - using fresh connections for reliability
+        # self._websocket_listener_task = None
+        # self._should_stop_listener = False
+        # self._live_updates_enabled = True
+
+    # Note: Background websocket listener methods disabled - using fresh connections for reliability
+    # All websocket listener functionality has been replaced with fresh connection approach
 
     async def _async_update_data(self):
         try:
-            # Get new status data - this call may include reset time values after stop_cleaning
-            status = await self.client.fetch_status()
+            # Check if this is the first call (initial setup)
+            is_first_call = not hasattr(self, '_setup_complete') or not self._setup_complete
+            
+            if is_first_call:
+                # Use quick setup for faster initial loading
+                _LOGGER.debug("Performing quick setup for faster initial load")
+                status = await self.client.fetch_status(quick_setup=True)
+                self._setup_complete = True
+                
+                # Note: Background websocket listener disabled - using fresh connections
+                _LOGGER.debug("Quick setup complete, using fresh connections for data requests")
+            else:
+                # Normal operation with full status fetch
+                status = await self.client.fetch_status()
             
             # Always use fresh status data
             merged_data = status.copy()
@@ -1441,6 +1812,10 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             
             # Save data for next update
             self._last_data = merged_data.copy()
+            
+            # The coordinator automatically notifies entities when data changes
+            # No need for explicit signaling as CoordinatorEntity handles this
+            
             return merged_data
             
         except Exception as err:
@@ -1459,11 +1834,20 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                 if self._last_data:
                     _LOGGER.debug("Returning last known good data to keep entity available")
                     return self._last_data.copy()
+                else:
+                    # No previous data available, return minimal data to prevent unavailable state
+                    _LOGGER.debug("No previous data available, returning minimal data")
+                    return {
+                        "serial_number": getattr(self.client, '_serial', 'unknown'),
+                        "device_type": getattr(self.client, '_device_type', 'unknown'),
+                        "status": "offline",
+                        "activity": "unknown",
+                        "error_state": "connection_failed"
+                    }
             else:
                 _LOGGER.error(f"Update failed after {self._consecutive_failures} attempts: {err}\nDetails:\n{error_details}")
-            
-            # Only raise UpdateFailed after max failures to mark entity unavailable
-            raise UpdateFailed(f"Failed after {self._consecutive_failures} attempts: {err}")
+                # Only raise UpdateFailed after max failures to mark entity unavailable
+                raise UpdateFailed(f"Failed after {self._consecutive_failures} attempts: {err}")
     
     async def async_start_cleaning(self):
         """Start cleaning - centralized business logic."""
@@ -1505,8 +1889,11 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         """Send stop command to the robot for remote control - centralized business logic."""
         await self._execute_remote_command(self.client.remote_stop)
         
+    # Note: Live update methods disabled - using fresh connections for reliability
+    
     async def cleanup(self):
         """Clean up resources when coordinator is being unloaded."""
-        # Close any open websocket connections
-        if hasattr(self.client, '_close_websocket'):
-            await self.client._close_websocket()
+        _LOGGER.debug("Starting coordinator cleanup")
+        
+        # Note: Websocket listener cleanup disabled - using fresh connections
+        _LOGGER.debug("Coordinator cleanup complete - no persistent connections to close")

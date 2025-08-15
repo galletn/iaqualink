@@ -1,75 +1,55 @@
 # Remote control services for VR and VortraX robots
 # These services are also available as button entities for easier UI access
 remote_forward:
-  name: Remote Forward
-  description: Send forward command to the robot for remote control (VR and VortraX robots only)
   target:
     entity:
       domain: vacuum
   fields:
     entity_id:
-      name: Entity
-      description: Vacuum entity to control
       required: true
       selector:
         entity:
           domain: vacuum
 
 remote_backward:
-  name: Remote Backward
-  description: Send backward command to the robot for remote control (VR and VortraX robots only)
   target:
     entity:
       domain: vacuum
   fields:
     entity_id:
-      name: Entity
-      description: Vacuum entity to control
       required: true
       selector:
         entity:
           domain: vacuum
 
 remote_rotate_left:
-  name: Remote Rotate Left
-  description: Send rotate left command to the robot for remote control (VR and VortraX robots only)
   target:
     entity:
       domain: vacuum
   fields:
     entity_id:
-      name: Entity
-      description: Vacuum entity to control
       required: true
       selector:
         entity:
           domain: vacuum
 
 remote_rotate_right:
-  name: Remote Rotate Right
-  description: Send rotate right command to the robot for remote control (VR and VortraX robots only)
   target:
     entity:
       domain: vacuum
   fields:
     entity_id:
-      name: Entity
-      description: Vacuum entity to control
       required: true
       selector:
         entity:
           domain: vacuum
 
 remote_stop:
-  name: Remote Stop
-  description: Send stop command to the robot for remote control (VR and VortraX robots only)
   target:
     entity:
       domain: vacuum
   fields:
     entity_id:
-      name: Entity
-      description: Vacuum entity to control
       required: true
       selector:
         entity:

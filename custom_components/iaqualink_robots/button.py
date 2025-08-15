@@ -26,11 +26,11 @@ async def async_setup_entry(
     # Only create remote control buttons for VR and VortraX robots
     if client._device_type in ["vr", "vortrax"]:
         buttons = [
-            AqualinkRemoteButton(coordinator, client, "forward", "Remote Forward", "mdi:chevron-up-circle"),
-            AqualinkRemoteButton(coordinator, client, "backward", "Remote Backward", "mdi:chevron-down-circle"),
-            AqualinkRemoteButton(coordinator, client, "rotate_left", "Remote Rotate Left", "mdi:rotate-left"),
-            AqualinkRemoteButton(coordinator, client, "rotate_right", "Remote Rotate Right", "mdi:rotate-right"),
-            AqualinkRemoteButton(coordinator, client, "stop", "Remote Stop", "mdi:stop-circle-outline"),
+            AqualinkRemoteButton(coordinator, client, "forward", "remote_forward", "mdi:chevron-up-circle"),
+            AqualinkRemoteButton(coordinator, client, "backward", "remote_backward", "mdi:chevron-down-circle"),
+            AqualinkRemoteButton(coordinator, client, "rotate_left", "remote_rotate_left", "mdi:rotate-left"),
+            AqualinkRemoteButton(coordinator, client, "rotate_right", "remote_rotate_right", "mdi:rotate-right"),
+            AqualinkRemoteButton(coordinator, client, "stop", "remote_stop", "mdi:stop-circle-outline"),
         ]
         async_add_entities(buttons)
 
@@ -38,12 +38,12 @@ async def async_setup_entry(
 class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
     """Button entity for remote control commands."""
 
-    def __init__(self, coordinator: AqualinkDataUpdateCoordinator, client, command: str, name: str, icon: str):
+    def __init__(self, coordinator: AqualinkDataUpdateCoordinator, client, command: str, translation_key: str, icon: str):
         """Initialize the button."""
         super().__init__(coordinator)
         self._client = client
         self._command = command
-        self._attr_name = name
+        self._attr_translation_key = translation_key
         self._attr_icon = icon
         self._attr_unique_id = f"{client.robot_id}_remote_{command}"
         self._attr_should_poll = False
@@ -58,10 +58,10 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
     @property
     def available(self):
         """Return if entity is available."""
-        # Button is available if coordinator is available and device is connected
+        # Button is available if we have data and device is connected
+        # Use resilient data approach - don't rely on last_update_success
         return (
-            self.coordinator.last_update_success
-            and self.coordinator.data
+            self.coordinator.data is not None
             and self.coordinator.data.get("status") == "connected"
         )
 

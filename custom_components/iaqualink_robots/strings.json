@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "iAqualink Robot Setup",
+        "description": "Enter your iAquaLink account credentials.",
+        "data": {
+          "name": "Device Name",
+          "username": "Username", 
+          "password": "Password"
+        },
+        "data_description": {
+          "name": "Name for your pool robot in Home Assistant",
+          "username": "Your iAquaLink account username",
+          "password": "Your iAquaLink account password"
+        }
+      },
+      "select_device": {
+        "title": "Select Robot",
+        "description": "Select which robot to add to Home Assistant.",
+        "data": {
+          "device": "Robot",
+          "name": "Device Name"
+        },
+        "data_description": {
+          "device": "Choose the robot you want to add",
+          "name": "Optional: Override the default name for this robot"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to iAquaLink service. Please check your credentials and try again.",
+      "no_devices": "No robots found on your account. Please check that your robot is properly registered with iAquaLink.",
+      "device_not_found": "Selected device could not be found. Please try again.",
+      "unknown": "Unexpected error occurred. Please try again."
+    },
+    "abort": {
+      "already_configured": "This robot is already configured in Home Assistant."
+    }
+  }
+}

@@ -16,7 +16,9 @@ URL_WS: Final = "wss://prod-socket.zodiac-io.com/devices"
 # API key is constant for all iAqualink devices
 API_KEY: Final = "EOOEMOW4YR6QNB07"
 
-SCAN_INTERVAL: Final = timedelta(seconds=30)
+SCAN_INTERVAL: Final = timedelta(seconds=15)  # Reduced from 30 to 15 seconds for faster updates
+# For even faster updates, you can reduce this to 10 seconds, but be mindful of API rate limits
+# SCAN_INTERVAL: Final = timedelta(seconds=10)  # Uncomment for very fast updates
 
 # Load manifest data efficiently
 def _load_manifest_data():

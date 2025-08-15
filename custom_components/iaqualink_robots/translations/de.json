@@ -1,0 +1,179 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "iAqualink Robot Einrichtung",
+        "description": "Geben Sie Ihre iAquaLink Kontodaten ein.",
+        "data": {
+          "name": "Gerätename",
+          "username": "Benutzername",
+          "password": "Passwort"
+        },
+        "data_description": {
+          "name": "Name für Ihren Pool-Roboter in Home Assistant",
+          "username": "Ihr iAquaLink Konto-Benutzername",
+          "password": "Ihr iAquaLink Konto-Passwort"
+        }
+      },
+      "select_device": {
+        "title": "Roboter auswählen",
+        "description": "Wählen Sie den Roboter aus, der zu Home Assistant hinzugefügt werden soll.",
+        "data": {
+          "device": "Roboter",
+          "name": "Gerätename"
+        },
+        "data_description": {
+          "device": "Wählen Sie den Roboter aus, den Sie hinzufügen möchten",
+          "name": "Optional: Standard-Namen für diesen Roboter überschreiben"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zum iAquaLink Service fehlgeschlagen. Bitte überprüfen Sie Ihre Anmeldedaten und versuchen Sie es erneut.",
+      "no_devices": "Keine Roboter in Ihrem Konto gefunden. Bitte überprüfen Sie, dass Ihr Roboter ordnungsgemäß bei iAquaLink registriert ist.",
+      "device_not_found": "Das ausgewählte Gerät konnte nicht gefunden werden. Bitte versuchen Sie es erneut.",
+      "unknown": "Ein unerwarteter Fehler ist aufgetreten. Bitte versuchen Sie es erneut."
+    },
+    "abort": {
+      "already_configured": "Dieser Roboter ist bereits in Home Assistant konfiguriert."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "serial_number": {
+        "name": "Seriennummer"
+      },
+      "device_type": {
+        "name": "Gerätetyp"
+      },
+      "cycle_start_time": {
+        "name": "Zyklus-Startzeit"
+      },
+      "cycle_duration": {
+        "name": "Zyklusdauer"
+      },
+      "cycle": {
+        "name": "Zyklus"
+      },
+      "battery_level": {
+        "name": "Batteriestand"
+      },
+      "total_hours": {
+        "name": "Gesamtstunden"
+      },
+      "canister": {
+        "name": "Behälterstand"
+      },
+      "error_state": {
+        "name": "Fehlerstatus"
+      },
+      "temperature": {
+        "name": "Temperatur"
+      },
+      "time_remaining_human": {
+        "name": "Verbleibende Zeit"
+      },
+      "estimated_end_time": {
+        "name": "Geschätzte Endzeit"
+      },
+      "model": {
+        "name": "Modell"
+      },
+      "time_remaining": {
+        "name": "Verbleibende Zeit (Minuten)"
+      },
+      "fan_speed": {
+        "name": "Lüftergeschwindigkeit"
+      },
+      "activity": {
+        "name": "Aktivität"
+      },
+      "status": {
+        "name": "Status"
+      }
+    },
+    "button": {
+      "remote_forward": {
+        "name": "Fernbedienung Vorwärts"
+      },
+      "remote_backward": {
+        "name": "Fernbedienung Rückwärts"
+      },
+      "remote_rotate_left": {
+        "name": "Fernbedienung Links drehen"
+      },
+      "remote_rotate_right": {
+        "name": "Fernbedienung Rechts drehen"
+      },
+      "remote_stop": {
+        "name": "Fernbedienung Stop"
+      }
+    },
+    "vacuum": {
+      "fan_speed": {
+        "floor_only": "Nur Boden",
+        "wall_only": "Nur Wand",
+        "walls_only": "Nur Wände",
+        "floor_and_walls": "Boden und Wände",
+        "smart_floor_and_walls": "SMART Boden und Wände"
+      },
+      "time_format": {
+        "hours": "Stunde(n)",
+        "minutes": "Minute(n)", 
+        "seconds": "Sekunde(n)"
+      }
+    }
+  },
+  "services": {
+    "remote_forward": {
+      "name": "Fernbedienung Vorwärts",
+      "description": "Vorwärts-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
+      "fields": {
+        "entity_id": {
+          "name": "Entität",
+          "description": "Saugroboter-Entität zur Steuerung"
+        }
+      }
+    },
+    "remote_backward": {
+      "name": "Fernbedienung Rückwärts",
+      "description": "Rückwärts-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
+      "fields": {
+        "entity_id": {
+          "name": "Entität",
+          "description": "Saugroboter-Entität zur Steuerung"
+        }
+      }
+    },
+    "remote_rotate_left": {
+      "name": "Fernbedienung Links drehen",
+      "description": "Links-drehen-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
+      "fields": {
+        "entity_id": {
+          "name": "Entität",
+          "description": "Saugroboter-Entität zur Steuerung"
+        }
+      }
+    },
+    "remote_rotate_right": {
+      "name": "Fernbedienung Rechts drehen",
+      "description": "Rechts-drehen-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
+      "fields": {
+        "entity_id": {
+          "name": "Entität",
+          "description": "Saugroboter-Entität zur Steuerung"
+        }
+      }
+    },
+    "remote_stop": {
+      "name": "Fernbedienung Stop",
+      "description": "Stop-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
+      "fields": {
+        "entity_id": {
+          "name": "Entität",
+          "description": "Saugroboter-Entität zur Steuerung"
+        }
+      }
+    }
+  }
+}

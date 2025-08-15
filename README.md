@@ -1,54 +1,123 @@
-# iaqualink
+# iAqualink Robots Integration for Home Assistant
 
-![CC0](https://logovtor.com/wp-content/uploads/2020/10/iaqualink-logo-vector.png)
+A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners**, providing **full control**, **real-time monitoring**, and **multi-language support**.
 
-Home Assistant Iaqualink Vacuums Robots
+## 🌟 Features
 
-## How to
+### Device Control & Monitoring
 
-#### Requirements
+* **Full Robot Control**: Start, stop, return to base, remote directional movement
+* **Real-time Monitoring**: Battery, cleaning status, error states, temperature
+* **Fan Speed Control**: Multiple cleaning modes (Floor only, Walls only, etc.)
+* **Comprehensive Sensors**: 17+ sensor types for detailed device info
 
-- account for iaqualink
+### Multi-Language Support *(v2.4.2+)*
 
-#### Installations via HACS [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+* 🇺🇸 English (Default)
+* 🇫🇷 Français
+* 🇪🇸 Español
+* 🇩🇪 Deutsch
+* 🇳🇱 Nederlands
+* 🇵🇹 Português
+* 🇨🇿 Čeština
 
-- In HACS, look for "iaqualink" and install and restart
-- If integration was not found, please add custom repository `galletn/iaqualink` as integration
+## 🚀 Installation
 
-#### Setup
+### HACS (Recommended)
 
-Setup as of v2.0.2 is done via the config screen
-api_key: EOOEMOW4YR6QNB07
+1. Open **HACS** in Home Assistant
+2. Search for **"iaqualink_robots"**
+3. Click **Install** and restart Home Assistant
 
-## Supported Models:
+> **If not found in search:** Add custom repository `galletn/iaqualink` as type **Integration**.
 
-- EX 4000 iQ
-- RA 6500 iQ
-- RA 6570 iQ
-- RA 6900 iQ
-- Polaris - VRX iQ+
-- CNX 30 iQ
-- CNX 40 Iq
-- CNX 50 iQ
-- CNX 4090 iQ
-- OV 5490 iQ
-- RF 5600 iQ
-- P965 iQ
-- 9650iQ 
-- VortraX TRX 8500 iQ
-- Polaris Freedom Cordless
+### Manual Installation
 
-## Known Models to have issues:
+1. Download the latest release
+2. Copy the `iaqualinkRobots` folder to your `custom_components` directory
+3. Restart Home Assistant
 
-- 
+## ⚙️ Setup
 
+1. **Settings** → **Devices & Services** → **Add Integration**
+2. Search for **"iAqualinkRobots"**
+3. Enter your iAqualink credentials
+4. Select your robot from the detected devices
 
-## Stop Start Example:
+## 📱 Entities
 
-https://github.com/user-attachments/assets/0390dc52-5c24-455a-b5ae-6e725579ce71
+### Vacuum Entity
 
-## Trademark Legal Notices
-All product names, trademarks and registered trademarks in the images in this repository, are property of their respective owners. All images in this repository are used by the Home Assistant project for identification purposes only.
+* Controls: Start/Stop, Return to base, Fan speed selection
+* Status: Cleaning mode, Activity, Battery level
+* Features: Remote directional control (Forward, Backward, Rotate)
 
-The use of these names, trademarks and brands appearing in these image files, do not imply endorsement.
+### Sensors
 
+* Serial Number, Device Type, Model
+* Battery Level, Total Hours, Temperature
+* Cleaning cycle info (Start time, Duration, Type)
+* Canister Level, Error State
+* Time Remaining, Estimated End Time
+* Fan Speed, Activity, Status
+
+### Buttons
+
+* Remote Forward / Backward
+* Remote Rotate Left / Right
+* Remote Stop
+
+## 📋 Supported Models
+
+### Fully Supported
+
+* EX 4000 iQ
+* RA 6500 iQ / RA 6570 iQ / RA 6900 iQ
+* Polaris VRX iQ+
+* CNX 30 iQ / CNX 40 iQ / CNX 50 iQ / CNX 4090 iQ
+* OV 5490 iQ / RF 5600 iQ
+* P965 iQ / 9650iQ
+* VortraX TRX 8500 iQ
+* Polaris Freedom Cordless
+* Cyclobot & CycloNext models
+* Vortrax models
+
+### Known Issues
+
+*(List currently empty — please report if you encounter problems.)*
+
+## 🖥️ Example: Start/Stop in Home Assistant
+
+[Video Example](https://github.com/user-attachments/assets/0390dc52-5c24-455a-b5ae-6e725579ce71)
+
+## 🌍 Language Configuration
+
+1. Go to **[User Profile](https://my.home-assistant.io/redirect/profile/)** → **Language**
+2. Select your preferred language
+3. Restart Home Assistant and reload the integration
+
+## 🔧 Troubleshooting
+
+* **Robot shows unavailable** → Check connection in iAqualink mobile app
+
+Enable debug logging by adding to `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    custom_components.iaqualinkRobots: debug
+```
+
+## 🤝 Contributing
+
+We welcome:
+
+* Language translations
+* Testing on different robot models
+* Bug reports & feature requests
+
+## 🙏 Credits
+
+* Developed by [@galletn](https://github.com/galletn)
+* Translation help from Home Assistant community
+* Based on reverse-engineered iAqualink API

@@ -1,3 +1,4 @@
 {
-  "name": "iaqualink_robots"
+  "name": "iAqualink Robots",
+  "homeassistant": "2025.1.0"
 }

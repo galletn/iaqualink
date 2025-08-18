@@ -90,6 +90,15 @@
       },
       "status": {
         "name": "Status"
+      },
+      "stepper": {
+        "name": "Time Adjustments"
+      },
+      "stepper_adj_time": {
+        "name": "Adjustment Increment"
+      },
+      "stepper_adjustment_minutes": {
+        "name": "Time Added/Removed"
       }
     },
     "button": {
@@ -107,6 +116,12 @@
       },
       "remote_stop": {
         "name": "Remote Stop"
+      },
+      "add_fifteen_minutes": {
+        "name": "Add 15 Minutes"
+      },
+      "reduce_fifteen_minutes": {
+        "name": "Reduce 15 Minutes"
       }
     },
     "vacuum": {
@@ -168,6 +183,26 @@
     "remote_stop": {
       "name": "Remote Stop",
       "description": "Send stop command to the robot for remote control (VR and VortraX robots only)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Vacuum entity to control"
+        }
+      }
+    },
+    "add_fifteen_minutes": {
+      "name": "Add 15 Minutes",
+      "description": "Add 15 minutes to the cleaning time (VR and VortraX robots only)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Vacuum entity to control"
+        }
+      }
+    },
+    "reduce_fifteen_minutes": {
+      "name": "Reduce 15 Minutes",
+      "description": "Reduce 15 minutes from the cleaning time (VR and VortraX robots only)",
       "fields": {
         "entity_id": {
           "name": "Entity",

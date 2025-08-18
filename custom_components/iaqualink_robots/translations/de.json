@@ -90,6 +90,15 @@
       },
       "status": {
         "name": "Status"
+      },
+      "stepper": {
+        "name": "Zeit-Anpassungen"
+      },
+      "stepper_adj_time": {
+        "name": "Anpassungsschritt"
+      },
+      "stepper_adjustment_minutes": {
+        "name": "Zeit hinzugefügt/entfernt"
       }
     },
     "button": {
@@ -107,6 +116,12 @@
       },
       "remote_stop": {
         "name": "Fernbedienung Stop"
+      },
+      "add_fifteen_minutes": {
+        "name": "15 Minuten hinzufügen"
+      },
+      "reduce_fifteen_minutes": {
+        "name": "15 Minuten reduzieren"
       }
     },
     "vacuum": {
@@ -168,6 +183,26 @@
     "remote_stop": {
       "name": "Fernbedienung Stop",
       "description": "Stop-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
+      "fields": {
+        "entity_id": {
+          "name": "Entität",
+          "description": "Saugroboter-Entität zur Steuerung"
+        }
+      }
+    },
+    "add_fifteen_minutes": {
+      "name": "15 Minuten hinzufügen",
+      "description": "15 Minuten zur Reinigungszeit hinzufügen (nur VR und VortraX Roboter)",
+      "fields": {
+        "entity_id": {
+          "name": "Entität",
+          "description": "Saugroboter-Entität zur Steuerung"
+        }
+      }
+    },
+    "reduce_fifteen_minutes": {
+      "name": "15 Minuten reduzieren",
+      "description": "15 Minuten von der Reinigungszeit reduzieren (nur VR und VortraX Roboter)",
       "fields": {
         "entity_id": {
           "name": "Entität",

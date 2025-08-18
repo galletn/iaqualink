@@ -22,6 +22,11 @@ ICON_MAP = {
     "fan_speed":           "mdi:fan",
     "activity":            "mdi:robot-vacuum",
     "status":              "mdi:connection",
+    "stepper":             "mdi:stairs",
+    "stepper_adj_time":    "mdi:timer-plus",
+    "base_cycle_duration": "mdi:timer-sand",
+    "stepper_adjustment_minutes": "mdi:timer-plus-outline",
+    "adjusted_cycle_duration": "mdi:timer",
 }
 
 # Unit of measurement map
@@ -33,6 +38,10 @@ UNIT_MAP = {
     "cycle_duration":      "min",
     "time_remaining":      "min",  # Numeric minutes
     "time_remaining_human": None,  # Human readable string, no unit
+    "stepper_adj_time":    "min",
+    "base_cycle_duration": "min",
+    "stepper_adjustment_minutes": "min",
+    "adjusted_cycle_duration": "min",
 }
 
 # All possible sensors
@@ -54,6 +63,11 @@ ALL_SENSOR_TYPES = [
     ("fan_speed",           "Fan Speed"),
     ("activity",            "Activity"),
     ("status",              "Status"),
+    ("stepper",             "Time Adjustments"),
+    ("stepper_adj_time",    "Adjustment Increment"),
+    ("base_cycle_duration", "Original Duration"),
+    ("stepper_adjustment_minutes", "Time Added/Removed"),
+    ("adjusted_cycle_duration", "Total Duration"),
 ]
 
 async def async_setup_entry(hass, entry, async_add_entities):

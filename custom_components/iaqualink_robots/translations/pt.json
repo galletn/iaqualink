@@ -90,6 +90,15 @@
       },
       "status": {
         "name": "Status"
+      },
+      "stepper": {
+        "name": "Ajustes de tempo"
+      },
+      "stepper_adj_time": {
+        "name": "Incremento de ajuste"
+      },
+      "stepper_adjustment_minutes": {
+        "name": "Tempo adicionado/reduzido"
       }
     },
     "button": {
@@ -107,6 +116,12 @@
       },
       "remote_stop": {
         "name": "Controle Remoto Parar"
+      },
+      "add_fifteen_minutes": {
+        "name": "Adicionar 15 Minutos"
+      },
+      "reduce_fifteen_minutes": {
+        "name": "Reduzir 15 Minutos"
       }
     },
     "vacuum": {
@@ -168,6 +183,26 @@
     "remote_stop": {
       "name": "Controle Remoto Parar",
       "description": "Enviar comando de parada para o robô para controle remoto (apenas robôs VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entidade",
+          "description": "Entidade do aspirador para controlar"
+        }
+      }
+    },
+    "add_fifteen_minutes": {
+      "name": "Adicionar 15 Minutos",
+      "description": "Adicionar 15 minutos ao tempo de limpeza (apenas robôs VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entidade",
+          "description": "Entidade do aspirador para controlar"
+        }
+      }
+    },
+    "reduce_fifteen_minutes": {
+      "name": "Reduzir 15 Minutos",
+      "description": "Reduzir 15 minutos do tempo de limpeza (apenas robôs VR e VortraX)",
       "fields": {
         "entity_id": {
           "name": "Entidade",

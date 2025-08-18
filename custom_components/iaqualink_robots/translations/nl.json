@@ -111,6 +111,15 @@
       },
       "time_remaining": {
         "name": "Resterende Tijd (Minuten)"
+      },
+      "stepper": {
+        "name": "Tijdaanpassingen"
+      },
+      "stepper_adj_time": {
+        "name": "Aanpassingsstap"
+      },
+      "stepper_adjustment_minutes": {
+        "name": "Tijd toegevoegd/verminderd"
       }
     },
     "button": {
@@ -128,6 +137,12 @@
       },
       "remote_stop": {
         "name": "Afstandsbediening Stop"
+      },
+      "add_fifteen_minutes": {
+        "name": "15 Minuten Toevoegen"
+      },
+      "reduce_fifteen_minutes": {
+        "name": "15 Minuten Verminderen"
       }
     },
     "vacuum": {
@@ -189,6 +204,26 @@
     "remote_stop": {
       "name": "Afstandsbediening Stop",
       "description": "Stuur stop commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
+      "fields": {
+        "entity_id": {
+          "name": "Entiteit",
+          "description": "Stofzuiger entiteit om te besturen"
+        }
+      }
+    },
+    "add_fifteen_minutes": {
+      "name": "15 Minuten Toevoegen",
+      "description": "15 minuten toevoegen aan de schoonmaaktijd (alleen VR en VortraX robots)",
+      "fields": {
+        "entity_id": {
+          "name": "Entiteit",
+          "description": "Stofzuiger entiteit om te besturen"
+        }
+      }
+    },
+    "reduce_fifteen_minutes": {
+      "name": "15 Minuten Verminderen",
+      "description": "15 minuten verminderen van de schoonmaaktijd (alleen VR en VortraX robots)",
       "fields": {
         "entity_id": {
           "name": "Entiteit",

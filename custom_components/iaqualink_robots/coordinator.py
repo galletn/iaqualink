@@ -5,6 +5,7 @@ import aiohttp
 import logging
 import asyncio
 import re
+import time
 
 from datetime import timedelta
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed  # type: ignore # noqa
@@ -38,6 +39,7 @@ class AqualinkClient:
         self._model_fetch_attempts = 0  # Track model fetch attempts
         self._model_last_attempt = None  # Track last model fetch attempt time
         self._pending_stop_reset = None  # Store reset values from stop command
+        self._remote_control_active = False  # Track if we're in remote control mode
         self._activity = VacuumActivity.IDLE  # Default activity state
         self._hass = None  # Will be set by coordinator
         self._headers = {
@@ -46,34 +48,39 @@ class AqualinkClient:
             "Accept": "*/*"
         }
         self._debug_mode = debug_mode  # Debug mode configurable
-        # Note: Persistent websocket connection disabled - using fresh connections for reliability
-        # self._ws_connection = None
-        # self._ws_session = None
-        # self._last_ws_activity = None
-        # Websocket failure tracking for resilient status reporting
+        # Persistent websocket connection for commands and status updates
+        self._ws_connection = None
+        self._ws_session = None
+        self._last_ws_activity = None
+        self._coordinator_callback = None  # Callback to notify coordinator of real-time updates
+        # Websocket connection failure tracking (not device offline status)
+        # Device being 'offline' via working websocket is normal, not a failure
         self._ws_consecutive_failures = 0
         self._last_known_status = None
-        self._max_ws_failures_before_offline = 5  # Allow 5 websocket failures before marking offline
+        self._max_ws_failures_before_offline = 5  # Allow 5 websocket connection failures before marking offline
         # Simple instance ID for logging purposes
         self._instance_id = f"ha-{hash(username + str(id(self))) % 10000:04d}"
 
     def _get_resilient_status(self, error_context: str) -> str:
-        """Get status that's resilient to temporary websocket failures.
+        """Get status that's resilient to temporary websocket connection failures.
+        
+        Note: This handles websocket connection issues, not device offline status.
+        A device reporting 'offline' through a working websocket is normal operation.
         
         Args:
             error_context: Context of the error (e.g., 'update_failed', 'setup_cancelled')
             
         Returns:
-            Status string - preserves last known status for temporary failures,
-            returns 'offline' only after multiple consecutive failures
+            Status string - preserves last known status for temporary connection failures,
+            returns 'offline' only after multiple consecutive connection failures
         """
         if self._ws_consecutive_failures >= self._max_ws_failures_before_offline:
-            # Multiple consecutive failures - device is likely offline
-            _LOGGER.warning(f"Device marked offline after {self._ws_consecutive_failures} consecutive websocket failures")
+            # Multiple consecutive connection failures - communication is likely offline
+            _LOGGER.warning(f"Device communication marked offline after {self._ws_consecutive_failures} consecutive websocket connection failures")
             return "offline"
         elif self._last_known_status:
-            # Temporary failure - preserve last known status
-            _LOGGER.debug(f"Preserving last known status '{self._last_known_status}' during temporary failure ({error_context})")
+            # Temporary connection failure - preserve last known status
+            _LOGGER.debug(f"Preserving last known status '{self._last_known_status}' during temporary connection failure ({error_context})")
             return self._last_known_status
         else:
             # No previous status available - default to a neutral status
@@ -100,6 +107,27 @@ class AqualinkClient:
         }
         
         return close_codes.get(close_code, f"Unknown close code: {close_code}")
+
+    def _should_use_websocket(self) -> bool:
+        """Check if websocket operations should be attempted based on recent connection failure history.
+        
+        Note: Device being 'offline' is not considered a websocket failure - only actual 
+        connection/communication problems count as websocket failures.
+        
+        Returns:
+            bool: True if websocket operations should be attempted, False to use fallback behavior
+        """
+        # During high connection failure periods, consider temporary fallback to HTTP-only operations
+        if self._ws_consecutive_failures >= 3:
+            _LOGGER.debug(f"Websocket operations temporarily suspended due to {self._ws_consecutive_failures} consecutive connection failures")
+            return False
+        return True
+    
+    def _reset_websocket_failures(self):
+        """Reset websocket failure counters after successful operation."""
+        if self._ws_consecutive_failures > 0:
+            _LOGGER.debug(f"Resetting websocket failure counter (was {self._ws_consecutive_failures})")
+            self._ws_consecutive_failures = 0
 
     def _log_connection_context(self):
         """Log additional context to help troubleshoot websocket issues."""
@@ -323,16 +351,206 @@ class AqualinkClient:
                 
         return compatible_devices
 
-    # Note: Persistent websocket connection methods disabled for fresh connection approach
-    # async def _ensure_websocket_connection(self):
-    #     """Ensure we have an active websocket connection, creating one if needed."""
-    #     # This method is commented out as we now use fresh connections for each request
-    #     pass
+    async def _ensure_websocket_connection(self):
+        """Ensure we have an active websocket connection, creating one if needed.
+        Implements retry logic to handle transient connection issues."""
+        import time
+        
+        # Check if connection exists and is still valid
+        if (self._ws_connection and not self._ws_connection.closed and 
+            self._ws_session and not self._ws_session.closed):
+            # Connection appears healthy, update activity timestamp
+            self._last_ws_activity = time.time()
+            return
+        
+        # Ensure we have valid authentication before attempting websocket connection
+        if not self._id_token or self._is_token_expired():
+            _LOGGER.debug("Refreshing authentication before websocket connection")
+            await self._authenticate()
+        
+        # Reset failure counter on successful reconnection attempts
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # Close any existing connection before creating new one
+                await self._close_websocket()
+                
+                # Create new aiohttp session for websocket
+                timeout = aiohttp.ClientTimeout(total=30)
+                self._ws_session = aiohttp.ClientSession(timeout=timeout)
+                
+                # Create websocket headers with authentication
+                ws_headers = {
+                    "Authorization": self._id_token,
+                    "Accept": "*/*"
+                }
+                
+                # Connect to websocket
+                self._ws_connection = await self._ws_session.ws_connect(
+                    URL_WS,
+                    headers=ws_headers
+                )
+                
+                self._last_ws_activity = time.time()
+                self._ws_consecutive_failures = 0  # Reset failure counter on success
+                _LOGGER.debug(f"Established persistent websocket connection for robot {self._serial}")
+                return
+                
+            except Exception as e:
+                self._ws_consecutive_failures += 1
+                await self._close_websocket()
+                
+                # Provide more specific error information for authentication issues
+                error_msg = str(e)
+                if "401" in error_msg or "Unauthorized" in error_msg:
+                    _LOGGER.warning(f"Websocket authentication failed (attempt {attempt + 1}): {e}")
+                    # If authentication fails, refresh token and retry
+                    if attempt < max_retries - 1:
+                        _LOGGER.debug("Refreshing authentication token due to websocket 401 error")
+                        await self._authenticate()
+                elif "403" in error_msg or "Forbidden" in error_msg:
+                    _LOGGER.error(f"Websocket access forbidden (attempt {attempt + 1}): {e}")
+                else:
+                    _LOGGER.warning(f"Websocket connection failed (attempt {attempt + 1}): {e}")
+                
+                if attempt < max_retries - 1:
+                    _LOGGER.debug(f"Retrying websocket connection in {retry_delay}s...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 1.5  # Exponential backoff
+                else:
+                    _LOGGER.error(f"Failed to establish websocket connection after {max_retries} attempts: {e}")
+                    raise
     
-    # async def _close_websocket(self):
-    #     """Close the websocket connection and session if they exist."""
-    #     # This method is commented out as we now use fresh connections for each request
-    #     pass
+    async def _close_websocket(self):
+        """Close the websocket connection and session if they exist."""
+        if self._ws_connection:
+            try:
+                if not self._ws_connection.closed:
+                    await self._ws_connection.close()
+            except Exception as e:
+                _LOGGER.debug(f"Error closing websocket connection: {e}")
+            finally:
+                self._ws_connection = None
+                
+        if self._ws_session:
+            try:
+                if not self._ws_session.closed:
+                    await self._ws_session.close()
+            except Exception as e:
+                _LOGGER.debug(f"Error closing websocket session: {e}")
+            finally:
+                self._ws_session = None
+                
+        self._last_ws_activity = None
+
+    async def _websocket_listener(self):
+        """Listen for real-time websocket updates and notify coordinator of changes."""
+        message_count = 0
+        
+        try:
+            # Ensure websocket connection is established
+            await self._ensure_websocket_connection()
+            
+            if not self._ws_connection or self._ws_connection.closed:
+                _LOGGER.warning("Cannot start websocket listener - no connection available")
+                return
+            
+            # Send initial subscription request to start receiving updates
+            subscribe_req = {
+                "action": "subscribe",
+                "namespace": "authorization", 
+                "payload": {"userId": self._id},
+                "service": "Authorization",
+                "target": self._serial,
+                "version": 1
+            }
+            
+            await self._ws_connection.send_json(subscribe_req)
+            _LOGGER.debug(f"Started websocket listener for robot {self._serial}")
+            
+            # Listen for incoming messages
+            async for message in self._ws_connection:
+                if message.type == aiohttp.WSMsgType.TEXT:
+                    message_count += 1
+                    try:
+                        data = message.json()
+                        
+                        # Check if this is a state update message
+                        if (data.get("service") == "StateStreamer" and 
+                            data.get("event") == "StateReported"):
+                            
+                            payload = data.get("payload", {})
+                            state = payload.get("state", {})
+                            
+                            # Check for stepper updates (timing changes)
+                            reported_state = state.get("reported", {})
+                            equipment = reported_state.get("equipment", {})
+                            robot_data = equipment.get("robot", {})
+                            
+                            if "stepper" in robot_data:
+                                new_stepper = robot_data["stepper"]
+                                _LOGGER.debug(f"🎯 Real-time stepper update: {new_stepper}")
+                                
+                                # Cache the new stepper value for button commands
+                                self._cached_stepper_value = new_stepper
+                                self._cached_stepper_time = time.time()
+                                
+                                # Immediate entity update for ultra-fast responsiveness
+                                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+                                    try:
+                                        # Use asyncio.create_task for immediate execution without waiting
+                                        asyncio.create_task(self._coordinator_callback())
+                                    except Exception as e:
+                                        _LOGGER.debug(f"Error calling coordinator callback: {e}")
+                            
+                            # Check for other robot state changes
+                            if any(key in robot_data for key in ['state', 'rmt_ctrl', 'errorState', 'cycleStartTime']):
+                                _LOGGER.debug(f"🔄 Real-time robot state update received")
+                                
+                                # Immediate entity update for ultra-fast responsiveness
+                                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+                                    try:
+                                        # Use asyncio.create_task for immediate execution without waiting
+                                        asyncio.create_task(self._coordinator_callback())
+                                    except Exception as e:
+                                        _LOGGER.debug(f"Error calling coordinator callback: {e}")
+                        
+                    except Exception as e:
+                        _LOGGER.debug(f"Error processing websocket message: {e}")
+                        
+                elif message.type == aiohttp.WSMsgType.ERROR:
+                    _LOGGER.warning(f"Websocket error in listener")
+                    break
+                elif message.type == aiohttp.WSMsgType.CLOSED:
+                    _LOGGER.debug("Websocket connection closed in listener")
+                    break
+                    
+        except asyncio.CancelledError:
+            _LOGGER.debug("Websocket listener cancelled")
+            raise
+        except Exception as e:
+            _LOGGER.warning(f"Websocket listener error: {e}")
+        finally:
+            _LOGGER.debug(f"Websocket listener stopped after {message_count} messages")
+
+    def set_coordinator_callback(self, callback):
+        """Set the callback function to notify coordinator of real-time updates."""
+        self._coordinator_callback = callback
+    
+    def set_coordinator_reference(self, coordinator):
+        """Set reference to coordinator for adaptive polling control."""
+        self._coordinator_ref = coordinator
+    
+    async def _delayed_callback(self, delay_seconds):
+        """Trigger coordinator callback after a delay for catching delayed state changes."""
+        await asyncio.sleep(delay_seconds)
+        if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+            try:
+                await self._coordinator_callback()
+            except Exception as e:
+                _LOGGER.debug(f"Error in delayed callback: {e}")
     
     async def _ws_subscribe(self):
         """Subscribe via websocket to get live updates."""
@@ -666,7 +884,9 @@ class AqualinkClient:
             # Check if we got valid data
             if data is None:
                 _LOGGER.debug("No data received from websocket subscribe")
-                self._ws_consecutive_failures += 1
+                # Only increment failures if this was a websocket connection issue,
+                # not if the device is legitimately offline
+                # The get_device_status method already handles websocket failure counting
                 return {
                     "serial_number": self._serial,
                     "device_type": self._device_type,
@@ -815,6 +1035,16 @@ class AqualinkClient:
         except (KeyError, TypeError):
             result["total_hours"] = 0
 
+        # Get stepper information for timing adjustments
+        try:
+            result["stepper"] = robot_data['stepper']
+            result["stepper_adj_time"] = robot_data.get('stepperAdjTime', 15)
+            _LOGGER.debug(f"Stepper info: value={robot_data['stepper']}, adj_time={robot_data.get('stepperAdjTime', 15)}")
+        except (KeyError, TypeError):
+            result["stepper"] = 0
+            result["stepper_adj_time"] = 15
+            _LOGGER.debug("No stepper data found, using defaults")
+
         # Get current cycle (fan speed) and update it
         try:
             current_cycle = robot_data['prCyc']
@@ -843,8 +1073,8 @@ class AqualinkClient:
             cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
             result["cycle_duration"] = cycle_duration
 
-            # Calculate end time and remaining time
-            self._calculate_times(cycle_start_time, cycle_duration, result)
+            # Calculate end time and remaining time with stepper adjustments
+            self._calculate_times(cycle_start_time, cycle_duration, result, robot_data)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for VR robot: {e}")
             result["cycle_start_time"] = datetime.datetime.now().isoformat()
@@ -1117,11 +1347,34 @@ class AqualinkClient:
             result["time_remaining"] = 0
             result["time_remaining_human"] = self._format_time_human(0, 0, 0)
 
-    def _calculate_times(self, start_time, duration_minutes, result):
-        """Calculate end time and remaining time."""
+    def _calculate_times(self, start_time, duration_minutes, result, robot_data=None):
+        """Calculate end time and remaining time using stepper-based adjustments."""
         try:
-            # Calculate cycle end time
-            cycle_end_time = self.add_minutes_to_datetime(start_time, duration_minutes)
+            # Get stepper information for accurate timing calculation
+            stepper_value = 0
+            stepper_adj_time = 15  # Default 15 minutes per step
+            
+            if robot_data:
+                stepper_value = robot_data.get('stepper', 0)
+                stepper_adj_time = robot_data.get('stepperAdjTime', 15)
+                
+                _LOGGER.debug(f"Stepper calculation: base_duration={duration_minutes}, stepper={stepper_value}, stepper_adj_time={stepper_adj_time}")
+            
+            # Calculate adjusted duration using stepper system
+            # Stepper value represents total minutes adjustment
+            # Formula: final_duration = base_duration + stepper_value
+            adjusted_duration = duration_minutes + stepper_value
+            
+            # Store both base and adjusted durations for debugging
+            result["base_cycle_duration"] = duration_minutes
+            result["stepper_value"] = stepper_value
+            result["stepper_adjustment_minutes"] = stepper_value  # Direct minutes, not multiplied
+            result["adjusted_cycle_duration"] = adjusted_duration
+            
+            # Duration calculation debug logging removed to prevent logbook flooding with 1-second polling
+            
+            # Calculate cycle end time using adjusted duration
+            cycle_end_time = self.add_minutes_to_datetime(start_time, adjusted_duration)
             result["cycle_end_time"] = cycle_end_time.isoformat()
             result["estimated_end_time"] = cycle_end_time.isoformat()
             
@@ -1131,7 +1384,7 @@ class AqualinkClient:
             if current_activity not in ["cleaning", "returning"]:
                 result["time_remaining"] = 0
                 result["time_remaining_human"] = self._format_time_human(0, 0, 0)
-                _LOGGER.debug("Device is idle (%s), setting time remaining to 0", current_activity)
+                # Debug logging removed to prevent logbook flooding with 1-second polling
                 return
             
             # Calculate remaining time only if device is actively cleaning or returning
@@ -1166,14 +1419,7 @@ class AqualinkClient:
                 result["time_remaining"] = 0
                 result["time_remaining_human"] = self._format_time_human(0, 0, 0)
                 
-            _LOGGER.debug(
-                "Time calculation: activity=%s, start=%s, end=%s, now=%s, remaining=%s",
-                current_activity,
-                start_time.isoformat() if start_time else None,
-                cycle_end_time.isoformat() if cycle_end_time else None,
-                now.isoformat(),
-                result.get("time_remaining")
-            )
+            # Time calculation debug logging removed to prevent logbook flooding with 1-second polling
             
         except Exception as e:
             if self._debug_mode:
@@ -1267,31 +1513,56 @@ class AqualinkClient:
 
     async def get_device_status(self, request):
         """Get device status from the iaqualink_robots API via websocket.
-        This creates a fresh websocket connection for each request to ensure current data."""
-        try:
-            async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-                async with session.ws_connect(URL_WS) as websocket:
-                    await websocket.send_json(request)
-                    message = await asyncio.wait_for(websocket.receive(), timeout=10)
-                    if message.type == aiohttp.WSMsgType.TEXT:
-                        return message.json()
-                    elif message.type == aiohttp.WSMsgType.CLOSED:
-                        _LOGGER.debug("Websocket connection closed during device status request")
-                        return None
-                    elif message.type == aiohttp.WSMsgType.ERROR:
-                        _LOGGER.debug(f"Websocket error during device status request: {message.data}")
-                        return None
-                    else:
-                        _LOGGER.debug(f"Unexpected websocket message type {message.type} ({message.type.name if hasattr(message.type, 'name') else 'unknown'}) in device status request")
-                        return None
-        except asyncio.CancelledError:
-            if self._debug_mode:
-                _LOGGER.debug("Get device status request cancelled")
-            raise  # Re-raise cancellation to preserve shutdown behavior
-        except Exception as e:
-            _LOGGER.debug(f"Device status websocket connection failed: {e}")
-            # Return None instead of raising to let callers handle gracefully
-            return None
+        Uses persistent websocket connection for improved performance and reliability."""
+        max_retries = 2
+        
+        for attempt in range(max_retries):
+            try:
+                # Use persistent websocket connection
+                await self._ensure_websocket_connection()
+                
+                if not self._ws_connection or self._ws_connection.closed:
+                    raise Exception("Websocket connection not available")
+                    
+                await self._ws_connection.send_json(request)
+                message = await asyncio.wait_for(self._ws_connection.receive(), timeout=10)
+                
+                if message.type == aiohttp.WSMsgType.TEXT:
+                    # Reset consecutive failures on successful status update
+                    self._ws_consecutive_failures = 0
+                    return message.json()
+                elif message.type == aiohttp.WSMsgType.CLOSED:
+                    _LOGGER.debug("Websocket connection closed during device status request")
+                    await self._close_websocket()  # Clean up closed connection
+                    if attempt < max_retries - 1:
+                        continue  # Try again
+                    return None
+                elif message.type == aiohttp.WSMsgType.ERROR:
+                    _LOGGER.debug(f"Websocket error during device status request: {message.data}")
+                    await self._close_websocket()  # Clean up error connection
+                    if attempt < max_retries - 1:
+                        continue  # Try again
+                    return None
+                else:
+                    _LOGGER.debug(f"Unexpected websocket message type {message.type} ({message.type.name if hasattr(message.type, 'name') else 'unknown'}) in device status request")
+                    return None
+                    
+            except asyncio.CancelledError:
+                if self._debug_mode:
+                    _LOGGER.debug("Get device status request cancelled")
+                raise  # Re-raise cancellation to preserve shutdown behavior
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    _LOGGER.debug(f"Device status attempt {attempt + 1} failed: {e}. Retrying...")
+                    await self._close_websocket()
+                    await asyncio.sleep(0.5)  # Brief pause before retry
+                else:
+                    # Only increment failure counter after all retries exhausted
+                    self._ws_consecutive_failures += 1
+                    _LOGGER.debug(f"Device status websocket connection failed after retries: {e}")
+                    await self._close_websocket()
+                    # Return None instead of raising to let callers handle gracefully
+                    return None
 
     async def post_command_i2d(self, url, request):
         """Send command to i2d robot via the iaqualink_robots API."""
@@ -1305,31 +1576,50 @@ class AqualinkClient:
             raise  # Re-raise cancellation to preserve shutdown behavior
     
     async def set_cleaner_state(self, request):
-        """Set cleaner state via the iaqualink_robots API websocket."""
+        """Set cleaner state via the iaqualink_robots API websocket.
+        Implements resilient error handling to avoid device status disruption."""
         response_data = None
-        try:
-            # Use fresh websocket connection for each command to ensure reliability
-            async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-                async with session.ws_connect(URL_WS) as websocket:
-                    await websocket.send_json(request)
-                    
-                    # Try to get response to confirm command was received
-                    try:
-                        response = await asyncio.wait_for(websocket.receive(), timeout=10)
-                        if response.type == aiohttp.WSMsgType.TEXT:
-                            response_data = response.json()
-                            _LOGGER.debug(f"Command response received: {response_data}")
-                    except asyncio.TimeoutError:
-                        _LOGGER.debug("No response received within timeout, command may still succeed")
-                    except Exception as e:
-                        _LOGGER.debug(f"Error receiving response: {e}")
-                        
-        except Exception as e:
-            if self._debug_mode:
-                _LOGGER.debug(f"Error sending websocket command: {e}")
+        max_retries = 2
+        
+        for attempt in range(max_retries):
+            try:
+                # Use persistent websocket connection for improved reliability and performance
+                await self._ensure_websocket_connection()
                 
-        # Wait 2 seconds to avoid flooding iaqualink server
-        await asyncio.sleep(2)
+                if not self._ws_connection or self._ws_connection.closed:
+                    raise Exception("Websocket connection not available")
+                
+                await self._ws_connection.send_json(request)
+                
+                # Try to get response to confirm command was received
+                try:
+                    response = await asyncio.wait_for(self._ws_connection.receive(), timeout=10)
+                    if response.type == aiohttp.WSMsgType.TEXT:
+                        response_data = response.json()
+                        _LOGGER.debug(f"Command response received: {response_data}")
+                        return response_data  # Success - return immediately
+                    elif response.type == aiohttp.WSMsgType.CLOSED:
+                        _LOGGER.debug("Websocket closed during command, will retry")
+                        await self._close_websocket()
+                        continue  # Retry
+                except asyncio.TimeoutError:
+                    _LOGGER.debug("No response received within timeout, command may still succeed")
+                    return response_data  # Command sent successfully, just no response
+                except Exception as e:
+                    _LOGGER.debug(f"Error receiving response: {e}")
+                    # Don't fail the command just because we can't get a response
+                    return response_data
+                            
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    _LOGGER.debug(f"Websocket command attempt {attempt + 1} failed: {e}. Retrying...")
+                    await self._close_websocket()
+                    await asyncio.sleep(1)  # Brief pause before retry
+                else:
+                    # Only log as warning, not error, to avoid device unavailability
+                    _LOGGER.warning(f"Websocket command failed after {max_retries} attempts: {e}")
+                    await self._close_websocket()
+                    
         return response_data
         
     # Note: _listen_for_updates method disabled - using fresh connections for reliability
@@ -1403,6 +1693,27 @@ class AqualinkClient:
             
             if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+                
+                # Mark activity for adaptive polling
+                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+                    # Get coordinator reference and mark activity
+                    try:
+                        # Access coordinator through the client's stored reference
+                        if hasattr(self, '_coordinator_ref') and self._coordinator_ref:
+                            self._coordinator_ref._mark_recent_activity()
+                    except Exception:
+                        pass
+                
+                # Trigger multiple immediate updates for ultra-fast control feedback
+                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+                    try:
+                        # Immediate callback
+                        asyncio.create_task(self._coordinator_callback())
+                        # Additional callbacks at intervals to catch delayed state changes
+                        asyncio.create_task(self._delayed_callback(0.5))
+                        asyncio.create_task(self._delayed_callback(1.0))
+                    except Exception as e:
+                        _LOGGER.debug(f"Error triggering immediate callback: {e}")
                 
     async def stop_cleaning(self):
         """Stop the vacuum cleaning."""
@@ -1480,6 +1791,18 @@ class AqualinkClient:
         if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
                 _LOGGER.debug("Stop cleaning requested, reset time values: %s", reset_values)
+                
+                # Trigger multiple immediate updates for ultra-fast control feedback
+                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+                    try:
+                        # Immediate callback
+                        asyncio.create_task(self._coordinator_callback())
+                        # Additional callbacks to catch any delayed state changes
+                        asyncio.create_task(self._delayed_callback(0.5))
+                        asyncio.create_task(self._delayed_callback(1.0))
+                    except Exception as e:
+                        _LOGGER.debug(f"Error triggering immediate callback: {e}")
+                
                 return reset_values  # Return the reset values for immediate use by vacuum entity
                 
     async def pause_cleaning(self):
@@ -1542,6 +1865,17 @@ class AqualinkClient:
             if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
                 
+                # Trigger multiple immediate updates for ultra-fast control feedback
+                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+                    try:
+                        # Immediate callback
+                        asyncio.create_task(self._coordinator_callback())
+                        # Additional callbacks to catch any delayed state changes
+                        asyncio.create_task(self._delayed_callback(0.5))
+                        asyncio.create_task(self._delayed_callback(1.0))
+                    except Exception as e:
+                        _LOGGER.debug(f"Error triggering immediate callback: {e}")
+                
     async def return_to_base(self):
         """Set the vacuum cleaner to return to the dock."""
         if self._device_type == "i2d_robot":
@@ -1566,6 +1900,17 @@ class AqualinkClient:
                 "version": 1
             }
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+            
+            # Trigger multiple immediate updates for ultra-fast control feedback
+            if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+                try:
+                    # Immediate callback
+                    asyncio.create_task(self._coordinator_callback())
+                    # Additional callbacks to catch any delayed state changes
+                    asyncio.create_task(self._delayed_callback(0.5))
+                    asyncio.create_task(self._delayed_callback(1.0))
+                except Exception as e:
+                    _LOGGER.debug(f"Error triggering immediate callback: {e}")
             
     def _extract_fan_speed_from_response(self, response_data, requested_fan_speed):
         """Extract current fan speed from websocket response if available."""
@@ -1792,7 +2137,7 @@ class AqualinkClient:
         await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
     async def _send_remote_command(self, rmt_ctrl_value, command_name="remote"):
-        """Send a remote control command after ensuring robot is in remote control mode."""
+        """Send a remote control command with optimized timeout."""
         clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
         request = {
             "action": "setRemoteSteeringControl",
@@ -1814,7 +2159,7 @@ class AqualinkClient:
             "target": self._serial
         }
         _LOGGER.debug(f"Sending {command_name} command (rmt_ctrl: {rmt_ctrl_value})")
-        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+        await asyncio.wait_for(self.set_cleaner_state(request), timeout=15)  # Shorter timeout, no artificial delays
 
     async def remote_forward(self):
         """Send forward command to the robot for VR and VortraX robots."""
@@ -1822,9 +2167,11 @@ class AqualinkClient:
             _LOGGER.warning(f"Remote forward not supported for device type: {self._device_type}")
             return
         
-        # Ensure robot is in remote control mode, send forward command, then stop
-        await self._enter_remote_control_mode()
-        await asyncio.sleep(0.5)  # Brief pause for mode transition
+        # Enter remote control mode if not already active
+        if not self._remote_control_active:
+            await self._enter_remote_control_mode()
+            self._remote_control_active = True
+        
         await self._send_remote_command(1, "forward")
 
     async def remote_backward(self):
@@ -1833,9 +2180,11 @@ class AqualinkClient:
             _LOGGER.warning(f"Remote backward not supported for device type: {self._device_type}")
             return
         
-        # Ensure robot is in remote control mode, send backward command
-        await self._enter_remote_control_mode()
-        await asyncio.sleep(0.5)  # Brief pause for mode transition
+        # Enter remote control mode if not already active
+        if not self._remote_control_active:
+            await self._enter_remote_control_mode()
+            self._remote_control_active = True
+        
         await self._send_remote_command(2, "backward")
 
     async def remote_rotate_left(self):
@@ -1844,30 +2193,12 @@ class AqualinkClient:
             _LOGGER.warning(f"Remote rotate left not supported for device type: {self._device_type}")
             return
         
-        # Ensure robot is in remote control mode, send rotate left command
-        await self._enter_remote_control_mode()
-        await asyncio.sleep(0.5)  # Brief pause for mode transition
+        # Enter remote control mode if not already active
+        if not self._remote_control_active:
+            await self._enter_remote_control_mode()
+            self._remote_control_active = True
+        
         await self._send_remote_command(4, "rotate left")
-        request = {
-            "action": "setRemoteSteeringControl",
-            "version": 1,
-            "namespace": self._device_type,
-            "payload": {
-                "state": {
-                    "desired": {
-                        "equipment": {
-                            "robot": {
-                                "rmt_ctrl": 4
-                            }
-                        }
-                    }
-                },
-                "clientToken": f"{self._id}|{self._auth_token}|{self._app_client_id}"
-            },
-            "service": "StateController",
-            "target": self._serial
-        }
-        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
     async def remote_rotate_right(self):
         """Send rotate right command to the robot for VR and VortraX robots."""
@@ -1875,21 +2206,26 @@ class AqualinkClient:
             _LOGGER.warning(f"Remote rotate right not supported for device type: {self._device_type}")
             return
         
-        # Ensure robot is in remote control mode, send rotate right command
-        await self._enter_remote_control_mode()
-        await asyncio.sleep(0.5)  # Brief pause for mode transition
-        await self._send_remote_command(4, "rotate right")
+        # Enter remote control mode if not already active
+        if not self._remote_control_active:
+            await self._enter_remote_control_mode()
+            self._remote_control_active = True
+        
+        await self._send_remote_command(3, "rotate right")
 
     async def remote_stop(self):
-        """Send stop command and exit remote control mode for VR and VortraX robots."""
+        """Send stop command for VR and VortraX robots and exit remote control mode."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote stop not supported for device type: {self._device_type}")
             return
         
-        # Send stop command, then exit remote control mode
+        # Send stop command first
         await self._send_remote_command(0, "stop")
-        await asyncio.sleep(0.5)  # Brief pause before exiting
-        await self._exit_remote_control_mode()
+        
+        # Exit remote control mode if currently active
+        if self._remote_control_active:
+            await self._exit_remote_control_mode()
+            self._remote_control_active = False
 
     async def add_fifteen_minutes(self):
         """Add 15 minutes to cleaning time for VR and VortraX robots."""
@@ -1897,22 +2233,58 @@ class AqualinkClient:
             _LOGGER.warning(f"Add 15 minutes not supported for device type: {self._device_type}")
             return
             
+        # Check if websocket operations should be attempted
+        if not self._should_use_websocket():
+            _LOGGER.warning("Websocket operations temporarily suspended due to connection issues. Please try again later.")
+            return {
+                "success": False,
+                "error": "websocket_unavailable", 
+                "message": "Connection issues detected. Please try again in a moment."
+            }
+            
         try:
-            # Get current stepper value to calculate new value
+            # Check for button press rate limiting (debouncing)
+            if hasattr(self, '_last_timing_command_time'):
+                time_since_last = time.time() - self._last_timing_command_time
+                if time_since_last < 3:  # 3 second debounce
+                    remaining_cooldown = 3 - time_since_last
+                    _LOGGER.warning(f"Rate limiting timing commands. Please wait {remaining_cooldown:.1f} more seconds.")
+                    return {
+                        "success": False,
+                        "error": "rate_limited",
+                        "cooldown_remaining": remaining_cooldown,
+                        "message": f"Please wait {remaining_cooldown:.1f} seconds before sending another timing command."
+                    }
+            
+            # Mark timing command time for rate limiting
+            self._last_timing_command_time = time.time()
+            
+            # Always fetch current stepper value to ensure accuracy
+            # The websocket listener keeps this current, so it should be fast
             current_status = await self.fetch_status()
             current_stepper = current_status.get('equipment', {}).get('robot', {}).get('stepper', 0)
-            new_stepper = current_stepper + 15
+            
+            # Also check the top-level stepper value
+            if current_stepper == 0 and 'stepper' in current_status:
+                current_stepper = current_status.get('stepper', 0)
             
             if self._debug_mode:
-                _LOGGER.debug(f"Adding 15 minutes: current stepper={current_stepper}, new stepper={new_stepper}")
+                _LOGGER.debug(f"🔍 Add 15min: Current stepper value = {current_stepper}")
+                _LOGGER.debug(f"Adding 15 minutes: current stepper={current_stepper}")
             
             clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
             
-            # Send the stepper command based on captured websocket traffic from official app
+            # Get the new stepper value (current + 15 minutes)
+            # Stepper represents total minutes adjustment
+            new_stepper = current_stepper + 15
+            
+            if self._debug_mode:
+                _LOGGER.debug(f"🔍 Add 15min: Setting stepper {current_stepper} → {new_stepper}")
+            
+            # Use the same format as the working test: setCleaningMode with stepper value
             request = {
                 "action": "setCleaningMode",
-                "version": 1,
-                "namespace": "vr",
+                "namespace": self._device_type,
                 "payload": {
                     "state": {
                         "desired": {
@@ -1926,18 +2298,21 @@ class AqualinkClient:
                     "clientToken": clientToken
                 },
                 "service": "StateController",
-                "target": self._serial
+                "target": self._serial,
+                "version": 1
             }
             
-            _LOGGER.info(f"Sending add 15 minutes command with stepper={new_stepper}: {request}")
-            result = await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
-            _LOGGER.info(f"Add 15 minutes response: {result}")
+            if self._debug_mode:
+                _LOGGER.debug(f"Sending add 15 minutes command: stepper {current_stepper} → {new_stepper}")
+            result = await asyncio.wait_for(self.set_cleaner_state(request), timeout=15)
+            if self._debug_mode:
+                _LOGGER.debug(f"Add 15 minutes response: {result}")
             
             # Also send a null command to clear the desired state (as seen in websocket traffic)
             clear_request = {
                 "action": "setCleaningMode",
                 "version": 1, 
-                "namespace": "vr",
+                "namespace": self._device_type,
                 "payload": {
                     "state": {
                         "desired": {
@@ -1954,15 +2329,39 @@ class AqualinkClient:
                 "target": self._serial
             }
             
-            await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=30)
+            await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=15)
             
             if self._debug_mode:
                 _LOGGER.debug(f"✅ Add 15 minutes command completed successfully")
-            return result
+            
+            # Trigger multiple immediate updates for ultra-fast button feedback
+            if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+                try:
+                    # Immediate callback
+                    asyncio.create_task(self._coordinator_callback())
+                    # Additional callbacks to catch any delayed state changes
+                    asyncio.create_task(self._delayed_callback(0.5))
+                    asyncio.create_task(self._delayed_callback(1.0))
+                except Exception as e:
+                    _LOGGER.debug(f"Error triggering immediate callback: {e}")
+            
+            # Return success result with notification info for coordinator to handle
+            return {
+                "success": True, 
+                "action": "add_15_minutes",
+                "previous_stepper": current_stepper,
+                "new_stepper": new_stepper,
+                "message": f"Added 15 minutes to cleaning time. Stepper: {current_stepper} → {new_stepper}"
+            }
             
         except Exception as e:
             _LOGGER.error(f"❌ Add 15 minutes command failed: {e}")
-            return None
+            # Return error result for coordinator to handle
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Failed to add 15 minutes: {str(e)}"
+            }
 
     async def reduce_fifteen_minutes(self):
         """Reduce 15 minutes from cleaning time for VR and VortraX robots."""
@@ -1970,22 +2369,49 @@ class AqualinkClient:
             _LOGGER.warning(f"Reduce 15 minutes not supported for device type: {self._device_type}")
             return
             
+        # Check if websocket operations should be attempted
+        if not self._should_use_websocket():
+            _LOGGER.warning("Websocket operations temporarily suspended due to connection issues. Please try again later.")
+            return {
+                "success": False,
+                "error": "websocket_unavailable", 
+                "message": "Connection issues detected. Please try again in a moment."
+            }
+            
         try:
-            # Get current stepper value to calculate new value
+            # Get current status for logging
             current_status = await self.fetch_status()
             current_stepper = current_status.get('equipment', {}).get('robot', {}).get('stepper', 0)
-            new_stepper = max(0, current_stepper - 15)  # Don't go below 0
             
             if self._debug_mode:
-                _LOGGER.debug(f"Reducing 15 minutes: current stepper={current_stepper}, new stepper={new_stepper}")
+                _LOGGER.debug(f"Reducing 15 minutes: current stepper={current_stepper}")
+            
+            # Check for button press rate limiting (debouncing)
+            if hasattr(self, '_last_timing_command_time'):
+                time_since_last = time.time() - self._last_timing_command_time
+                if time_since_last < 3:  # 3 second debounce
+                    remaining_cooldown = 3 - time_since_last
+                    _LOGGER.warning(f"Rate limiting timing commands. Please wait {remaining_cooldown:.1f} more seconds.")
+                    return {
+                        "success": False,
+                        "error": "rate_limited",
+                        "cooldown_remaining": remaining_cooldown,
+                        "message": f"Please wait {remaining_cooldown:.1f} seconds before sending another timing command."
+                    }
+            
+            # Mark timing command time for rate limiting
+            self._last_timing_command_time = time.time()
             
             clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
             
-            # Send the stepper command based on captured websocket traffic from official app
+            # Get the new stepper value (current - 15 minutes)
+            # Stepper represents total minutes adjustment
+            new_stepper = current_stepper - 15
+            
+            # Use the same format as the working test: setCleaningMode with stepper value
             request = {
                 "action": "setCleaningMode",
-                "version": 1,
-                "namespace": "vr",
+                "namespace": self._device_type,
                 "payload": {
                     "state": {
                         "desired": {
@@ -1999,18 +2425,21 @@ class AqualinkClient:
                     "clientToken": clientToken
                 },
                 "service": "StateController",
-                "target": self._serial
+                "target": self._serial,
+                "version": 1
             }
             
-            _LOGGER.info(f"Sending reduce 15 minutes command with stepper={new_stepper}: {request}")
-            result = await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
-            _LOGGER.info(f"Reduce 15 minutes response: {result}")
+            if self._debug_mode:
+                _LOGGER.debug(f"Sending reduce 15 minutes command: stepper {current_stepper} → {new_stepper}")
+            result = await asyncio.wait_for(self.set_cleaner_state(request), timeout=15)
+            if self._debug_mode:
+                _LOGGER.debug(f"Reduce 15 minutes response: {result}")
             
             # Also send a null command to clear the desired state (as seen in websocket traffic)
             clear_request = {
                 "action": "setCleaningMode",
                 "version": 1,
-                "namespace": "vr",
+                "namespace": self._device_type,
                 "payload": {
                     "state": {
                         "desired": {
@@ -2027,15 +2456,39 @@ class AqualinkClient:
                 "target": self._serial
             }
             
-            await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=30)
+            await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=15)
             
             if self._debug_mode:
                 _LOGGER.debug(f"✅ Reduce 15 minutes command completed successfully")
-            return result
+            
+            # Trigger multiple immediate updates for ultra-fast button feedback
+            if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
+                try:
+                    # Immediate callback
+                    asyncio.create_task(self._coordinator_callback())
+                    # Additional callbacks to catch any delayed state changes
+                    asyncio.create_task(self._delayed_callback(0.5))
+                    asyncio.create_task(self._delayed_callback(1.0))
+                except Exception as e:
+                    _LOGGER.debug(f"Error triggering immediate callback: {e}")
+            
+            # Return success result with notification info for coordinator to handle
+            return {
+                "success": True, 
+                "action": "reduce_15_minutes",
+                "previous_stepper": current_stepper,
+                "new_stepper": new_stepper,
+                "message": f"Reduced 15 minutes from cleaning time. Stepper: {current_stepper} → {new_stepper}"
+            }
             
         except Exception as e:
             _LOGGER.error(f"❌ Reduce 15 minutes command failed: {e}")
-            return None
+            # Return error result for coordinator to handle
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Failed to reduce 15 minutes: {str(e)}"
+            }
 
 class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     """Coordinator to poll AqualinkClient and update data."""
@@ -2055,14 +2508,125 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         # Increasing from 3 to 30 - this is 15 minutes with default 30 second scan interval
         self._max_failures_before_unavailable = 30  # Allow 30 failures before marking unavailable
         self._setup_complete = False  # Flag to track if initial setup is complete
+        self._last_timing_command = 0  # Timestamp of last timing command for debouncing
         
-        # Note: Background websocket listener disabled - using fresh connections for reliability
-        # self._websocket_listener_task = None
-        # self._should_stop_listener = False
-        # self._live_updates_enabled = True
+        # Adaptive polling for efficiency
+        self._base_interval = interval  # Store original interval (3 seconds)
+        self._fast_interval = 1.5  # Fast interval when robot is active
+        self._slow_interval = 10   # Slow interval when robot is idle
+        self._last_activity_time = 0
+        
+        # Real-time websocket listener for instant updates
+        self._websocket_listener_task = None
+        self._should_stop_listener = False
+        
+        # Set up callback for real-time updates
+        self.client.set_coordinator_callback(self._handle_realtime_update)
+        self.client.set_coordinator_reference(self)
+        
+        # Persistent websocket connection provides improved reliability and performance
+        # Real-time websocket listener provides instant updates when robot state changes
+        # Commands use persistent connection with automatic reconnection and retry logic
 
-    # Note: Background websocket listener methods disabled - using fresh connections for reliability
-    # All websocket listener functionality has been replaced with fresh connection approach
+    # Persistent websocket connection provides resilient command execution
+    # Automatic retry logic and circuit breaker patterns prevent device unavailability
+
+    async def _handle_realtime_update(self):
+        """Handle real-time updates from websocket listener with immediate, unthrottled refresh."""
+        try:
+            # Force immediate data update bypassing normal coordinator throttling
+            # This provides instant responsiveness matching the websocket monitor
+            await self._immediate_refresh()
+            # Debug logging removed to prevent logbook flooding with frequent real-time updates
+        except Exception as e:
+            _LOGGER.debug(f"Error handling real-time update: {e}")
+            
+    async def _immediate_refresh(self):
+        """Perform immediate data refresh bypassing ALL coordinator throttling for real-time updates."""
+        try:
+            # Direct data update without any throttling delays
+            new_data = await self._async_update_data()
+            if new_data:
+                # Update data immediately
+                self.data = new_data
+                
+                # Force immediate entity state updates bypassing Home Assistant throttling
+                # This ensures instant responsiveness matching the app experience
+                for update_callback in self._listeners:
+                    try:
+                        # Call each entity's update callback immediately
+                        if asyncio.iscoroutinefunction(update_callback):
+                            asyncio.create_task(update_callback())
+                        else:
+                            update_callback()
+                    except Exception as e:
+                        _LOGGER.debug(f"Error in immediate entity callback: {e}")
+                
+                # Also trigger the normal update mechanism as backup
+                self.async_update_listeners()
+                # Debug logging removed to prevent logbook flooding with frequent updates
+        except Exception as e:
+            _LOGGER.debug(f"Error in immediate refresh: {e}")
+
+    async def _start_websocket_listener(self):
+        """Start the websocket listener task for real-time updates."""
+        if self._websocket_listener_task and not self._websocket_listener_task.done():
+            return  # Already running
+            
+        try:
+            self._should_stop_listener = False
+            self._websocket_listener_task = asyncio.create_task(
+                self.client._websocket_listener()
+            )
+            _LOGGER.debug("Started websocket listener for real-time updates")
+        except Exception as e:
+            _LOGGER.warning(f"Failed to start websocket listener: {e}")
+
+    async def _stop_websocket_listener(self):
+        """Stop the websocket listener task."""
+        self._should_stop_listener = True
+        
+        if self._websocket_listener_task and not self._websocket_listener_task.done():
+            self._websocket_listener_task.cancel()
+            try:
+                await self._websocket_listener_task
+            except asyncio.CancelledError:
+                pass
+            _LOGGER.debug("Stopped websocket listener")
+
+    def _update_polling_interval(self, data):
+        """Adaptive polling interval based on robot activity to optimize CPU usage."""
+        try:
+            current_activity = data.get("activity", "idle")
+            current_time = time.time()
+            
+            # Determine if robot is active
+            is_active = current_activity in ["cleaning", "returning"] or data.get("status") == "online"
+            
+            # Check for recent commands (within last 30 seconds)
+            recent_command = (current_time - self._last_activity_time) < 30
+            
+            if is_active or recent_command:
+                # Robot is active or recently commanded - use fast polling
+                new_interval = self._fast_interval
+                self._last_activity_time = current_time
+            else:
+                # Robot is idle - use slower polling to save CPU
+                new_interval = self._slow_interval
+            
+            # Only update interval if it has changed to avoid unnecessary updates
+            current_interval = self.update_interval.total_seconds() if self.update_interval else self._base_interval
+            if abs(current_interval - new_interval) > 0.5:
+                self.update_interval = timedelta(seconds=new_interval)
+                _LOGGER.debug(f"Adaptive polling: {current_activity} -> {new_interval}s interval")
+                
+        except Exception as e:
+            _LOGGER.debug(f"Error updating polling interval: {e}")
+    
+    def _mark_recent_activity(self):
+        """Mark recent activity to trigger faster polling temporarily."""
+        import time
+        self._last_activity_time = time.time()
 
     async def _async_update_data(self):
         try:
@@ -2075,8 +2639,8 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                 status = await self.client.fetch_status(quick_setup=True)
                 self._setup_complete = True
                 
-                # Note: Background websocket listener disabled - using fresh connections
-                _LOGGER.debug("Quick setup complete, using fresh connections for data requests")
+                # Use coordinator polling for consistent status updates with persistent websocket
+                _LOGGER.debug("Quick setup complete, using persistent websocket connections with retry logic")
             else:
                 # Normal operation with full status fetch
                 status = await self.client.fetch_status()
@@ -2092,6 +2656,17 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             
             # Reset failure count on successful update
             self._consecutive_failures = 0
+            
+            # Reset websocket failure count on successful status update
+            self.client._reset_websocket_failures()
+            
+            # Adaptive polling based on robot activity for CPU efficiency
+            self._update_polling_interval(merged_data)
+            
+            # Start websocket listener for real-time updates after first successful update
+            if is_first_call:
+                await self._start_websocket_listener()
+                _LOGGER.debug("Started real-time websocket listener for instant updates")
             
             # Save data for next update
             self._last_data = merged_data.copy()
@@ -2145,12 +2720,11 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         await self.client.return_to_base()
         
     async def _execute_remote_command(self, command_method):
-        """Execute a remote command with device type checking."""
+        """Execute a remote command with device type checking but no automatic refresh."""
         if self.client._device_type not in {"vr", "vortrax"}:
             return
         await command_method()
-        # Only refresh once at the end to avoid multiple API calls
-        await self.async_request_refresh()
+        # Remove automatic refresh to improve responsiveness - let normal polling handle updates
 
     async def async_remote_forward(self):
         """Send forward command to the robot for remote control - centralized business logic."""
@@ -2176,7 +2750,79 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         """Add 15 minutes to cleaning time - centralized business logic."""
         if self.client._device_type not in {"vr", "vortrax"}:
             return
-        await self.client.add_fifteen_minutes()
+            
+        # Debouncing: Check if enough time has passed since last timing command
+        current_time = time.time()
+        time_since_last = current_time - self._last_timing_command
+        debounce_seconds = 3  # 3 second cooldown
+        
+        if time_since_last < debounce_seconds:
+            # Too soon - send notification about rate limiting
+            try:
+                await self.hass.services.async_call(
+                    "browser_mod",
+                    "notification",
+                    {
+                        "message": f"Please wait {debounce_seconds - time_since_last:.1f} more seconds before next timing adjustment.",
+                        "duration": 2000,  # 2 seconds
+                        "action_text": "OK"
+                    }
+                )
+            except Exception:
+                # Fallback to persistent notification if browser_mod not available
+                await self.hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "title": "Rate Limited",
+                        "message": f"Please wait {debounce_seconds - time_since_last:.1f} more seconds before next timing adjustment.",
+                        "notification_id": f"timing_rate_limit_{self.client.robot_id}"
+                    }
+                )
+            return
+            
+        # Update timestamp for debouncing
+        self._last_timing_command = current_time
+        
+        result = await self.client.add_fifteen_minutes()
+        
+        # Send notification to user
+        if result and isinstance(result, dict):
+            if result.get("success"):
+                # Try browser_mod toast notification first (more elegant)
+                try:
+                    await self.hass.services.async_call(
+                        "browser_mod",
+                        "notification",
+                        {
+                            "message": result.get("message", "Added 15 minutes to cleaning time."),
+                            "duration": 4000,  # 4 seconds
+                            "action_text": "OK"
+                        }
+                    )
+                except Exception:
+                    # Fallback to persistent notification if browser_mod not available
+                    await self.hass.services.async_call(
+                        "persistent_notification",
+                        "create",
+                        {
+                            "title": "Pool Robot",
+                            "message": result.get("message", "Added 15 minutes to cleaning time."),
+                            "notification_id": f"robot_time_change_{self.client._serial}"
+                        }
+                    )
+            else:
+                # For errors, always use persistent notifications (more important)
+                await self.hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "title": "Pool Robot Error",
+                        "message": result.get("message", "Failed to add 15 minutes."),
+                        "notification_id": f"robot_error_{self.client._serial}"
+                    }
+                )
+        
         # Request immediate refresh to get updated timing information
         await self.async_request_refresh()
 
@@ -2184,7 +2830,79 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         """Reduce 15 minutes from cleaning time - centralized business logic."""
         if self.client._device_type not in {"vr", "vortrax"}:
             return
-        await self.client.reduce_fifteen_minutes()
+            
+        # Debouncing: Check if enough time has passed since last timing command
+        current_time = time.time()
+        time_since_last = current_time - self._last_timing_command
+        debounce_seconds = 3  # 3 second cooldown
+        
+        if time_since_last < debounce_seconds:
+            # Too soon - send notification about rate limiting
+            try:
+                await self.hass.services.async_call(
+                    "browser_mod",
+                    "notification",
+                    {
+                        "message": f"Please wait {debounce_seconds - time_since_last:.1f} more seconds before next timing adjustment.",
+                        "duration": 2000,  # 2 seconds
+                        "action_text": "OK"
+                    }
+                )
+            except Exception:
+                # Fallback to persistent notification if browser_mod not available
+                await self.hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "title": "Rate Limited",
+                        "message": f"Please wait {debounce_seconds - time_since_last:.1f} more seconds before next timing adjustment.",
+                        "notification_id": f"timing_rate_limit_{self.client.robot_id}"
+                    }
+                )
+            return
+            
+        # Update timestamp for debouncing
+        self._last_timing_command = current_time
+        
+        result = await self.client.reduce_fifteen_minutes()
+        
+        # Send notification to user
+        if result and isinstance(result, dict):
+            if result.get("success"):
+                # Try browser_mod toast notification first (more elegant)
+                try:
+                    await self.hass.services.async_call(
+                        "browser_mod",
+                        "notification",
+                        {
+                            "message": result.get("message", "Reduced cleaning time by 15 minutes."),
+                            "duration": 4000,  # 4 seconds
+                            "action_text": "OK"
+                        }
+                    )
+                except Exception:
+                    # Fallback to persistent notification if browser_mod not available
+                    await self.hass.services.async_call(
+                        "persistent_notification",
+                        "create",
+                        {
+                            "title": "Pool Robot",
+                            "message": result.get("message", "Reduced cleaning time by 15 minutes."),
+                            "notification_id": f"robot_time_change_{self.client._serial}"
+                        }
+                    )
+            else:
+                # For errors, always use persistent notifications (more important)
+                await self.hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "title": "Pool Robot Error",
+                        "message": result.get("message", "Failed to reduce 15 minutes."),
+                        "notification_id": f"robot_error_{self.client._serial}"
+                    }
+                )
+        
         # Request immediate refresh to get updated timing information
         await self.async_request_refresh()
         
@@ -2194,5 +2912,10 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         """Clean up resources when coordinator is being unloaded."""
         _LOGGER.debug("Starting coordinator cleanup")
         
-        # Note: Websocket listener cleanup disabled - using fresh connections
-        _LOGGER.debug("Coordinator cleanup complete - no persistent connections to close")
+        # Stop websocket listener task
+        await self._stop_websocket_listener()
+        
+        # Close persistent websocket connection in client
+        await self.client._close_websocket()
+        
+        _LOGGER.debug("Coordinator cleanup complete - websocket listener and connection closed")

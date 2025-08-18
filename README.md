@@ -95,7 +95,7 @@ A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners
 
 ## 🌍 Language Configuration
 
-1. Go to **[User Profile](https://my.home-assistant.io/redirect/profile/)** → **Language**
+1. Go to System → **[General](https://my.home-assistant.io/redirect/general/)** → **Language**
 2. Select your preferred language
 3. Restart Home Assistant and reload the integration
 

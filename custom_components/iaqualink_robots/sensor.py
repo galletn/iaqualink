@@ -120,8 +120,20 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the current value with resilient handling for temporary data unavailability."""
-        # Use resilient approach: return current data if available, otherwise last known value
+        # Check if we have coordinator data and it's not in an error state
         if self.coordinator.data:
+            # Check if this is a no_data or connection error state - preserve cached values in these cases
+            error_state = self.coordinator.data.get("error_state")
+            if error_state in ["no_data", "update_failed", "setup_cancelled", "connection_failed"]:
+                # During connection/data errors, return last known value to preserve sensor state
+                cached_value = getattr(self, '_last_value', None)
+                if cached_value is not None:
+                    import logging
+                    _LOGGER = logging.getLogger(__name__)
+                    _LOGGER.debug(f"Sensor {self._key} preserving cached value '{cached_value}' during {error_state} error")
+                    return cached_value
+                # If no cached value, fall through to try getting current data
+            
             current_value = self.coordinator.data.get(self._key)
             
             # Handle value translation for display
@@ -157,19 +169,27 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
                 }
                 current_value = status_display_map.get(current_value, current_value)
             
-            # Log value changes for important sensors to help debug update timing
-            if (self._key in ["fan_speed", "activity", "status", "time_remaining"] and 
-                current_value != self._last_value and 
-                current_value is not None):
-                import logging
-                _LOGGER = logging.getLogger(__name__)
-                _LOGGER.debug(f"Sensor {self._key} value changed: {self._last_value} -> {current_value}")
+            # Only update cached value if we have valid current data (not None and not "unknown")
+            if current_value is not None and current_value != "unknown":
+                # Log value changes for important sensors to help debug update timing
+                if (self._key in ["fan_speed", "activity", "status", "time_remaining"] and 
+                    current_value != getattr(self, '_last_value', None)):
+                    import logging
+                    _LOGGER = logging.getLogger(__name__)
+                    _LOGGER.debug(f"Sensor {self._key} value changed: {getattr(self, '_last_value', None)} -> {current_value}")
                 
-            # Update last known value when we have current data
-            if current_value is not None:
                 self._last_value = current_value
-                
-            return current_value
+                return current_value
+            else:
+                # If current value is None or "unknown", return cached value if available
+                cached_value = getattr(self, '_last_value', None)
+                if cached_value is not None:
+                    import logging
+                    _LOGGER = logging.getLogger(__name__)
+                    _LOGGER.debug(f"Sensor {self._key} using cached value '{cached_value}' instead of '{current_value}'")
+                    return cached_value
+                # If no cached value and current is None/unknown, return the current value anyway
+                return current_value
         else:
             # During temporary connection issues, return last known value
             # This prevents sensors from showing "unknown" during brief outages

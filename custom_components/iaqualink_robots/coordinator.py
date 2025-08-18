@@ -213,7 +213,7 @@ class AqualinkClient:
             _LOGGER.debug("Authenticating with iAqualink API...")
         try:
             data = {
-                "apikey": self._api_key,
+                "apiKey": self._api_key,
                 "email": self._username,
                 "password": self._password
             }
@@ -1356,16 +1356,25 @@ class AqualinkClient:
             
             request = None
             if self._device_type == "vr" or self._device_type == "vortrax":
+                # Use exact format from MITM proxy capture
                 request = {
                     "action": "setCleanerState",
+                    "version": 1,
                     "namespace": self._device_type,
                     "payload": {
-                        "clientToken": clientToken,
-                        "state": {"desired": {"equipment": {"robot": {"state": 1}}}}
+                        "state": {
+                            "desired": {
+                                "equipment": {
+                                    "robot": {
+                                        "state": 1
+                                    }
+                                }
+                            }
+                        },
+                        "clientToken": clientToken
                     },
                     "service": "StateController",
-                    "target": self._serial,
-                    "version": 1
+                    "target": self._serial
                 }
             elif self._device_type == "cyclobat":
                 request = {
@@ -1410,16 +1419,25 @@ class AqualinkClient:
             
             request = None
             if self._device_type == "vr" or self._device_type == "vortrax":
+                # Use exact format from MITM proxy capture
                 request = {
                     "action": "setCleanerState",
+                    "version": 1,
                     "namespace": self._device_type,
                     "payload": {
-                        "clientToken": clientToken,
-                        "state": {"desired": {"equipment": {"robot": {"state": 0}}}}
+                        "state": {
+                            "desired": {
+                                "equipment": {
+                                    "robot": {
+                                        "state": 0
+                                    }
+                                }
+                            }
+                        },
+                        "clientToken": clientToken
                     },
                     "service": "StateController",
-                    "target": self._serial,
-                    "version": 1
+                    "target": self._serial
                 }
             elif self._device_type == "cyclobat":
                 request = {
@@ -1463,6 +1481,66 @@ class AqualinkClient:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
                 _LOGGER.debug("Stop cleaning requested, reset time values: %s", reset_values)
                 return reset_values  # Return the reset values for immediate use by vacuum entity
+                
+    async def pause_cleaning(self):
+        """Pause the vacuum cleaning."""
+        if self._device_type == "i2d_robot":
+            # i2d robots might not support pause - use stop instead
+            return await self.stop_cleaning()
+        else:
+            clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+            
+            request = None
+            if self._device_type == "vr" or self._device_type == "vortrax":
+                # Use exact format from MITM proxy capture - state 2 = pause
+                request = {
+                    "action": "setCleanerState",
+                    "version": 1,
+                    "namespace": self._device_type,
+                    "payload": {
+                        "state": {
+                            "desired": {
+                                "equipment": {
+                                    "robot": {
+                                        "state": 2
+                                    }
+                                }
+                            }
+                        },
+                        "clientToken": clientToken
+                    },
+                    "service": "StateController",
+                    "target": self._serial
+                }
+            elif self._device_type == "cyclobat":
+                # Cyclobat pause might be different - using same format for now
+                request = {
+                    "action": "setCleaningMode",
+                    "version": 1,
+                    "namespace": "cyclobat",
+                    "payload": {
+                        "state": {"desired": {"equipment": {"robot": {"main": {"ctrl": 2}}}}},
+                        "clientToken": clientToken
+                    },
+                    "service": "StateController",
+                    "target": self._serial
+                }
+            elif self._device_type == "cyclonext":
+                # Cyclonext pause might be different
+                request = {
+                    "action": "setCleanerState",
+                    "namespace": "cyclonext",
+                    "payload": {
+                        "clientToken": clientToken,
+                        "state": {"desired": {"equipment": {"robot.1": {"mode": 2}}}}
+                    },
+                    "service": "StateController",
+                    "target": self._serial,
+                    "version": 1
+                }
+            
+            if request:
+                await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
                 
     async def return_to_base(self):
         """Set the vacuum cleaner to return to the dock."""
@@ -1578,12 +1656,21 @@ class AqualinkClient:
             }
             _cycle_speed = cycle_speed_map.get(fan_speed)
             if _cycle_speed:
+                # Use exact format from MITM proxy capture matching setCleaningMode action
                 request = {
                     "action": "setCleaningMode",
                     "version": 1,
                     "namespace": self._device_type,
                     "payload": {
-                        "state": {"desired": {"equipment": {"robot": {"prCyc": _cycle_speed}}}},
+                        "state": {
+                            "desired": {
+                                "equipment": {
+                                    "robot": {
+                                        "prCyc": int(_cycle_speed)
+                                    }
+                                }
+                            }
+                        },
                         "clientToken": clientToken
                     },
                     "service": "StateController",
@@ -1654,63 +1741,131 @@ class AqualinkClient:
         
         return {"success": False, "fan_speed": fan_speed, "error": "No valid request generated"}
 
+    async def _enter_remote_control_mode(self):
+        """Enter remote control mode by setting robot to pause state (state: 2)."""
+        _LOGGER.debug("Entering remote control mode (state: 2)")
+        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        request = {
+            "action": "setCleanerState",
+            "version": 1,
+            "namespace": self._device_type,
+            "payload": {
+                "state": {
+                    "desired": {
+                        "equipment": {
+                            "robot": {
+                                "state": 2  # Pause mode enables remote control
+                            }
+                        }
+                    }
+                },
+                "clientToken": clientToken
+            },
+            "service": "StateController",
+            "target": self._serial
+        }
+        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+        
+    async def _exit_remote_control_mode(self):
+        """Exit remote control mode by setting robot to stopped state (state: 0)."""
+        _LOGGER.debug("Exiting remote control mode (state: 0)")
+        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        request = {
+            "action": "setCleanerState",
+            "version": 1,
+            "namespace": self._device_type,
+            "payload": {
+                "state": {
+                    "desired": {
+                        "equipment": {
+                            "robot": {
+                                "state": 0  # Stopped state exits remote control
+                            }
+                        }
+                    }
+                },
+                "clientToken": clientToken
+            },
+            "service": "StateController",
+            "target": self._serial
+        }
+        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+
+    async def _send_remote_command(self, rmt_ctrl_value, command_name="remote"):
+        """Send a remote control command after ensuring robot is in remote control mode."""
+        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        request = {
+            "action": "setRemoteSteeringControl",
+            "version": 1,
+            "namespace": self._device_type,
+            "payload": {
+                "state": {
+                    "desired": {
+                        "equipment": {
+                            "robot": {
+                                "rmt_ctrl": rmt_ctrl_value
+                            }
+                        }
+                    }
+                },
+                "clientToken": clientToken
+            },
+            "service": "StateController",
+            "target": self._serial
+        }
+        _LOGGER.debug(f"Sending {command_name} command (rmt_ctrl: {rmt_ctrl_value})")
+        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+
     async def remote_forward(self):
         """Send forward command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote forward not supported for device type: {self._device_type}")
             return
-            
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-        request = {
-            "action": "remoteControl",
-            "namespace": self._device_type,
-            "payload": {
-                "clientToken": clientToken,
-                "state": {"desired": {"equipment": {"robot": {"remoteControl": "forward"}}}}
-            },
-            "service": "StateController",
-            "target": self._serial,
-            "version": 1
-        }
-        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+        
+        # Ensure robot is in remote control mode, send forward command, then stop
+        await self._enter_remote_control_mode()
+        await asyncio.sleep(0.5)  # Brief pause for mode transition
+        await self._send_remote_command(1, "forward")
 
     async def remote_backward(self):
         """Send backward command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote backward not supported for device type: {self._device_type}")
             return
-            
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-        request = {
-            "action": "remoteControl",
-            "namespace": self._device_type,
-            "payload": {
-                "clientToken": clientToken,
-                "state": {"desired": {"equipment": {"robot": {"remoteControl": "backward"}}}}
-            },
-            "service": "StateController",
-            "target": self._serial,
-            "version": 1
-        }
-        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+        
+        # Ensure robot is in remote control mode, send backward command
+        await self._enter_remote_control_mode()
+        await asyncio.sleep(0.5)  # Brief pause for mode transition
+        await self._send_remote_command(2, "backward")
 
     async def remote_rotate_left(self):
         """Send rotate left command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote rotate left not supported for device type: {self._device_type}")
             return
-            
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        
+        # Ensure robot is in remote control mode, send rotate left command
+        await self._enter_remote_control_mode()
+        await asyncio.sleep(0.5)  # Brief pause for mode transition
+        await self._send_remote_command(4, "rotate left")
         request = {
-            "action": "remoteControl",
+            "action": "setRemoteSteeringControl",
+            "version": 1,
             "namespace": self._device_type,
             "payload": {
-                "clientToken": clientToken,
-                "state": {"desired": {"equipment": {"robot": {"remoteControl": "rotate_left"}}}}
+                "state": {
+                    "desired": {
+                        "equipment": {
+                            "robot": {
+                                "rmt_ctrl": 4
+                            }
+                        }
+                    }
+                },
+                "clientToken": f"{self._id}|{self._auth_token}|{self._app_client_id}"
             },
             "service": "StateController",
-            "target": self._serial,
-            "version": 1
+            "target": self._serial
         }
         await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
@@ -1719,40 +1874,168 @@ class AqualinkClient:
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote rotate right not supported for device type: {self._device_type}")
             return
-            
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-        request = {
-            "action": "remoteControl",
-            "namespace": self._device_type,
-            "payload": {
-                "clientToken": clientToken,
-                "state": {"desired": {"equipment": {"robot": {"remoteControl": "rotate_right"}}}}
-            },
-            "service": "StateController",
-            "target": self._serial,
-            "version": 1
-        }
-        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+        
+        # Ensure robot is in remote control mode, send rotate right command
+        await self._enter_remote_control_mode()
+        await asyncio.sleep(0.5)  # Brief pause for mode transition
+        await self._send_remote_command(4, "rotate right")
 
     async def remote_stop(self):
-        """Send stop command to the robot for VR and VortraX robots."""
+        """Send stop command and exit remote control mode for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote stop not supported for device type: {self._device_type}")
             return
+        
+        # Send stop command, then exit remote control mode
+        await self._send_remote_command(0, "stop")
+        await asyncio.sleep(0.5)  # Brief pause before exiting
+        await self._exit_remote_control_mode()
+
+    async def add_fifteen_minutes(self):
+        """Add 15 minutes to cleaning time for VR and VortraX robots."""
+        if self._device_type not in ["vr", "vortrax"]:
+            _LOGGER.warning(f"Add 15 minutes not supported for device type: {self._device_type}")
+            return
             
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-        request = {
-            "action": "remoteControl",
-            "namespace": self._device_type,
-            "payload": {
-                "clientToken": clientToken,
-                "state": {"desired": {"equipment": {"robot": {"remoteControl": "stop"}}}}
-            },
-            "service": "StateController",
-            "target": self._serial,
-            "version": 1
-        }
-        await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+        try:
+            # Get current stepper value to calculate new value
+            current_status = await self.fetch_status()
+            current_stepper = current_status.get('equipment', {}).get('robot', {}).get('stepper', 0)
+            new_stepper = current_stepper + 15
+            
+            if self._debug_mode:
+                _LOGGER.debug(f"Adding 15 minutes: current stepper={current_stepper}, new stepper={new_stepper}")
+            
+            clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+            
+            # Send the stepper command based on captured websocket traffic from official app
+            request = {
+                "action": "setCleaningMode",
+                "version": 1,
+                "namespace": "vr",
+                "payload": {
+                    "state": {
+                        "desired": {
+                            "equipment": {
+                                "robot": {
+                                    "stepper": new_stepper
+                                }
+                            }
+                        }
+                    },
+                    "clientToken": clientToken
+                },
+                "service": "StateController",
+                "target": self._serial
+            }
+            
+            _LOGGER.info(f"Sending add 15 minutes command with stepper={new_stepper}: {request}")
+            result = await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+            _LOGGER.info(f"Add 15 minutes response: {result}")
+            
+            # Also send a null command to clear the desired state (as seen in websocket traffic)
+            clear_request = {
+                "action": "setCleaningMode",
+                "version": 1, 
+                "namespace": "vr",
+                "payload": {
+                    "state": {
+                        "desired": {
+                            "equipment": {
+                                "robot": {
+                                    "stepper": None
+                                }
+                            }
+                        }
+                    },
+                    "clientToken": clientToken
+                },
+                "service": "StateController",
+                "target": self._serial
+            }
+            
+            await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=30)
+            
+            if self._debug_mode:
+                _LOGGER.debug(f"✅ Add 15 minutes command completed successfully")
+            return result
+            
+        except Exception as e:
+            _LOGGER.error(f"❌ Add 15 minutes command failed: {e}")
+            return None
+
+    async def reduce_fifteen_minutes(self):
+        """Reduce 15 minutes from cleaning time for VR and VortraX robots."""
+        if self._device_type not in ["vr", "vortrax"]:
+            _LOGGER.warning(f"Reduce 15 minutes not supported for device type: {self._device_type}")
+            return
+            
+        try:
+            # Get current stepper value to calculate new value
+            current_status = await self.fetch_status()
+            current_stepper = current_status.get('equipment', {}).get('robot', {}).get('stepper', 0)
+            new_stepper = max(0, current_stepper - 15)  # Don't go below 0
+            
+            if self._debug_mode:
+                _LOGGER.debug(f"Reducing 15 minutes: current stepper={current_stepper}, new stepper={new_stepper}")
+            
+            clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+            
+            # Send the stepper command based on captured websocket traffic from official app
+            request = {
+                "action": "setCleaningMode",
+                "version": 1,
+                "namespace": "vr",
+                "payload": {
+                    "state": {
+                        "desired": {
+                            "equipment": {
+                                "robot": {
+                                    "stepper": new_stepper
+                                }
+                            }
+                        }
+                    },
+                    "clientToken": clientToken
+                },
+                "service": "StateController",
+                "target": self._serial
+            }
+            
+            _LOGGER.info(f"Sending reduce 15 minutes command with stepper={new_stepper}: {request}")
+            result = await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+            _LOGGER.info(f"Reduce 15 minutes response: {result}")
+            
+            # Also send a null command to clear the desired state (as seen in websocket traffic)
+            clear_request = {
+                "action": "setCleaningMode",
+                "version": 1,
+                "namespace": "vr",
+                "payload": {
+                    "state": {
+                        "desired": {
+                            "equipment": {
+                                "robot": {
+                                    "stepper": None
+                                }
+                            }
+                        }
+                    },
+                    "clientToken": clientToken
+                },
+                "service": "StateController",
+                "target": self._serial
+            }
+            
+            await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=30)
+            
+            if self._debug_mode:
+                _LOGGER.debug(f"✅ Reduce 15 minutes command completed successfully")
+            return result
+            
+        except Exception as e:
+            _LOGGER.error(f"❌ Reduce 15 minutes command failed: {e}")
+            return None
 
 class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     """Coordinator to poll AqualinkClient and update data."""
@@ -1888,6 +2171,22 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     async def async_remote_stop(self):
         """Send stop command to the robot for remote control - centralized business logic."""
         await self._execute_remote_command(self.client.remote_stop)
+
+    async def async_add_fifteen_minutes(self):
+        """Add 15 minutes to cleaning time - centralized business logic."""
+        if self.client._device_type not in {"vr", "vortrax"}:
+            return
+        await self.client.add_fifteen_minutes()
+        # Request immediate refresh to get updated timing information
+        await self.async_request_refresh()
+
+    async def async_reduce_fifteen_minutes(self):
+        """Reduce 15 minutes from cleaning time - centralized business logic."""
+        if self.client._device_type not in {"vr", "vortrax"}:
+            return
+        await self.client.reduce_fifteen_minutes()
+        # Request immediate refresh to get updated timing information
+        await self.async_request_refresh()
         
     # Note: Live update methods disabled - using fresh connections for reliability
     

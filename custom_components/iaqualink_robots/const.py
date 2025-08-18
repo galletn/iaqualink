@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Final
 from homeassistant.const import Platform
 
-PLATFORMS: Final = [Platform.VACUUM, Platform.SENSOR]
+PLATFORMS: Final = [Platform.VACUUM, Platform.SENSOR, Platform.BUTTON]
 
 # API endpoints - cleaned up duplicates
 URL_LOGIN: Final = "https://prod.zodiac-io.com/users/v1/login"

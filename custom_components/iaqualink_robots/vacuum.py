@@ -124,6 +124,21 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
         # Update all attributes from coordinator data - coordinator handles all business logic
         data = self.coordinator.data
         if data:
+            # Check if this is a no_data or connection error state - preserve cached state in these cases
+            error_state = data.get("error_state")
+            if error_state in ["no_data", "update_failed", "setup_cancelled", "connection_failed"]:
+                # During connection/data errors, preserve current vacuum state
+                _LOGGER.debug(f"Vacuum preserving cached state during {error_state} error")
+                # Trust the coordinator's resilient status logic - it preserves last known status
+                # for temporary failures and only marks offline after multiple consecutive failures
+                coordinator_status = data.get("status")
+                if coordinator_status:
+                    self._status = coordinator_status
+                    _LOGGER.debug(f"Vacuum status updated to '{coordinator_status}' from coordinator's resilient status logic")
+                # But keep current activity, fan speed, and attributes
+                self.async_write_ha_state()
+                return
+                
             # Log when fan speed changes for debugging
             current_fan_speed = data.get("fan_speed")
             if current_fan_speed != self._attributes.get("fan_speed"):
@@ -135,16 +150,19 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
             if self._attributes != data:
                 self._attributes = data  # Reference instead of copy for performance
             
-            # Map activity from coordinator to VacuumActivity enum
+            # Map activity from coordinator to VacuumActivity enum - only if not "unknown"
             activity = data.get("activity", "idle")
-            if activity == "cleaning":
-                self._activity = VacuumActivity.CLEANING
-            elif activity == "returning":
-                self._activity = VacuumActivity.RETURNING
-            elif activity == "error":
-                self._activity = VacuumActivity.ERROR
+            if activity != "unknown":  # Don't change activity to idle if we get "unknown"
+                if activity == "cleaning":
+                    self._activity = VacuumActivity.CLEANING
+                elif activity == "returning":
+                    self._activity = VacuumActivity.RETURNING
+                elif activity == "error":
+                    self._activity = VacuumActivity.ERROR
+                else:
+                    self._activity = VacuumActivity.IDLE
             else:
-                self._activity = VacuumActivity.IDLE
+                _LOGGER.debug(f"Vacuum preserving current activity {self._activity} instead of unknown")
                 
             # Set device type specific features and fan speed list
             device_type = data.get("device_type")
@@ -159,17 +177,17 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
                 else:
                     self._fan_speed_list = ["floor_only", "walls_only", "floor_and_walls"]
             
-            # Update current fan speed from coordinator data (store as raw key)
+            # Update current fan speed from coordinator data (store as raw key) - only if not unknown
             coordinator_fan_speed = data.get("fan_speed")
-            if coordinator_fan_speed and coordinator_fan_speed != self._fan_speed:
+            if coordinator_fan_speed and coordinator_fan_speed != "unknown" and coordinator_fan_speed != self._fan_speed:
                 _LOGGER.debug(f"Updating vacuum fan speed from coordinator: {self._fan_speed} -> {coordinator_fan_speed}")
                 # Always store the raw key - the fan_speed property will convert to display name
                 self._fan_speed = coordinator_fan_speed
                 _LOGGER.debug(f"Vacuum _fan_speed now set to: '{self._fan_speed}' (raw key)")
-            elif coordinator_fan_speed:
+            elif coordinator_fan_speed and coordinator_fan_speed != "unknown":
                 _LOGGER.debug(f"Vacuum fan speed unchanged: '{self._fan_speed}' (coordinator also has '{coordinator_fan_speed}')")
             else:
-                _LOGGER.debug(f"Coordinator has no fan_speed data, vacuum keeps: '{self._fan_speed}'")
+                _LOGGER.debug(f"Coordinator has no valid fan_speed data ({coordinator_fan_speed}), vacuum keeps: '{self._fan_speed}'")
         
         self.async_write_ha_state()
         
@@ -429,3 +447,11 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
     async def async_remote_stop(self, **kwargs) -> None:
         """Send stop command to the robot for remote control - delegate to coordinator."""
         await self.coordinator.async_remote_stop()  # type: ignore
+
+    async def async_add_fifteen_minutes(self, **kwargs) -> None:
+        """Add 15 minutes to cleaning time - delegate to coordinator."""
+        await self.coordinator.async_add_fifteen_minutes()  # type: ignore
+
+    async def async_reduce_fifteen_minutes(self, **kwargs) -> None:
+        """Reduce 15 minutes from cleaning time - delegate to coordinator."""
+        await self.coordinator.async_reduce_fifteen_minutes()  # type: ignore

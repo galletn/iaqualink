@@ -54,3 +54,25 @@ remote_stop:
       selector:
         entity:
           domain: vacuum
+
+add_fifteen_minutes:
+  target:
+    entity:
+      domain: vacuum
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+
+reduce_fifteen_minutes:
+  target:
+    entity:
+      domain: vacuum
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum

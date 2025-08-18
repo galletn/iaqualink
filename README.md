@@ -76,6 +76,7 @@ A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners
 * Polaris VRX iQ+
 * CNX 30 iQ / CNX 40 iQ / CNX 50 iQ / CNX 4090 iQ
 * OV 5490 iQ / RF 5600 iQ
+* OA 6400 IQ
 * P965 iQ / 9650iQ
 * VortraX TRX 8500 iQ
 * Polaris Freedom Cordless

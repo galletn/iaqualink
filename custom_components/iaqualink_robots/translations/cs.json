@@ -90,6 +90,15 @@
       },
       "status": {
         "name": "Stav"
+      },
+      "stepper": {
+        "name": "Úpravy času"
+      },
+      "stepper_adj_time": {
+        "name": "Krok úpravy"
+      },
+      "stepper_adjustment_minutes": {
+        "name": "Přidaný/odebraný čas"
       }
     },
     "button": {
@@ -107,6 +116,12 @@
       },
       "remote_stop": {
         "name": "Dálkové zastavení"
+      },
+      "add_fifteen_minutes": {
+        "name": "Přidat 15 minut"
+      },
+      "reduce_fifteen_minutes": {
+        "name": "Odebrat 15 minut"
       }
     },
     "vacuum": {
@@ -168,6 +183,26 @@
     "remote_stop": {
       "name": "Dálkové zastavení",
       "description": "Odešle příkaz k zastavení robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysavače k ovládání"
+        }
+      }
+    },
+    "add_fifteen_minutes": {
+      "name": "Přidat 15 minut",
+      "description": "Přidá 15 minut k času čištění (pouze roboti VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysavače k ovládání"
+        }
+      }
+    },
+    "reduce_fifteen_minutes": {
+      "name": "Odebrat 15 minut", 
+      "description": "Odebere 15 minut z času čištění (pouze roboti VR a VortraX)",
       "fields": {
         "entity_id": {
           "name": "Entity",

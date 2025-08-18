@@ -129,7 +129,7 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
                 response = await self._client.add_fifteen_minutes()
                 _LOGGER.info(f"Add 15 minutes command sent to {self._client.robot_name}, response: {response}")
                 
-                # Request coordinator refresh to update timing data
+                # Only request coordinator refresh for timing commands that affect state
                 if hasattr(self.coordinator, 'async_request_refresh'):
                     _LOGGER.info("Requesting coordinator refresh after add 15 minutes")
                     await self.coordinator.async_request_refresh()
@@ -139,7 +139,7 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
                 response = await self._client.reduce_fifteen_minutes()
                 _LOGGER.info(f"Reduce 15 minutes command sent to {self._client.robot_name}, response: {response}")
                 
-                # Request coordinator refresh to update timing data
+                # Only request coordinator refresh for timing commands that affect state
                 if hasattr(self.coordinator, 'async_request_refresh'):
                     _LOGGER.info("Requesting coordinator refresh after reduce 15 minutes")
                     await self.coordinator.async_request_refresh()

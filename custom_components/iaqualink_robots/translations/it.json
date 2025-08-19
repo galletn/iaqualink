@@ -1,0 +1,214 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurazione Robot iAqualink",
+        "description": "Inserisci le credenziali del tuo account iAquaLink.",
+        "data": {
+          "name": "Nome Dispositivo",
+          "username": "Nome Utente",
+          "password": "Password"
+        },
+        "data_description": {
+          "name": "Nome del robot per piscina in Home Assistant",
+          "username": "Il nome utente del tuo account iAquaLink",
+          "password": "La password del tuo account iAquaLink"
+        }
+      },
+      "select_device": {
+        "title": "Seleziona Robot",
+        "description": "Seleziona quale robot aggiungere a Home Assistant.",
+        "data": {
+          "device": "Robot",
+          "name": "Nome Dispositivo"
+        },
+        "data_description": {
+          "device": "Scegli il robot che vuoi aggiungere",
+          "name": "Opzionale: Sostituisci il nome predefinito per questo robot"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossibile connettersi al servizio iAquaLink. Controlla le credenziali e riprova.",
+      "no_devices": "Nessun robot trovato nel tuo account. Verifica che il tuo robot sia registrato correttamente con iAquaLink.",
+      "device_not_found": "Il dispositivo selezionato non è stato trovato. Riprova.",
+      "unknown": "Si è verificato un errore imprevisto. Riprova."
+    },
+    "abort": {
+      "already_configured": "Questo robot è già configurato in Home Assistant."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "serial_number": {
+        "name": "Numero di Serie"
+      },
+      "device_type": {
+        "name": "Tipo di Dispositivo"
+      },
+      "cycle_start_time": {
+        "name": "Orario Inizio Ciclo"
+      },
+      "cycle_duration": {
+        "name": "Durata Ciclo"
+      },
+      "cycle": {
+        "name": "Ciclo"
+      },
+      "battery_level": {
+        "name": "Livello Batteria"
+      },
+      "total_hours": {
+        "name": "Ore Totali"
+      },
+      "canister": {
+        "name": "Livello Contenitore"
+      },
+      "error_state": {
+        "name": "Stato di Errore"
+      },
+      "temperature": {
+        "name": "Temperatura"
+      },
+      "time_remaining_human": {
+        "name": "Tempo Rimanente"
+      },
+      "estimated_end_time": {
+        "name": "Orario Stimato di Fine"
+      },
+      "model": {
+        "name": "Modello"
+      },
+      "time_remaining": {
+        "name": "Tempo Rimanente (Minuti)"
+      },
+      "fan_speed": {
+        "name": "Velocità Ventola"
+      },
+      "activity": {
+        "name": "Attività"
+      },
+      "status": {
+        "name": "Stato"
+      },
+      "stepper": {
+        "name": "Regolazioni Tempo"
+      },
+      "stepper_adj_time": {
+        "name": "Incremento Regolazione"
+      },
+      "stepper_adjustment_minutes": {
+        "name": "Tempo Aggiunto/Rimosso"
+      }
+    },
+    "button": {
+      "remote_forward": {
+        "name": "Telecomando Avanti"
+      },
+      "remote_backward": {
+        "name": "Telecomando Indietro"
+      },
+      "remote_rotate_left": {
+        "name": "Telecomando Ruota Sinistra"
+      },
+      "remote_rotate_right": {
+        "name": "Telecomando Ruota Destra"
+      },
+      "remote_stop": {
+        "name": "Telecomando Stop"
+      },
+      "add_fifteen_minutes": {
+        "name": "Aggiungi 15 Minuti"
+      },
+      "reduce_fifteen_minutes": {
+        "name": "Riduci 15 Minuti"
+      }
+    },
+    "vacuum": {
+      "fan_speed": {
+        "floor_only": "Solo pavimento",
+        "wall_only": "Solo parete",
+        "walls_only": "Solo pareti",
+        "floor_and_walls": "Pavimento e pareti",
+        "smart_floor_and_walls": "SMART Pavimento e pareti"
+      },
+      "time_format": {
+        "hours": "Ora(e)",
+        "minutes": "Minuto(i)",
+        "seconds": "Secondo(i)"
+      }
+    }
+  },
+  "services": {
+    "remote_forward": {
+      "name": "Telecomando Avanti",
+      "description": "Invia comando di avanzamento al robot per il controllo remoto (solo robot VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entità",
+          "description": "Entità aspiratori da controllare"
+        }
+      }
+    },
+    "remote_backward": {
+      "name": "Telecomando Indietro",
+      "description": "Invia comando di arretramento al robot per il controllo remoto (solo robot VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entità",
+          "description": "Entità aspiratori da controllare"
+        }
+      }
+    },
+    "remote_rotate_left": {
+      "name": "Telecomando Ruota Sinistra",
+      "description": "Invia comando di rotazione a sinistra al robot per il controllo remoto (solo robot VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entità",
+          "description": "Entità aspiratori da controllare"
+        }
+      }
+    },
+    "remote_rotate_right": {
+      "name": "Telecomando Ruota Destra",
+      "description": "Invia comando di rotazione a destra al robot per il controllo remoto (solo robot VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entità",
+          "description": "Entità aspiratori da controllare"
+        }
+      }
+    },
+    "remote_stop": {
+      "name": "Telecomando Stop",
+      "description": "Invia comando di arresto agli aspiratori per il controllo remoto (solo robot VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entità",
+          "description": "Entità aspiratori da controllare"
+        }
+      }
+    },
+    "add_fifteen_minutes": {
+      "name": "Aggiungi 15 Minuti",
+      "description": "Aggiungi 15 minuti al tempo di pulizia degli aspiratori (solo robot VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entità",
+          "description": "Entità aspiratori da controllare"
+        }
+      }
+    },
+    "reduce_fifteen_minutes": {
+      "name": "Riduci 15 Minuti",
+      "description": "Riduci 15 minuti dal tempo di pulizia degli aspiratori (solo robot VR e VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entità",
+          "description": "Entità aspiratori da controllare"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,214 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Nastavenie iAqualink robota",
+        "description": "Zadajte prihlasovacie údaje k svojmu iAquaLink účtu.",
+        "data": {
+          "name": "Názov zariadenia",
+          "username": "Používateľské meno",
+          "password": "Heslo"
+        },
+        "data_description": {
+          "name": "Názov pre váš bazénový robot v Home Assistant",
+          "username": "Používateľské meno k vášmu iAquaLink účtu",
+          "password": "Heslo k vášmu iAquaLink účtu"
+        }
+      },
+      "select_device": {
+        "title": "Vyberte robota",
+        "description": "Vyberte, ktorého robota pridať do Home Assistant.",
+        "data": {
+          "device": "Robot",
+          "name": "Názov zariadenia"
+        },
+        "data_description": {
+          "device": "Vyberte robota, ktorého chcete pridať",
+          "name": "Voliteľné: Prepíšte predvolený názov tohto robota"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nepodarilo sa pripojiť k službe iAquaLink. Skontrolujte svoje prihlasovacie údaje a skúste znova.",
+      "no_devices": "Vo vašom účte neboli nájdení žiadni roboti. Skontrolujte, či je váš robot správne zaregistrovaný v iAquaLink.",
+      "device_not_found": "Vybrané zariadenie sa nepodarilo nájsť. Skúste znova.",
+      "unknown": "Vyskytla sa neočakávaná chyba. Skúste znova."
+    },
+    "abort": {
+      "already_configured": "Tento robot je už nakonfigurovaný v Home Assistant."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "serial_number": {
+        "name": "Sériové číslo"
+      },
+      "device_type": {
+        "name": "Typ zariadenia"
+      },
+      "cycle_start_time": {
+        "name": "Čas začiatku cyklu"
+      },
+      "cycle_duration": {
+        "name": "Trvanie cyklu"
+      },
+      "cycle": {
+        "name": "Cyklus"
+      },
+      "battery_level": {
+        "name": "Úroveň batérie"
+      },
+      "total_hours": {
+        "name": "Celkové hodiny"
+      },
+      "canister": {
+        "name": "Úroveň nádoby"
+      },
+      "error_state": {
+        "name": "Stav chyby"
+      },
+      "temperature": {
+        "name": "Teplota"
+      },
+      "time_remaining_human": {
+        "name": "Zostávajúci čas"
+      },
+      "estimated_end_time": {
+        "name": "Odhadovaný čas ukončenia"
+      },
+      "model": {
+        "name": "Model"
+      },
+      "time_remaining": {
+        "name": "Zostávajúci čas (minúty)"
+      },
+      "fan_speed": {
+        "name": "Rýchlosť turbíny"
+      },
+      "activity": {
+        "name": "Aktivita"
+      },
+      "status": {
+        "name": "Stav"
+      },
+      "stepper": {
+        "name": "Úpravy času"
+      },
+      "stepper_adj_time": {
+        "name": "Prírastok úpravy"
+      },
+      "stepper_adjustment_minutes": {
+        "name": "Čas pridaný/odobraný"
+      }
+    },
+    "button": {
+      "remote_forward": {
+        "name": "Diaľkové dopredu"
+      },
+      "remote_backward": {
+        "name": "Diaľkové dozadu"
+      },
+      "remote_rotate_left": {
+        "name": "Diaľkové otočenie doľava"
+      },
+      "remote_rotate_right": {
+        "name": "Diaľkové otočenie doprava"
+      },
+      "remote_stop": {
+        "name": "Diaľkové zastavenie"
+      },
+      "add_fifteen_minutes": {
+        "name": "Pridať 15 minút"
+      },
+      "reduce_fifteen_minutes": {
+        "name": "Odobrať 15 minút"
+      }
+    },
+    "vacuum": {
+      "fan_speed": {
+        "floor_only": "Len podlaha",
+        "wall_only": "Len stena",
+        "walls_only": "Len steny",
+        "floor_and_walls": "Podlaha a steny",
+        "smart_floor_and_walls": "SMART podlaha a steny"
+      },
+      "time_format": {
+        "hours": "Hodina(y)",
+        "minutes": "Minúta(y)",
+        "seconds": "Sekunda(y)"
+      }
+    }
+  },
+  "services": {
+    "remote_forward": {
+      "name": "Diaľkové dopredu",
+      "description": "Odošle príkaz dopredu robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysávača na ovládanie"
+        }
+      }
+    },
+    "remote_backward": {
+      "name": "Diaľkové dozadu",
+      "description": "Odošle príkaz dozadu robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysávača na ovládanie"
+        }
+      }
+    },
+    "remote_rotate_left": {
+      "name": "Diaľkové otočenie doľava",
+      "description": "Odošle príkaz otočenia doľava robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysávača na ovládanie"
+        }
+      }
+    },
+    "remote_rotate_right": {
+      "name": "Diaľkové otočenie doprava",
+      "description": "Odošle príkaz otočenia doprava robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysávača na ovládanie"
+        }
+      }
+    },
+    "remote_stop": {
+      "name": "Diaľkové zastavenie",
+      "description": "Odošle príkaz zastavenia robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysávača na ovládanie"
+        }
+      }
+    },
+    "add_fifteen_minutes": {
+      "name": "Pridať 15 minút",
+      "description": "Pridá 15 minút k času čistenia (len pre roboty VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysávača na ovládanie"
+        }
+      }
+    },
+    "reduce_fifteen_minutes": {
+      "name": "Odobrať 15 minút",
+      "description": "Odoberie 15 minút z času čistenia (len pre roboty VR a VortraX)",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "Entita vysávača na ovládanie"
+        }
+      }
+    }
+  }
+}

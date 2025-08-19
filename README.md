@@ -20,6 +20,7 @@ A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners
 * 🇳🇱 Nederlands
 * 🇵🇹 Português
 * 🇨🇿 Čeština
+* 🇮🇹 Italiano
 
 ## 🚀 Installation
 

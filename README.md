@@ -25,26 +25,20 @@ A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners
 
 ## 🚀 Installation
 
-### HACS (Recommended)
+### HACS
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=galletn&repository=iaqualink&category=integration)
 
 1. Open **HACS** in Home Assistant
-2. Search for **"iaqualink_robots"**
+2. Search for **"iAqualink Robots"**
 3. Click **Install** and restart Home Assistant
 
 > **If not found in search:** Add custom repository `galletn/iaqualink` as type **Integration**.
 
-### Manual Installation
-
-1. Download the latest release
-2. Copy the `iaqualinkRobots` folder to your `custom_components` directory
-3. Restart Home Assistant
-
 ## ⚙️ Setup
 
 1. **Settings** → **Devices & Services** → **Add Integration**
-2. Search for **"iAqualinkRobots"**
+2. Search for **"iAqualink Robots"**
 3. Enter your iAqualink credentials
 4. Select your robot from the detected devices
 

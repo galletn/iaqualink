@@ -1,6 +1,6 @@
 {
   "domain": "iaqualinkRobots",
-  "name": "iaqualinkRobots",
+  "name": "iAqualink Robots",
   "codeowners": ["@galletn"],
   "config_flow": true,
   "dependencies": [],
@@ -10,6 +10,6 @@
   "issue_tracker": "https://github.com/galletn/iaqualink/issues/",
   "requirements": ["aiohttp>=3.9.0"],
   "homeassistant": "2025.1.0",
-  "version": "2.5.0"
+  "version": "2.5.1"
 }
 

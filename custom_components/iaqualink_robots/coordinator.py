@@ -60,6 +60,13 @@ class AqualinkClient:
         self._max_ws_failures_before_offline = 5  # Allow 5 websocket connection failures before marking offline
         # Simple instance ID for logging purposes
         self._instance_id = f"ha-{hash(username + str(id(self))) % 10000:04d}"
+        
+        # Status stabilization to prevent rapid connection status changes
+        self._status_history = []  # Track recent status values
+        self._status_stabilization_window = 30  # 30 second window to stabilize status
+        self._minimum_status_duration = 15  # Minimum time (seconds) a status must persist before changing
+        self._last_status_change_time = 0
+        self._stable_status = None  # The stabilized status we report
 
     def _get_resilient_status(self, error_context: str) -> str:
         """Get status that's resilient to temporary websocket connection failures.
@@ -128,6 +135,86 @@ class AqualinkClient:
         if self._ws_consecutive_failures > 0:
             _LOGGER.debug(f"Resetting websocket failure counter (was {self._ws_consecutive_failures})")
             self._ws_consecutive_failures = 0
+
+    def _stabilize_status(self, raw_status):
+        """Stabilize status changes to prevent rapid flapping between connected/disconnected.
+        
+        This prevents the sensor from rapidly changing state due to temporary network issues
+        or websocket reconnections by requiring a status to persist for a minimum duration.
+        
+        Only applies to websocket-based robots (vr, vortrax, cyclobat, cyclonext).
+        i2d robots use HTTP API and don't need status stabilization.
+        
+        Args:
+            raw_status: The immediate status from the API/websocket
+            
+        Returns:
+            The stabilized status that should be reported to Home Assistant
+        """
+        # Only apply stabilization to websocket-based robots
+        if self._device_type == "i2d_robot":
+            return raw_status
+            
+        import time
+        
+        current_time = time.time()
+        
+        # Track status in history with timestamps
+        self._status_history.append({
+            'status': raw_status,
+            'timestamp': current_time
+        })
+        
+        # Clean up old history entries outside the stabilization window
+        cutoff_time = current_time - self._status_stabilization_window
+        self._status_history = [
+            entry for entry in self._status_history 
+            if entry['timestamp'] > cutoff_time
+        ]
+        
+        # If this is the first status reading, set it immediately
+        if self._stable_status is None:
+            self._stable_status = raw_status
+            self._last_status_change_time = current_time
+            if self._debug_mode:
+                _LOGGER.debug(f"Status stabilizer: Initial status set to '{raw_status}'")
+            return self._stable_status
+        
+        # If the current raw status matches our stable status, just return it
+        if raw_status == self._stable_status:
+            return self._stable_status
+        
+        # Check if enough time has passed since the last status change
+        time_since_last_change = current_time - self._last_status_change_time
+        
+        if time_since_last_change < self._minimum_status_duration:
+            # Not enough time has passed - keep the stable status
+            if self._debug_mode:
+                _LOGGER.debug(f"Status stabilizer: Ignoring rapid change from '{self._stable_status}' to '{raw_status}' (only {time_since_last_change:.1f}s elapsed, need {self._minimum_status_duration}s)")
+            return self._stable_status
+        
+        # Enough time has passed - analyze the recent history to see if the new status is consistent
+        recent_entries = [
+            entry for entry in self._status_history 
+            if entry['timestamp'] > (current_time - self._minimum_status_duration)
+        ]
+        
+        # Count how many recent entries match the new raw status
+        matching_count = sum(1 for entry in recent_entries if entry['status'] == raw_status)
+        total_recent_count = len(recent_entries)
+        
+        # If most recent readings are the new status, accept the change
+        if total_recent_count > 0 and (matching_count / total_recent_count) >= 0.7:  # 70% threshold
+            if self._debug_mode:
+                _LOGGER.debug(f"Status stabilizer: Status change accepted from '{self._stable_status}' to '{raw_status}' ({matching_count}/{total_recent_count} recent readings match)")
+            self._stable_status = raw_status
+            self._last_status_change_time = current_time
+            return self._stable_status
+        else:
+            # Not enough consistency - keep the stable status
+            if self._debug_mode:
+                _LOGGER.debug(f"Status stabilizer: Status change rejected from '{self._stable_status}' to '{raw_status}' ({matching_count}/{total_recent_count} recent readings match, need ≥70%)")
+            return self._stable_status
 
     def _log_connection_context(self):
         """Log additional context to help troubleshoot websocket issues."""
@@ -924,11 +1011,13 @@ class AqualinkClient:
 
         try:
             if data and 'payload' in data:
-                result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+                raw_status = data['payload']['robot']['state']['reported']['aws']['status']
+                result["status"] = self._stabilize_status(raw_status)
                 # Store the last known good status
-                self._last_known_status = result["status"]
+                self._last_known_status = raw_status
             else:
-                result["status"] = self._get_resilient_status("no_data")
+                raw_status = self._get_resilient_status("no_data")
+                result["status"] = self._stabilize_status(raw_status)
                 result["debug"] = f"No data received: {data}" if self._debug_mode else ""
         except Exception:
             # Returns empty message sometimes, try second call
@@ -937,20 +1026,24 @@ class AqualinkClient:
             try:
                 data = await self._ws_subscribe()
                 if data and 'payload' in data:
-                    result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+                    raw_status = data['payload']['robot']['state']['reported']['aws']['status']
+                    result["status"] = self._stabilize_status(raw_status)
                     # Store the last known good status
-                    self._last_known_status = result["status"]
+                    self._last_known_status = raw_status
                 else:
-                    result["status"] = self._get_resilient_status("no_data_retry")
+                    raw_status = self._get_resilient_status("no_data_retry")
+                    result["status"] = self._stabilize_status(raw_status)
             except asyncio.CancelledError:
                 # If second call is also cancelled, return what we have
                 self._ws_consecutive_failures += 1
-                result["status"] = self._get_resilient_status("setup_cancelled")
+                raw_status = self._get_resilient_status("setup_cancelled")
+                result["status"] = self._stabilize_status(raw_status)
                 result["error_state"] = "setup_cancelled"
                 return result
             except Exception:
                 self._ws_consecutive_failures += 1
-                result["status"] = self._get_resilient_status("update_failed")
+                raw_status = self._get_resilient_status("update_failed")
+                result["status"] = self._stabilize_status(raw_status)
                 result["error_state"] = "update_failed"
                 return result
 
@@ -1106,7 +1199,8 @@ class AqualinkClient:
 
         # Basic status and version info with safe access
         try:
-            result["status"] = data['payload']['robot']['state']['reported']['aws']['status']
+            raw_status = data['payload']['robot']['state']['reported']['aws']['status']
+            result["status"] = self._stabilize_status(raw_status)
         except (KeyError, TypeError):
             pass  # Status already set in calling method
             

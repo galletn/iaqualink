@@ -1,5 +1,5 @@
 import logging
-from homeassistant import config_entries
+from homeassistant import config_entries, data_entry_flow
 import voluptuous as vol
 
 from .const import DOMAIN, API_KEY
@@ -58,6 +58,12 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         )
                     # If multiple devices are found, go to the device selection step
                     return await self.async_step_select_device()
+            except data_entry_flow.AbortFlow:
+                # Re-raise abort signals (e.g., already_configured) so HA can
+                # surface them properly. Without this, the broad Exception
+                # handler below would swallow them and show a misleading
+                # "cannot_connect" error.
+                raise
             except Exception as e:
                 _LOGGER.error(f"Error discovering devices: {e}")
                 errors["base"] = "cannot_connect"

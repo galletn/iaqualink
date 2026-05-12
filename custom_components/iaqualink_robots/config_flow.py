@@ -40,6 +40,11 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     # If only one device is found, skip the selection step
                     if len(self._devices) == 1:
                         device = self._devices[0]
+                        serial = device.get("serial_number")
+                        if not serial:
+                            return self.async_abort(reason="no_serial")
+                        await self.async_set_unique_id(serial)
+                        self._abort_if_unique_id_configured()
                         return self.async_create_entry(
                             title=user_input.get("name", device["name"]),
                             data={
@@ -47,7 +52,7 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                 "username": self._username,
                                 "password": self._password,
                                 "api_key": self._api_key,
-                                "serial_number": device["serial_number"],
+                                "serial_number": serial,
                                 "device_type": device["device_type"]
                             },
                         )
@@ -83,6 +88,11 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
             if selected_device:
+                serial = selected_device.get("serial_number")
+                if not serial:
+                    return self.async_abort(reason="no_serial")
+                await self.async_set_unique_id(serial)
+                self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title=user_input.get("name", selected_device["name"]),
                     data={
@@ -90,7 +100,7 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "username": self._username,
                         "password": self._password,
                         "api_key": self._api_key,
-                        "serial_number": selected_device["serial_number"],
+                        "serial_number": serial,
                         "device_type": selected_device["device_type"]
                     },
                 )

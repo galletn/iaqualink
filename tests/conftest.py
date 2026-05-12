@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.const import MOCK_DEVICE_SINGLE
+from tests.const import MOCK_DEVICE_SECOND, MOCK_DEVICE_SINGLE
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +35,30 @@ def mock_discover_single_device() -> Generator[MagicMock, None, None]:
     with patch(
         "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
         new=AsyncMock(return_value=[MOCK_DEVICE_SINGLE]),
+    ) as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_discover_two_devices() -> Generator[MagicMock, None, None]:
+    """Patch AqualinkClient.discover_devices to return two devices.
+
+    Forces the select_device step path (different code branch from single-device).
+    """
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(return_value=[MOCK_DEVICE_SINGLE, MOCK_DEVICE_SECOND]),
+    ) as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_discover_empty_serial() -> Generator[MagicMock, None, None]:
+    """Patch AqualinkClient.discover_devices to return a device with an empty serial."""
+    bad_device = {**MOCK_DEVICE_SINGLE, "serial_number": ""}
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(return_value=[bad_device]),
     ) as mock:
         yield mock
 

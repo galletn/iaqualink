@@ -72,13 +72,10 @@ async def test_user_flow_discovery_error_shows_cannot_connect(hass: HomeAssistan
 
 
 # ---------------------------------------------------------------------------
-# Placeholders for forthcoming stories. These XFAIL until the story lands so
-# that the suite stays green while clearly signalling missing behavior.
-# When the story PR opens, the dev removes `xfail` and implements the test.
+# C2: unique_id + serial-non-empty guards (active).
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="Story C2: async_set_unique_id not yet wired", strict=True)
 @pytest.mark.usefixtures("mock_discover_single_device")
 async def test_duplicate_entry_aborts(hass: HomeAssistant) -> None:
     """Adding the same robot twice should abort with `already_configured`."""
@@ -86,9 +83,10 @@ async def test_duplicate_entry_aborts(hass: HomeAssistant) -> None:
     result1 = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    await hass.config_entries.flow.async_configure(
+    first = await hass.config_entries.flow.async_configure(
         result1["flow_id"], user_input=MOCK_USER_INPUT
     )
+    assert first["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
 
     # Second attempt — must abort.
     result2 = await hass.config_entries.flow.async_init(
@@ -100,6 +98,64 @@ async def test_duplicate_entry_aborts(hass: HomeAssistant) -> None:
 
     assert result2_final["type"] == data_entry_flow.FlowResultType.ABORT
     assert result2_final["reason"] == "already_configured"
+
+
+@pytest.mark.usefixtures("mock_discover_two_devices")
+async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> None:
+    """Adding the same robot twice via select_device step also aborts."""
+    # First entry via select_device.
+    result1 = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    selection = await hass.config_entries.flow.async_configure(
+        result1["flow_id"], user_input=MOCK_USER_INPUT
+    )
+    assert selection["type"] == data_entry_flow.FlowResultType.FORM
+    assert selection["step_id"] == "select_device"
+
+    first = await hass.config_entries.flow.async_configure(
+        selection["flow_id"],
+        user_input={"device": MOCK_SERIAL, "name": "First copy"},
+    )
+    assert first["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+
+    # Second attempt — pick the same device — must abort.
+    result2 = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    selection2 = await hass.config_entries.flow.async_configure(
+        result2["flow_id"], user_input=MOCK_USER_INPUT
+    )
+    result2_final = await hass.config_entries.flow.async_configure(
+        selection2["flow_id"],
+        user_input={"device": MOCK_SERIAL, "name": "Second copy"},
+    )
+    assert result2_final["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result2_final["reason"] == "already_configured"
+
+
+@pytest.mark.usefixtures("mock_discover_empty_serial")
+async def test_empty_serial_aborts(hass: HomeAssistant) -> None:
+    """A discovered device with an empty serial number must abort with `no_serial`.
+
+    Guards against M13's email-frozen-as-unique-id regression: if the device
+    list comes back without a usable serial, refuse to create the entry rather
+    than silently using the email.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result2 = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=MOCK_USER_INPUT
+    )
+
+    assert result2["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result2["reason"] == "no_serial"
+
+
+# ---------------------------------------------------------------------------
+# Placeholders for forthcoming stories.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.xfail(reason="Story P4: async_step_reauth not yet implemented", strict=True)

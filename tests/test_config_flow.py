@@ -76,9 +76,14 @@ async def test_user_flow_discovery_error_shows_cannot_connect(hass: HomeAssistan
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.usefixtures("mock_discover_single_device")
+@pytest.mark.usefixtures("mock_discover_single_device", "bypass_setup_fixture")
 async def test_duplicate_entry_aborts(hass: HomeAssistant) -> None:
-    """Adding the same robot twice should abort with `already_configured`."""
+    """Adding the same robot twice should abort with `already_configured`.
+
+    `bypass_setup_fixture` short-circuits async_setup_entry so the test doesn't
+    try to authenticate over real network (pytest-socket would block it and
+    the entry registration would race the second flow).
+    """
     # First entry — succeeds.
     result1 = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -87,6 +92,7 @@ async def test_duplicate_entry_aborts(hass: HomeAssistant) -> None:
         result1["flow_id"], user_input=MOCK_USER_INPUT
     )
     assert first["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
 
     # Second attempt — must abort.
     result2 = await hass.config_entries.flow.async_init(
@@ -100,7 +106,7 @@ async def test_duplicate_entry_aborts(hass: HomeAssistant) -> None:
     assert result2_final["reason"] == "already_configured"
 
 
-@pytest.mark.usefixtures("mock_discover_two_devices")
+@pytest.mark.usefixtures("mock_discover_two_devices", "bypass_setup_fixture")
 async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> None:
     """Adding the same robot twice via select_device step also aborts."""
     # First entry via select_device.
@@ -118,6 +124,7 @@ async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> 
         user_input={"device": MOCK_SERIAL, "name": "First copy"},
     )
     assert first["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
 
     # Second attempt — pick the same device — must abort.
     result2 = await hass.config_entries.flow.async_init(

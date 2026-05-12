@@ -1,8 +1,12 @@
 """Sensor platform for iaqualinkRobots integration."""
 
+import logging
+
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 ICON_MAP = {
     "serial_number":       "mdi:barcode",
@@ -15,7 +19,7 @@ ICON_MAP = {
     "canister":            "mdi:recycle",
     "error_state":         "mdi:alert-circle",
     "temperature":         "mdi:thermometer",
-    "time_remaining_human":"mdi:clock-outline",
+    "time_remaining_human": "mdi:clock-outline",
     "time_remaining":      "mdi:timer",
     "estimated_end_time":  "mdi:calendar-clock",
     "model":               "mdi:information-outline",
@@ -56,7 +60,7 @@ ALL_SENSOR_TYPES = [
     ("canister",            "Canister Level"),
     ("error_state",         "Error State"),
     ("temperature",         "Temperature"),
-    ("time_remaining_human","Time Remaining"),
+    ("time_remaining_human", "Time Remaining"),
     ("time_remaining",      "Time Remaining (Minutes)"),
     ("estimated_end_time",  "Estimated End Time"),
     ("model",               "Model"),
@@ -70,6 +74,7 @@ ALL_SENSOR_TYPES = [
     ("adjusted_cycle_duration", "Total Duration"),
 ]
 
+
 async def async_setup_entry(hass, entry, async_add_entities):
     """Set up sensors for an entry, filtering based on robot type."""
     data = hass.data[DOMAIN][entry.entry_id]
@@ -78,7 +83,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     # Efficiently filter sensor types based on device type
     device_type = client._device_type
-    
+
     if device_type == "cyclobat":
         # Include all sensors for cyclobat
         sensor_types = ALL_SENSOR_TYPES
@@ -102,6 +107,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     ]
     async_add_entities(entities)
 
+
 class AqualinkSensor(CoordinatorEntity, SensorEntity):
     """Representation of a sensor tied to the vacuum data coordinator."""
 
@@ -112,8 +118,6 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
         self._key = key
         self._last_value = None  # Track last value for change detection
 
-        device_name = getattr(self.coordinator, "_title", client.robot_id)
-        
         # Use Home Assistant's translation system for sensor names
         # Don't set _attr_name - let HA translate using translation_key
         # This allows friendly names to be translated while keeping entity IDs stable
@@ -124,10 +128,10 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
         unit = UNIT_MAP.get(key)
         if unit:
             self._attr_native_unit_of_measurement = unit
-        
+
         # Set translation key for entity name (HA will handle translation)
         self._attr_translation_key = key
-        
+
         # Set device name prefix for the entity (this gets translated too)
         self._attr_has_entity_name = True
 
@@ -142,25 +146,24 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
                 # During connection/data errors, return last known value to preserve sensor state
                 cached_value = getattr(self, '_last_value', None)
                 if cached_value is not None:
-                    import logging
-                    _LOGGER = logging.getLogger(__name__)
-                    _LOGGER.debug(f"Sensor {self._key} preserving cached value '{cached_value}' during {error_state} error")
+                    _LOGGER.debug(
+                        f"Sensor {self._key} preserving cached value '{cached_value}' during {error_state} error")
                     return cached_value
                 # If no cached value, fall through to try getting current data
-            
+
             current_value = self.coordinator.data.get(self._key)
-            
+
             # Handle value translation for display
             if self._key == "fan_speed" and current_value:
                 fan_speed_display_map = {
                     "floor_only": "Floor only",
-                    "wall_only": "Wall only", 
+                    "wall_only": "Wall only",
                     "walls_only": "Walls only",
                     "floor_and_walls": "Floor and walls",
                     "smart_floor_and_walls": "SMART Floor and walls"
                 }
                 current_value = fan_speed_display_map.get(current_value, current_value)
-            
+
             # Handle activity translation for display
             elif self._key == "activity" and current_value:
                 activity_display_map = {
@@ -172,7 +175,7 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
                     "paused": "Paused"
                 }
                 current_value = activity_display_map.get(current_value, current_value)
-            
+
             # Handle status translation for display
             elif self._key == "status" and current_value:
                 status_display_map = {
@@ -182,25 +185,23 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
                     "online": "Online"
                 }
                 current_value = status_display_map.get(current_value, current_value)
-            
+
             # Only update cached value if we have valid current data (not None and not "unknown")
             if current_value is not None and current_value != "unknown":
                 # Log value changes for important sensors to help debug update timing
-                if (self._key in ["fan_speed", "activity", "status", "time_remaining"] and 
-                    current_value != getattr(self, '_last_value', None)):
-                    import logging
-                    _LOGGER = logging.getLogger(__name__)
-                    _LOGGER.debug(f"Sensor {self._key} value changed: {getattr(self, '_last_value', None)} -> {current_value}")
-                
+                if (self._key in ["fan_speed", "activity", "status", "time_remaining"] and
+                        current_value != getattr(self, '_last_value', None)):
+                    _LOGGER.debug(
+                        f"Sensor {self._key} value changed: {getattr(self, '_last_value', None)} -> {current_value}")
+
                 self._last_value = current_value
                 return current_value
             else:
                 # If current value is None or "unknown", return cached value if available
                 cached_value = getattr(self, '_last_value', None)
                 if cached_value is not None:
-                    import logging
-                    _LOGGER = logging.getLogger(__name__)
-                    _LOGGER.debug(f"Sensor {self._key} using cached value '{cached_value}' instead of '{current_value}'")
+                    _LOGGER.debug(
+                        f"Sensor {self._key} using cached value '{cached_value}' instead of '{current_value}'")
                     return cached_value
                 # If no cached value and current is None/unknown, return the current value anyway
                 return current_value
@@ -223,7 +224,7 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
         model = "Unknown"
         if self.coordinator.data:
             model = self.coordinator.data.get("model", "Unknown")
-            
+
         return {
             "identifiers": {(DOMAIN, self.client.robot_id)},
             "name": getattr(self.coordinator, "_title", self.client.robot_id),

@@ -1,6 +1,5 @@
 """Button entities for iaqualinkRobots integration."""
 import logging
-from typing import Any
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
@@ -22,7 +21,7 @@ async def async_setup_entry(
     """Set up the button entities."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     client = hass.data[DOMAIN][config_entry.entry_id]["client"]
-    
+
     # Only create remote control buttons for VR and VortraX robots
     if client._device_type in ["vr", "vortrax"]:
         buttons = [
@@ -31,8 +30,10 @@ async def async_setup_entry(
             AqualinkRemoteButton(coordinator, client, "rotate_left", "remote_rotate_left", "mdi:rotate-left"),
             AqualinkRemoteButton(coordinator, client, "rotate_right", "remote_rotate_right", "mdi:rotate-right"),
             AqualinkRemoteButton(coordinator, client, "stop", "remote_stop", "mdi:stop-circle-outline"),
-            AqualinkRemoteButton(coordinator, client, "add_fifteen_minutes", "add_fifteen_minutes", "mdi:clock-plus-outline"),
-            AqualinkRemoteButton(coordinator, client, "reduce_fifteen_minutes", "reduce_fifteen_minutes", "mdi:clock-minus-outline"),
+            AqualinkRemoteButton(coordinator, client, "add_fifteen_minutes",
+                                 "add_fifteen_minutes", "mdi:clock-plus-outline"),
+            AqualinkRemoteButton(coordinator, client, "reduce_fifteen_minutes",
+                                 "reduce_fifteen_minutes", "mdi:clock-minus-outline"),
         ]
         async_add_entities(buttons)
 
@@ -46,7 +47,7 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         self._client = client
         self._command = command
         self._attr_icon = icon
-        
+
         # Use coordinator title (entry.title) for entity ID, same as vacuum device_name
         # This should give us "bobby" if that's the entry title
         title = getattr(coordinator, "_title", None)
@@ -56,16 +57,16 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         else:
             # Fallback to robot_id if no title
             device_name = client.robot_id
-            
+
         self._attr_unique_id = f"{device_name}_{command}"
         self._attr_should_poll = False
-        
+
         # Set proper button names - store the name to prevent override
         self._button_name = self._get_button_name(translation_key)
-        
+
         # Don't set translation_key if we want custom names to persist
         # self._attr_translation_key = translation_key
-        
+
         self._attr_device_info = {
             "identifiers": {(DOMAIN, client.robot_id)},
             "name": client.robot_name,
@@ -79,7 +80,7 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         """Return the name of the button."""
         return self._button_name
 
-    @property  
+    @property
     def has_entity_name(self) -> bool:
         """Return True if entity has a name."""
         return True
@@ -88,7 +89,7 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         """Get the proper button name based on translation key."""
         name_map = {
             "remote_forward": "Remote Forward",
-            "remote_backward": "Remote Backward", 
+            "remote_backward": "Remote Backward",
             "remote_rotate_left": "Remote Rotate Left",
             "remote_rotate_right": "Remote Rotate Right",
             "remote_stop": "Remote Stop",
@@ -108,7 +109,7 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         """Handle the button press."""
         try:
             _LOGGER.info(f"Button '{self._command}' pressed for robot {self._client.robot_name}")
-            
+
             if self._command == "forward":
                 await self._client.remote_forward()
                 _LOGGER.info(f"Remote forward command sent to {self._client.robot_name}")
@@ -128,21 +129,21 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
                 _LOGGER.info(f"About to send add 15 minutes command to {self._client.robot_name}")
                 response = await self._client.add_fifteen_minutes()
                 _LOGGER.info(f"Add 15 minutes command sent to {self._client.robot_name}, response: {response}")
-                
+
                 # Only request coordinator refresh for timing commands that affect state
                 if hasattr(self.coordinator, 'async_request_refresh'):
                     _LOGGER.info("Requesting coordinator refresh after add 15 minutes")
                     await self.coordinator.async_request_refresh()
-                    
+
             elif self._command == "reduce_fifteen_minutes":
                 _LOGGER.info(f"About to send reduce 15 minutes command to {self._client.robot_name}")
                 response = await self._client.reduce_fifteen_minutes()
                 _LOGGER.info(f"Reduce 15 minutes command sent to {self._client.robot_name}, response: {response}")
-                
+
                 # Only request coordinator refresh for timing commands that affect state
                 if hasattr(self.coordinator, 'async_request_refresh'):
                     _LOGGER.info("Requesting coordinator refresh after reduce 15 minutes")
                     await self.coordinator.async_request_refresh()
-                    
+
         except Exception as e:
             _LOGGER.error(f"Failed to send {self._command} command to {self._client.robot_name}: {e}", exc_info=True)

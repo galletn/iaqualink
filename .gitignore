@@ -1,0 +1,17 @@
+# Internal working docs (not for upstream)
+REFACTOR_BACKLOG.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# BMAD agent workspace (local-only)
+.claude/
+_bmad/
+_bmad-output/
+docs/

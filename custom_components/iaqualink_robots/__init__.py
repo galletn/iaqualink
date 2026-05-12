@@ -7,8 +7,10 @@ from .const import DOMAIN, PLATFORMS, API_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
+
 async def async_setup(hass: HomeAssistant, config) -> bool:
     return True
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {}
@@ -18,16 +20,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Get credentials from entry
     username = entry.data["username"]
     password = entry.data["password"]
-    
+
     # Check if a specific serial number is specified in the entry
     target_serial = entry.data.get("serial_number")
-    
+
     # Create a client for this specific device using the constant API key
     # Debug mode disabled by default to reduce log verbosity
     # To enable debug mode for troubleshooting, change False to True below
     debug_mode = False
     client = AqualinkClient(username, password, API_KEY, debug_mode=debug_mode)
-    
+
     # If a specific serial is provided, use it for device discovery
     if target_serial:
         # Authenticate first
@@ -38,20 +40,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except RuntimeError as e:
             _LOGGER.error(f"Failed to discover device {target_serial}: {e}")
             return False
-    
+
     # Create coordinator with this client
     coordinator = AqualinkDataUpdateCoordinator(hass, client, SCAN_INTERVAL.total_seconds(), debug_mode=debug_mode)
     coordinator._title = entry.title  # type: ignore  # Dynamic attribute used for display name
-    
+
     # Initial refresh to get data
     await coordinator.async_config_entry_first_refresh()
-    
+
     # Store client and coordinator in hass.data
     hass.data[DOMAIN][entry.entry_id]["client"] = client
     hass.data[DOMAIN][entry.entry_id]["coordinator"] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Clean up resources before unloading
@@ -64,7 +67,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await coordinator.cleanup()
             except Exception as e:
                 _LOGGER.warning(f"Error during coordinator cleanup: {e}")
-    
+
     # Unload the platforms
     unload_ok = await asyncio.gather(
         *[

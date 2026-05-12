@@ -20,11 +20,14 @@ SCAN_INTERVAL: Final = timedelta(seconds=3)  # Balanced update interval for effi
 # Real-time websocket listener provides instant updates, moderate polling backup
 
 # Load manifest data efficiently
+
+
 def _load_manifest_data():
     """Load manifest data once and cache it."""
     manifestfile = Path(__file__).parent / "manifest.json"
     with open(manifestfile, encoding="utf-8") as json_file:
         return json.load(json_file)
+
 
 _MANIFEST_DATA = _load_manifest_data()
 

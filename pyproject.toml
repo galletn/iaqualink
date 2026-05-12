@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iaqualink-robots"
+version = "2.5.1"
+description = "Home Assistant custom integration for iAqualink pool robots."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [{name = "galletn"}]
+
+[tool.setuptools]
+# Explicitly list the only package we ship; setuptools-auto-discover otherwise
+# trips on the `samples/` sibling directory.
+packages = ["custom_components.iaqualink_robots"]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "pytest-homeassistant-custom-component>=0.13.190",
+    "aioresponses>=0.7.6",
+]
+dev = [
+    "flake8>=7.0",
+    "mypy>=1.10",
+    "types-aiofiles",
+]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=custom_components.iaqualink_robots",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["custom_components/iaqualink_robots"]
+branch = true
+omit = [
+    "tests/*",
+    "custom_components/iaqualink_robots/samples/*",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "pass",
+    "\\.\\.\\.",
+]
+# Bootstrap threshold for P1. Story-by-story stories ratchet this up.
+# Target by end of Epic 7 (Platinum patterns): 95%
+fail_under = 5
+show_missing = true
+skip_covered = false

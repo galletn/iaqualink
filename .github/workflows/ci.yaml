@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel in-progress runs on the same PR/branch when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # hassfest — HA's official manifest/strings validator.
+  # NOTE: This job is currently expected to flag the domain casing
+  # (`iaqualinkRobots` vs. the snake_case directory `iaqualink_robots`).
+  # Track the fix in the M16/manifest-rename story.
+  # ---------------------------------------------------------------------------
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  # ---------------------------------------------------------------------------
+  # flake8 — uses existing .flake8 (max-line-length = 200).
+  # ---------------------------------------------------------------------------
+  flake8:
+    name: flake8
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install flake8
+      - run: flake8 custom_components/iaqualink_robots
+
+  # ---------------------------------------------------------------------------
+  # mypy — bootstrap config has every module on `ignore_errors = True`.
+  # Story P6 ratchets modules off one by one.
+  # ---------------------------------------------------------------------------
+  mypy:
+    name: mypy --strict
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install mypy
+      - run: mypy --config-file=mypy.ini custom_components/iaqualink_robots
+
+  # ---------------------------------------------------------------------------
+  # pytest — runs the full suite with coverage. The threshold in
+  # pyproject.toml's [tool.coverage.report].fail_under starts low (5%) and
+  # is ratcheted up per-story until Platinum's 95% target is met.
+  # ---------------------------------------------------------------------------
+  pytest:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+      - name: Run tests
+        run: pytest
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: warn

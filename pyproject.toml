@@ -35,6 +35,10 @@ dev = [
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Project root on sys.path so `from custom_components.iaqualink_robots import ...`
+# resolves without a fragile editable install (Python 3.13 + setuptools 80+ has
+# known issues with editable_mode=lax; this sidesteps it entirely).
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = [
     "-ra",

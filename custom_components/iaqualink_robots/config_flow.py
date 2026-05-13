@@ -11,14 +11,14 @@ _LOGGER = logging.getLogger(__name__)
 class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # Version bumps trigger `async_migrate_entry` in __init__.py:
     #   1 -> 2  (M12) rewrite button unique_ids from title-derived to serial-based
-    VERSION = 2
+    #   2 -> 3  (M17) drop the dead `api_key` field from entry.data
+    VERSION = 3
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
     def __init__(self):
         """Initialize the config flow."""
         self._username = None
         self._password = None
-        self._api_key = None
         self._devices = []
 
     async def async_step_user(self, user_input=None):
@@ -28,12 +28,11 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._username = user_input["username"]
             self._password = user_input["password"]
-            self._api_key = API_KEY  # Use the constant API key
 
             # Try to discover devices with these credentials
             try:
                 self._devices = await AqualinkClient.discover_devices(
-                    self._username, self._password, self._api_key
+                    self._username, self._password, API_KEY
                 )
 
                 if not self._devices:
@@ -53,7 +52,6 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                 "name": user_input.get("name", device["name"]),
                                 "username": self._username,
                                 "password": self._password,
-                                "api_key": self._api_key,
                                 "serial_number": serial,
                                 "device_type": device["device_type"]
                             },
@@ -107,7 +105,6 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "name": user_input.get("name", selected_device["name"]),
                         "username": self._username,
                         "password": self._password,
-                        "api_key": self._api_key,
                         "serial_number": serial,
                         "device_type": selected_device["device_type"]
                     },

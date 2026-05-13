@@ -39,6 +39,8 @@ async def test_user_flow_single_device_creates_entry(hass: HomeAssistant) -> Non
     assert result2["data"]["username"] == MOCK_USER_INPUT["username"]
     assert result2["data"]["serial_number"] == MOCK_SERIAL
     assert result2["data"]["device_type"] == MOCK_DEVICE_TYPE
+    # M17: api_key must NOT be written into entry.data for new entries.
+    assert "api_key" not in result2["data"]
 
 
 @pytest.mark.usefixtures("mock_discover_no_devices")

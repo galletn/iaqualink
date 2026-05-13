@@ -88,24 +88,28 @@ async def test_setup_entry_stores_client_and_coordinator(
 
 
 # ---------------------------------------------------------------------------
-# M12 migration — rewrite button unique_ids from title-derived to serial-based.
+# Config entry migrations.
+#   v1 -> v2  M12: rewrite button unique_ids from title-derived to serial-based
+#   v2 -> v3  M17: drop the dead `api_key` field from entry.data
+# CURRENT_VERSION below tracks the latest target; bump per future migration.
 # ---------------------------------------------------------------------------
 
+CURRENT_VERSION = 3
 
-async def test_migrate_v1_to_v2_rewrites_button_unique_ids(hass: HomeAssistant) -> None:
-    """Legacy `<title>_<command>` button unique_ids get rewritten to `<serial>_<command>`."""
+
+async def test_migrate_v1_to_current_rewrites_button_unique_ids(hass: HomeAssistant) -> None:
+    """Legacy v1 entries get the full migration chain: button uids fixed AND api_key dropped."""
     from custom_components.iaqualink_robots import async_migrate_entry
 
     entry = MockConfigEntry(
         domain=DOMAIN,
         version=1,
-        data=MOCK_ENTRY_DATA,
+        data=MOCK_ENTRY_DATA,  # MOCK_ENTRY_DATA still includes api_key (legacy shape)
         title="Bobby the Robot",
     )
     entry.add_to_hass(hass)
 
     registry = er.async_get(hass)
-    # Pre-populate legacy entries: title-derived prefix, one per known command.
     legacy_prefix = "bobby_the_robot"
     legacy_commands = [
         "forward", "backward", "rotate_left", "rotate_right",
@@ -122,16 +126,16 @@ async def test_migrate_v1_to_v2_rewrites_button_unique_ids(hass: HomeAssistant) 
     assert await async_migrate_entry(hass, entry)
 
     for cmd in legacy_commands:
-        # Old unique_id is gone.
         assert registry.async_get_entity_id("button", DOMAIN, f"{legacy_prefix}_{cmd}") is None
-        # New unique_id exists.
         assert registry.async_get_entity_id("button", DOMAIN, f"{MOCK_SERIAL}_{cmd}") is not None
 
-    assert entry.version == 2
+    assert entry.version == CURRENT_VERSION
+    # M17 portion of the chain: api_key must be gone.
+    assert "api_key" not in entry.data
 
 
-async def test_migrate_idempotent(hass: HomeAssistant) -> None:
-    """Running migration on an already-v2 entry is a no-op."""
+async def test_migrate_v2_to_v3_drops_api_key(hass: HomeAssistant) -> None:
+    """A v2 entry (post-M12, pre-M17) just has api_key stripped."""
     from custom_components.iaqualink_robots import async_migrate_entry
 
     entry = MockConfigEntry(
@@ -141,28 +145,49 @@ async def test_migrate_idempotent(hass: HomeAssistant) -> None:
         title=MOCK_NAME,
     )
     entry.add_to_hass(hass)
+    assert "api_key" in entry.data  # precondition
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert "api_key" not in entry.data
+    assert entry.version == CURRENT_VERSION
+    # Other fields preserved.
+    assert entry.data["username"] == MOCK_ENTRY_DATA["username"]
+    assert entry.data["serial_number"] == MOCK_SERIAL
+
+
+async def test_migrate_idempotent(hass: HomeAssistant) -> None:
+    """Running migration on an already-current entry is a no-op."""
+    from custom_components.iaqualink_robots import async_migrate_entry
+
+    current_data = {k: v for k, v in MOCK_ENTRY_DATA.items() if k != "api_key"}
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=CURRENT_VERSION,
+        data=current_data,
+        title=MOCK_NAME,
+    )
+    entry.add_to_hass(hass)
 
     registry = er.async_get(hass)
-    # Pre-populate already-correct entries.
-    new_prefix = MOCK_SERIAL
     registry.async_get_or_create(
         domain="button",
         platform=DOMAIN,
-        unique_id=f"{new_prefix}_forward",
+        unique_id=f"{MOCK_SERIAL}_forward",
         config_entry=entry,
     )
 
     assert await async_migrate_entry(hass, entry)
 
-    # Still there, unchanged.
-    assert registry.async_get_entity_id("button", DOMAIN, f"{new_prefix}_forward") is not None
-    assert entry.version == 2
+    assert registry.async_get_entity_id("button", DOMAIN, f"{MOCK_SERIAL}_forward") is not None
+    assert entry.version == CURRENT_VERSION
+    assert "api_key" not in entry.data
 
 
-async def test_migrate_v1_to_v2_without_serial_is_safe(hass: HomeAssistant) -> None:
-    """If a v1 entry somehow lacks `serial_number`, migration logs a warning,
-    skips the rewrite, and bumps the version. The integration must remain
-    loadable rather than crash on a malformed legacy entry.
+async def test_migrate_v1_to_current_without_serial_is_safe(hass: HomeAssistant) -> None:
+    """If a v1 entry lacks `serial_number`, migration logs a warning, skips
+    the M12 rewrite, drops api_key (M17), bumps to current version, and the
+    integration remains loadable.
     """
     from custom_components.iaqualink_robots import async_migrate_entry
 
@@ -175,7 +200,9 @@ async def test_migrate_v1_to_v2_without_serial_is_safe(hass: HomeAssistant) -> N
     entry.add_to_hass(hass)
 
     assert await async_migrate_entry(hass, entry)
-    assert entry.version == 2
+    assert entry.version == CURRENT_VERSION
+    # M17 step still ran:
+    assert "api_key" not in entry.data
 
 
 # ---------------------------------------------------------------------------

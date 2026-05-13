@@ -31,7 +31,9 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     Version history:
         1 -> 2  (M12) Rewrite button unique_ids from title-derived (mutable,
-                broke on rename) to serial-based. See story-M12 for context.
+                broke on rename) to serial-based. See story-M12.
+        2 -> 3  (M17) Drop the dead `api_key` field from entry.data; the
+                integration uses the const API_KEY directly. See story-M17.
     """
     _LOGGER.debug("Migrating config entry from version %s", entry.version)
 
@@ -70,6 +72,16 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("M12 migration rewrote %s button unique_ids", updates)
 
         hass.config_entries.async_update_entry(entry, version=2)
+
+    if entry.version == 2:
+        # M17: drop the dead `api_key` field. The integration has always used
+        # the API_KEY constant directly; the stored field was never read.
+        if "api_key" in entry.data:
+            new_data = {k: v for k, v in entry.data.items() if k != "api_key"}
+            hass.config_entries.async_update_entry(entry, data=new_data, version=3)
+            _LOGGER.debug("M17 migration: dropped api_key from entry data")
+        else:
+            hass.config_entries.async_update_entry(entry, version=3)
 
     _LOGGER.debug("Migration to version %s complete", entry.version)
     return True

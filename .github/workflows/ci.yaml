@@ -15,19 +15,16 @@ jobs:
   # ---------------------------------------------------------------------------
   # hassfest — HA's official manifest/strings validator.
   #
-  # Currently INFORMATIONAL (continue-on-error). Three known errors are
+  # Currently INFORMATIONAL (continue-on-error). Two known errors are
   # accepted as long-standing project decisions:
   #   1. "Domain does not match dir name" — `iaqualinkRobots` (camelCase) vs.
   #      directory `iaqualink_robots`. Renaming would require migrating every
   #      user's entity registry; deliberately deferred.
-  #   2. "extra keys not allowed @ data['homeassistant']" — newer hassfest
-  #      rejects the top-level `homeassistant` field in manifest.json; this is
-  #      a real issue to fix (see story M16) but not blocking releases.
-  #   3. "Invalid translations/en.json: extra keys not allowed @ data['entity']
+  #   2. "Invalid translations/en.json: extra keys not allowed @ data['entity']
   #      ['vacuum']['fan_speed']" — translations file has keys not in HA's
   #      schema; addressed in story P7 (translations completeness).
   #
-  # Drop `continue-on-error` once the three issues above are resolved.
+  # Drop `continue-on-error` once the two issues above are resolved.
   # ---------------------------------------------------------------------------
   hassfest:
     name: hassfest (informational)

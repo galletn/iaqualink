@@ -39,6 +39,8 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if entry.version == 1:
         serial = entry.data.get("serial_number")
+        if isinstance(serial, str):
+            serial = serial.strip()
         if not serial:
             _LOGGER.warning(
                 "Cannot migrate entry %s to v2: no serial_number in entry.data. "
@@ -49,27 +51,51 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         else:
             registry = er.async_get(hass)
             updates = 0
-            for entity_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+            skipped_collisions = 0
+            # Snapshot to list() — async_update_entity inside the loop can
+            # invalidate a live registry view on some HA versions.
+            for entity_entry in list(
+                er.async_entries_for_config_entry(registry, entry.entry_id)
+            ):
                 if entity_entry.domain != "button":
                     continue
+                uid = entity_entry.unique_id or ""
                 # Already migrated (unique_id starts with the serial)? Skip.
-                if entity_entry.unique_id.startswith(f"{serial}_"):
+                if uid.startswith(f"{serial}_"):
                     continue
                 # Find the command suffix the legacy unique_id ends with and
                 # rebuild as `<serial>_<command>`.
                 for cmd in _M12_BUTTON_COMMANDS:
-                    if entity_entry.unique_id.endswith(f"_{cmd}"):
+                    if uid.endswith(f"_{cmd}"):
                         new_uid = f"{serial}_{cmd}"
-                        _LOGGER.info(
+                        # A `<serial>_<cmd>` entity may already exist (e.g.
+                        # the user downgraded then re-upgraded). Skip with a
+                        # warning rather than letting async_update_entity
+                        # raise and abort the whole migration.
+                        if registry.async_get_entity_id(
+                            "button", DOMAIN, new_uid
+                        ) is not None:
+                            _LOGGER.warning(
+                                "M12 migration: %s target unique_id %r already exists, "
+                                "leaving legacy %r in place. Resolve manually via the "
+                                "entity registry.",
+                                entity_entry.entity_id, new_uid, uid,
+                            )
+                            skipped_collisions += 1
+                            break
+                        _LOGGER.debug(
                             "M12 migration: %s unique_id %r -> %r",
-                            entity_entry.entity_id, entity_entry.unique_id, new_uid,
+                            entity_entry.entity_id, uid, new_uid,
                         )
                         registry.async_update_entity(
                             entity_entry.entity_id, new_unique_id=new_uid,
                         )
                         updates += 1
                         break
-            _LOGGER.debug("M12 migration rewrote %s button unique_ids", updates)
+            _LOGGER.info(
+                "M12 migration: rewrote %s button unique_id(s); %s collision(s) skipped",
+                updates, skipped_collisions,
+            )
 
         hass.config_entries.async_update_entry(entry, version=2)
 

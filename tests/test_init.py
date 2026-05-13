@@ -184,6 +184,78 @@ async def test_migrate_idempotent(hass: HomeAssistant) -> None:
     assert "api_key" not in entry.data
 
 
+async def test_migrate_v1_skips_existing_v2_shape_collision(hass: HomeAssistant) -> None:
+    """A pre-existing `<serial>_<cmd>` entity (downgrade/re-upgrade scenario)
+    must NOT cause the migration to crash. The legacy entry is left in place
+    with a warning so the user can resolve manually.
+    """
+    from custom_components.iaqualink_robots import async_migrate_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        data=MOCK_ENTRY_DATA,
+        title="Bobby the Robot",
+    )
+    entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    # Pre-existing v2-shape entity from an earlier partial-migration / re-add.
+    registry.async_get_or_create(
+        domain="button",
+        platform=DOMAIN,
+        unique_id=f"{MOCK_SERIAL}_forward",
+        config_entry=entry,
+    )
+    # Legacy v1-shape entity that would *want* to migrate into the colliding uid.
+    legacy_uid = "bobby_the_robot_forward"
+    registry.async_get_or_create(
+        domain="button",
+        platform=DOMAIN,
+        unique_id=legacy_uid,
+        config_entry=entry,
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    # Migration completed (entry advanced), v2-shape entity preserved, legacy
+    # entry left in place untouched.
+    assert entry.version == CURRENT_VERSION
+    assert registry.async_get_entity_id("button", DOMAIN, f"{MOCK_SERIAL}_forward") is not None
+    assert registry.async_get_entity_id("button", DOMAIN, legacy_uid) is not None
+
+
+async def test_migrate_v1_leaves_non_button_entities_untouched(hass: HomeAssistant) -> None:
+    """Sensor / vacuum / other domain entities must NOT be rewritten by the M12
+    button migration, even if their unique_id happens to end with a command suffix.
+    """
+    from custom_components.iaqualink_robots import async_migrate_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        data=MOCK_ENTRY_DATA,
+        title="Bobby the Robot",
+    )
+    entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    # Sensor with a unique_id that incidentally ends with `_stop` (a command suffix).
+    sensor_uid = "bobby_the_robot_stop"
+    registry.async_get_or_create(
+        domain="sensor",
+        platform=DOMAIN,
+        unique_id=sensor_uid,
+        config_entry=entry,
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    # The sensor's unique_id is unchanged.
+    assert registry.async_get_entity_id("sensor", DOMAIN, sensor_uid) is not None
+    assert registry.async_get_entity_id("sensor", DOMAIN, f"{MOCK_SERIAL}_stop") is None
+
+
 async def test_migrate_v1_to_current_without_serial_is_safe(hass: HomeAssistant) -> None:
     """If a v1 entry lacks `serial_number`, migration logs a warning, skips
     the M12 rewrite, drops api_key (M17), bumps to current version, and the

@@ -1785,6 +1785,47 @@ class AqualinkClient:
                     except Exception as e:
                         _LOGGER.debug(f"Error triggering immediate callback: {e}")
 
+    async def clear_desired_state(self):
+        """Clear the desired state to prevent auto-restart after natural cycle completion.
+
+        When the robot finishes cleaning naturally, the cloud may still have
+        desired state = 1 (cleaning). This can cause the cloud to restart the robot.
+        This method sets desired state = 0 to prevent that.
+        """
+        # Only implemented for vr - tested on Polaris VRX IQ+
+        # Other device types (vortrax, cyclobat, cyclonext) may need similar
+        # treatment if they exhibit the same auto-restart bug
+        if self._device_type != "vr":
+            return
+
+        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+
+        request = {
+            "action": "setCleanerState",
+            "version": 1,
+            "namespace": self._device_type,
+            "payload": {
+                "state": {
+                    "desired": {
+                        "equipment": {
+                            "robot": {
+                                "state": 0
+                            }
+                        }
+                    }
+                },
+                "clientToken": clientToken
+            },
+            "service": "StateController",
+            "target": self._serial
+        }
+
+        try:
+            await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
+            _LOGGER.debug("Cleared desired state to prevent auto-restart")
+        except Exception as e:
+            _LOGGER.warning(f"Failed to clear desired state: {e}")
+
     async def stop_cleaning(self):
         """Stop the vacuum cleaning."""
         request = None
@@ -2726,6 +2767,17 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                 merged_data.get("activity") == "cleaning" and
                     self._last_data.get("cycle_start_time")):
                 merged_data["cycle_start_time"] = self._last_data["cycle_start_time"]
+
+            # Detect natural cleaning → idle transition and clear desired state
+            # This prevents the cloud from auto-restarting the robot
+            if (self._last_data.get("activity") == "cleaning" and
+                merged_data.get("activity") == "idle" and
+                    not self.client._pending_stop_reset):  # Not a manual stop
+                _LOGGER.info("Robot finished cleaning naturally - clearing desired state to prevent auto-restart")
+                try:
+                    await self.client.clear_desired_state()
+                except Exception as e:
+                    _LOGGER.warning(f"Failed to clear desired state after natural completion: {e}")
 
             # Reset failure count on successful update
             self._consecutive_failures = 0

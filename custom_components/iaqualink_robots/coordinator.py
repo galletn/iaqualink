@@ -2,6 +2,7 @@
 import base64
 import json
 import datetime
+import math
 import aiohttp
 import logging
 import asyncio
@@ -27,7 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 _TOKEN_EXP_SAFETY_MARGIN_S = 60
 
 
-def _decode_jwt_exp(token: str) -> datetime.datetime | None:
+def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
     """Decode the `exp` claim from a JWT and return a naive local datetime.
 
     The Cognito `IdToken` is a standard JWT (`<header>.<payload>.<signature>`).
@@ -51,12 +52,36 @@ def _decode_jwt_exp(token: str) -> datetime.datetime | None:
         # base64url decoding needs the trailing '=' padding (multiple of 4).
         padded = payload_b64 + "=" * (-len(payload_b64) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded))
+        if not isinstance(payload, dict):
+            return None
         exp = payload.get("exp")
-        if not isinstance(exp, (int, float)):
+        # Tight type guard: exclude bool (Python: isinstance(True, int) is True),
+        # require finite and positive epoch. Anything else hits the fallback.
+        if type(exp) not in (int, float) or not math.isfinite(exp) or exp <= 0:
             return None
         return datetime.datetime.fromtimestamp(int(exp) - _TOKEN_EXP_SAFETY_MARGIN_S)
-    except (ValueError, TypeError, json.JSONDecodeError):
+    except (AttributeError, OSError, OverflowError, TypeError, ValueError, json.JSONDecodeError):
         return None
+
+
+def _resolve_token_expiry(token: str | None) -> datetime.datetime:
+    """Return the JWT-derived expiry, or `now + 1h - safety_margin` on failure.
+
+    Wraps `_decode_jwt_exp` with the fallback-and-warn behavior the auth flow
+    needs. The fallback path applies the SAME safety margin as the happy path
+    so the two branches have consistent effective lifetimes.
+    """
+    decoded = _decode_jwt_exp(token)
+    if decoded is not None:
+        return decoded
+    _LOGGER.warning(
+        "JWT exp claim missing or unparseable; falling back to 1h hardcoded expiry"
+    )
+    return (
+        datetime.datetime.now()
+        + datetime.timedelta(hours=1)
+        - datetime.timedelta(seconds=_TOKEN_EXP_SAFETY_MARGIN_S)
+    )
 
 
 class AqualinkClient:
@@ -377,17 +402,9 @@ class AqualinkClient:
             self._app_client_id = auth["cognitoPool"]["appClientId"]
 
             # Prefer the real `exp` claim from the JWT; fall back to a
-            # conservative 1h if the token is missing/malformed (very unlikely
-            # for a successful login, but the fallback keeps the integration
-            # functional rather than crashing).
-            decoded_exp = _decode_jwt_exp(self._id_token)
-            if decoded_exp is not None:
-                self._token_expires_at = decoded_exp
-            else:
-                _LOGGER.warning(
-                    "JWT exp claim missing or unparseable; falling back to 1h hardcoded expiry"
-                )
-                self._token_expires_at = datetime.datetime.now() + datetime.timedelta(hours=1)
+            # conservative 1h (minus the safety margin, consistent with the
+            # decoded happy path) if the token is missing/malformed.
+            self._token_expires_at = _resolve_token_expiry(self._id_token)
             if self._debug_mode:
                 _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
         except asyncio.CancelledError:

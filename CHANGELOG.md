@@ -11,6 +11,7 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 - `no_serial` translation added to `en.json` and copied as English fallback to all other locale files (cs, de, es, fr, it, nl, pt, sk). Native translations welcomed via PR.
 - **Button entity unique_ids now derive from the robot's serial number** rather than the (mutable) integration entry title. Renaming the integration entry no longer forks duplicate button entities in the registry (story M12).
 - **Removed the dead `api_key` field from config entry data.** The integration has always read the API key from a constant in `const.py`; the stored copy in `entry.data` was never used. Existing entries are silently auto-migrated to drop the field on next setup (story M17).
+- **Token refresh now uses the real JWT `exp` claim from the iAqualink Cognito IdToken** instead of a hardcoded 1-hour window. If AWS ever issues tokens with a non-1h lifetime (per-pool setting), refreshes fire at the correct moment rather than burning cycles or running stale. A 60-second safety margin is subtracted to absorb clock skew between AWS and the HA host. On the rare path where the token is missing or malformed, a `WARNING` is logged and the integration falls back to `now + 1h − 60s` (story H9a).
 
 ### Migration / manual cleanup notes
 

@@ -1,8 +1,8 @@
 """Manifest sanity tests.
 
 These are tier-Bronze hygiene checks. They run alongside hassfest in CI but
-catch project-level concerns hassfest doesn't (e.g. the M16 aiohttp pin and
-the M17 dead api_key field) before those story PRs land.
+catch project-level concerns hassfest doesn't (e.g. the M16 aiohttp pin)
+before those story PRs land.
 """
 
 from __future__ import annotations

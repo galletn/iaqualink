@@ -108,6 +108,7 @@ async def test_migrate_v1_to_current_rewrites_button_unique_ids(hass: HomeAssist
         title="Bobby the Robot",
     )
     entry.add_to_hass(hass)
+    assert "api_key" in entry.data  # precondition: legacy shape must include the field
 
     registry = er.async_get(hass)
     legacy_prefix = "bobby_the_robot"
@@ -270,6 +271,7 @@ async def test_migrate_v1_to_current_without_serial_is_safe(hass: HomeAssistant)
         title=MOCK_NAME,
     )
     entry.add_to_hass(hass)
+    assert "api_key" in entry.data  # precondition: legacy shape must include the field
 
     assert await async_migrate_entry(hass, entry)
     assert entry.version == CURRENT_VERSION

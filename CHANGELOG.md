@@ -10,6 +10,7 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 - **Config flow now rejects empty/whitespace serials.** If the cloud returns a device with no usable serial number, the flow aborts with `no_serial` instead of creating an entry. Guards against the previous M13 regression where the user's email got frozen as the entity unique_id (story C2).
 - `no_serial` translation added to `en.json` and copied as English fallback to all other locale files (cs, de, es, fr, it, nl, pt, sk). Native translations welcomed via PR.
 - **Button entity unique_ids now derive from the robot's serial number** rather than the (mutable) integration entry title. Renaming the integration entry no longer forks duplicate button entities in the registry (story M12).
+- **Removed the dead `api_key` field from config entry data.** The integration has always read the API key from a constant in `const.py`; the stored copy in `entry.data` was never used. Existing entries are silently auto-migrated to drop the field on next setup (story M17).
 
 ### Migration / manual cleanup notes
 

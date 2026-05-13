@@ -167,6 +167,25 @@ async def test_select_device_picks_second_device(hass: HomeAssistant) -> None:
     assert final["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
     assert final["result"].unique_id == second_serial
     assert final["data"]["serial_number"] == second_serial
+    # M17: api_key must NOT be written into entry.data via select_device either.
+    assert "api_key" not in final["data"]
+
+
+async def test_user_flow_schema_has_no_api_key_field(hass: HomeAssistant) -> None:
+    """M17 regression guard: the user form must NOT prompt for an api_key field.
+
+    Catches a future PR adding `vol.Required("api_key")` (or similar) back to
+    the data schema, which would defeat the M17 cleanup at form level rather
+    than at the entry-data level.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    schema_keys = {str(key) for key in result["data_schema"].schema}
+    assert "api_key" not in schema_keys, (
+        f"config-flow data schema must not contain an api_key field; got keys {schema_keys}"
+    )
 
 
 @pytest.mark.usefixtures("mock_discover_empty_serial", "bypass_setup_fixture")

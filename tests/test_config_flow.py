@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from custom_components.iaqualink_robots.const import DOMAIN
 
 from tests.const import (
+    MOCK_DEVICE_SECOND,
     MOCK_DEVICE_TYPE,
     MOCK_NAME,
     MOCK_SERIAL,
@@ -94,6 +95,8 @@ async def test_duplicate_entry_aborts(hass: HomeAssistant) -> None:
         result1["flow_id"], user_input=MOCK_USER_INPUT
     )
     assert first["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    # M13 regression guard: unique_id must be the serial, not the email.
+    assert first["result"].unique_id == MOCK_SERIAL
     await hass.async_block_till_done()
 
     # Second attempt — must abort.
@@ -126,6 +129,8 @@ async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> 
         user_input={"device": MOCK_SERIAL, "name": "First copy"},
     )
     assert first["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    # M13 regression guard: unique_id must be the serial, not the email.
+    assert first["result"].unique_id == MOCK_SERIAL
     await hass.async_block_till_done()
 
     # Second attempt — pick the same device — must abort.
@@ -143,7 +148,28 @@ async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> 
     assert result2_final["reason"] == "already_configured"
 
 
-@pytest.mark.usefixtures("mock_discover_empty_serial")
+@pytest.mark.usefixtures("mock_discover_two_devices", "bypass_setup_fixture")
+async def test_select_device_picks_second_device(hass: HomeAssistant) -> None:
+    """Picking the second device in select_device creates an entry keyed to its serial."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    selection = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=MOCK_USER_INPUT
+    )
+    assert selection["step_id"] == "select_device"
+
+    second_serial = MOCK_DEVICE_SECOND["serial_number"]
+    final = await hass.config_entries.flow.async_configure(
+        selection["flow_id"],
+        user_input={"device": second_serial, "name": "Picked second"},
+    )
+    assert final["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert final["result"].unique_id == second_serial
+    assert final["data"]["serial_number"] == second_serial
+
+
+@pytest.mark.usefixtures("mock_discover_empty_serial", "bypass_setup_fixture")
 async def test_empty_serial_aborts(hass: HomeAssistant) -> None:
     """A discovered device with an empty serial number must abort with `no_serial`.
 
@@ -160,6 +186,30 @@ async def test_empty_serial_aborts(hass: HomeAssistant) -> None:
 
     assert result2["type"] == data_entry_flow.FlowResultType.ABORT
     assert result2["reason"] == "no_serial"
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+@pytest.mark.usefixtures("mock_discover_good_and_empty_serial", "bypass_setup_fixture")
+async def test_empty_serial_via_select_device_aborts(hass: HomeAssistant) -> None:
+    """Picking a device with an empty serial in the select_device step must abort."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    selection = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=MOCK_USER_INPUT
+    )
+    assert selection["type"] == data_entry_flow.FlowResultType.FORM
+    assert selection["step_id"] == "select_device"
+
+    # Pick the bad device — its serial is the empty string, which is also its
+    # dropdown key per device_options construction in config_flow.py.
+    final = await hass.config_entries.flow.async_configure(
+        selection["flow_id"],
+        user_input={"device": "", "name": "Bad pick"},
+    )
+    assert final["type"] == data_entry_flow.FlowResultType.ABORT
+    assert final["reason"] == "no_serial"
+    assert hass.config_entries.async_entries(DOMAIN) == []
 
 
 # ---------------------------------------------------------------------------

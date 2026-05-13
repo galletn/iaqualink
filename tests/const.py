@@ -23,6 +23,10 @@ MOCK_DEVICE_SECOND: dict = {
     "device_type": "vr",
 }
 
+# Tests rely on these two fixtures representing distinct robots; without
+# distinct serials the duplicate-via-select_device test silently degenerates.
+assert MOCK_DEVICE_SINGLE["serial_number"] != MOCK_DEVICE_SECOND["serial_number"]
+
 MOCK_USER_INPUT: dict = {
     "name": MOCK_NAME,
     "username": MOCK_USERNAME,

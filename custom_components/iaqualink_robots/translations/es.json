@@ -35,7 +35,8 @@
       "unknown": "Ocurrió un error inesperado. Intente nuevamente."
     },
     "abort": {
-      "already_configured": "Este robot ya está configurado en Home Assistant."
+      "already_configured": "Este robot ya está configurado en Home Assistant.",
+      "no_serial": "No serial number was returned for this robot. The cloud account is reachable but the device list is empty or incomplete. Please try again later."
     }
   },
   "entity": {

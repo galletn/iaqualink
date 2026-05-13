@@ -42,6 +42,8 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     if len(self._devices) == 1:
                         device = self._devices[0]
                         serial = device.get("serial_number")
+                        if isinstance(serial, str):
+                            serial = serial.strip()
                         if not serial:
                             return self.async_abort(reason="no_serial")
                         await self.async_set_unique_id(serial)
@@ -95,6 +97,8 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             if selected_device:
                 serial = selected_device.get("serial_number")
+                if isinstance(serial, str):
+                    serial = serial.strip()
                 if not serial:
                     return self.async_abort(reason="no_serial")
                 await self.async_set_unique_id(serial)

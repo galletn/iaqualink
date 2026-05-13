@@ -1,4 +1,5 @@
 """Coordinator and client for iaqualinkRobots integration."""
+import base64
 import json
 import datetime
 import aiohttp
@@ -19,6 +20,43 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Safety margin subtracted from the JWT `exp` so we refresh slightly before
+# the cloud actually invalidates the token. Covers clock skew between AWS
+# Cognito and the HA host.
+_TOKEN_EXP_SAFETY_MARGIN_S = 60
+
+
+def _decode_jwt_exp(token: str) -> datetime.datetime | None:
+    """Decode the `exp` claim from a JWT and return a naive local datetime.
+
+    The Cognito `IdToken` is a standard JWT (`<header>.<payload>.<signature>`).
+    The middle segment is base64url-encoded JSON containing an `exp` field —
+    seconds-since-epoch. We trust transport security (TLS) and the iAqualink
+    auth flow rather than verifying the signature, which would require
+    fetching Cognito's public JWKs.
+
+    Returns the parsed expiry (minus a safety margin) on success, or None on
+    any parse failure so the caller can fall back to a conservative default.
+
+    TODO(H8): align with homeassistant.util.dt for timezone hygiene; the
+    naive-local return matches the existing `datetime.datetime.now()` call
+    site at the moment.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        # base64url decoding needs the trailing '=' padding (multiple of 4).
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        exp = payload.get("exp")
+        if not isinstance(exp, (int, float)):
+            return None
+        return datetime.datetime.fromtimestamp(int(exp) - _TOKEN_EXP_SAFETY_MARGIN_S)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
 
 
 class AqualinkClient:
@@ -338,8 +376,18 @@ class AqualinkClient:
             self._id_token = auth["userPoolOAuth"]["IdToken"]
             self._app_client_id = auth["cognitoPool"]["appClientId"]
 
-            # Set token expiration to 1 hour from now (conservative estimate)
-            self._token_expires_at = datetime.datetime.now() + datetime.timedelta(hours=1)
+            # Prefer the real `exp` claim from the JWT; fall back to a
+            # conservative 1h if the token is missing/malformed (very unlikely
+            # for a successful login, but the fallback keeps the integration
+            # functional rather than crashing).
+            decoded_exp = _decode_jwt_exp(self._id_token)
+            if decoded_exp is not None:
+                self._token_expires_at = decoded_exp
+            else:
+                _LOGGER.warning(
+                    "JWT exp claim missing or unparseable; falling back to 1h hardcoded expiry"
+                )
+                self._token_expires_at = datetime.datetime.now() + datetime.timedelta(hours=1)
             if self._debug_mode:
                 _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
         except asyncio.CancelledError:

@@ -11,12 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.iaqualink_robots.const import DOMAIN
 
-from tests.const import MOCK_ENTRY_DATA, MOCK_NAME
+from tests.const import MOCK_ENTRY_DATA, MOCK_NAME, MOCK_SERIAL
 
 
 async def test_async_setup_returns_true(hass: HomeAssistant) -> None:
@@ -84,6 +85,102 @@ async def test_setup_entry_stores_client_and_coordinator(
     entry_store = hass.data[DOMAIN][entry.entry_id]
     assert entry_store["client"] is mock_coordinator["client"]
     assert entry_store["coordinator"] is mock_coordinator["coord"]
+
+
+# ---------------------------------------------------------------------------
+# M12 migration — rewrite button unique_ids from title-derived to serial-based.
+# ---------------------------------------------------------------------------
+
+
+async def test_migrate_v1_to_v2_rewrites_button_unique_ids(hass: HomeAssistant) -> None:
+    """Legacy `<title>_<command>` button unique_ids get rewritten to `<serial>_<command>`."""
+    from custom_components.iaqualink_robots import async_migrate_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        data=MOCK_ENTRY_DATA,
+        title="Bobby the Robot",
+    )
+    entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    # Pre-populate legacy entries: title-derived prefix, one per known command.
+    legacy_prefix = "bobby_the_robot"
+    legacy_commands = [
+        "forward", "backward", "rotate_left", "rotate_right",
+        "stop", "add_fifteen_minutes", "reduce_fifteen_minutes",
+    ]
+    for cmd in legacy_commands:
+        registry.async_get_or_create(
+            domain="button",
+            platform=DOMAIN,
+            unique_id=f"{legacy_prefix}_{cmd}",
+            config_entry=entry,
+        )
+
+    assert await async_migrate_entry(hass, entry)
+
+    for cmd in legacy_commands:
+        # Old unique_id is gone.
+        assert registry.async_get_entity_id("button", DOMAIN, f"{legacy_prefix}_{cmd}") is None
+        # New unique_id exists.
+        assert registry.async_get_entity_id("button", DOMAIN, f"{MOCK_SERIAL}_{cmd}") is not None
+
+    assert entry.version == 2
+
+
+async def test_migrate_idempotent(hass: HomeAssistant) -> None:
+    """Running migration on an already-v2 entry is a no-op."""
+    from custom_components.iaqualink_robots import async_migrate_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data=MOCK_ENTRY_DATA,
+        title=MOCK_NAME,
+    )
+    entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    # Pre-populate already-correct entries.
+    new_prefix = MOCK_SERIAL
+    registry.async_get_or_create(
+        domain="button",
+        platform=DOMAIN,
+        unique_id=f"{new_prefix}_forward",
+        config_entry=entry,
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    # Still there, unchanged.
+    assert registry.async_get_entity_id("button", DOMAIN, f"{new_prefix}_forward") is not None
+    assert entry.version == 2
+
+
+async def test_migrate_v1_to_v2_without_serial_is_safe(hass: HomeAssistant) -> None:
+    """If a v1 entry somehow lacks `serial_number`, migration logs a warning,
+    skips the rewrite, and bumps the version. The integration must remain
+    loadable rather than crash on a malformed legacy entry.
+    """
+    from custom_components.iaqualink_robots import async_migrate_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        data={k: v for k, v in MOCK_ENTRY_DATA.items() if k != "serial_number"},
+        title=MOCK_NAME,
+    )
+    entry.add_to_hass(hass)
+
+    assert await async_migrate_entry(hass, entry)
+    assert entry.version == 2
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle — XFAIL until P3 (runtime_data) and platform-fixture polish lands.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.xfail(

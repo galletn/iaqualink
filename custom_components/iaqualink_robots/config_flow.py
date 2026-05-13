@@ -9,7 +9,9 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    # Version bumps trigger `async_migrate_entry` in __init__.py:
+    #   1 -> 2  (M12) rewrite button unique_ids from title-derived to serial-based
+    VERSION = 2
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
     def __init__(self):

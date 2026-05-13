@@ -48,17 +48,12 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         self._command = command
         self._attr_icon = icon
 
-        # Use coordinator title (entry.title) for entity ID, same as vacuum device_name
-        # This should give us "bobby" if that's the entry title
-        title = getattr(coordinator, "_title", None)
-        if title:
-            # Clean the title for use as entity ID (lowercase, replace spaces with underscores)
-            device_name = title.lower().replace(" ", "_")
-        else:
-            # Fallback to robot_id if no title
-            device_name = client.robot_id
-
-        self._attr_unique_id = f"{device_name}_{command}"
+        # Derive unique_id from the robot's serial number. The previous title-based
+        # derivation (entry.title lowercased + underscores) broke whenever the user
+        # renamed the entry — every rename forked a new entity in the registry.
+        # Migration of pre-M12 unique_ids lives in __init__.async_migrate_entry.
+        # TODO: switch to client.serial once story M15 (public properties) lands.
+        self._attr_unique_id = f"{client._serial}_{command}"
         self._attr_should_poll = False
 
         # Set proper button names - store the name to prevent override

@@ -2,13 +2,76 @@ import asyncio
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN, PLATFORMS, API_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
+# Commands previously used to suffix button unique_ids. Kept here (not imported
+# from button.py) so the migration is self-contained and doesn't break if
+# button.py renames a command later — old user registries will still match.
+_M12_BUTTON_COMMANDS = (
+    "forward",
+    "backward",
+    "rotate_left",
+    "rotate_right",
+    "stop",
+    "add_fifteen_minutes",
+    "reduce_fifteen_minutes",
+)
+
 
 async def async_setup(hass: HomeAssistant, config) -> bool:
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate an old config entry to the current schema.
+
+    Version history:
+        1 -> 2  (M12) Rewrite button unique_ids from title-derived (mutable,
+                broke on rename) to serial-based. See story-M12 for context.
+    """
+    _LOGGER.debug("Migrating config entry from version %s", entry.version)
+
+    if entry.version == 1:
+        serial = entry.data.get("serial_number")
+        if not serial:
+            _LOGGER.warning(
+                "Cannot migrate entry %s to v2: no serial_number in entry.data. "
+                "Skipping button unique_id rewrite; the entry will continue working "
+                "with legacy unique_ids until re-added.",
+                entry.entry_id,
+            )
+        else:
+            registry = er.async_get(hass)
+            updates = 0
+            for entity_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+                if entity_entry.domain != "button":
+                    continue
+                # Already migrated (unique_id starts with the serial)? Skip.
+                if entity_entry.unique_id.startswith(f"{serial}_"):
+                    continue
+                # Find the command suffix the legacy unique_id ends with and
+                # rebuild as `<serial>_<command>`.
+                for cmd in _M12_BUTTON_COMMANDS:
+                    if entity_entry.unique_id.endswith(f"_{cmd}"):
+                        new_uid = f"{serial}_{cmd}"
+                        _LOGGER.info(
+                            "M12 migration: %s unique_id %r -> %r",
+                            entity_entry.entity_id, entity_entry.unique_id, new_uid,
+                        )
+                        registry.async_update_entity(
+                            entity_entry.entity_id, new_unique_id=new_uid,
+                        )
+                        updates += 1
+                        break
+            _LOGGER.debug("M12 migration rewrote %s button unique_ids", updates)
+
+        hass.config_entries.async_update_entry(entry, version=2)
+
+    _LOGGER.debug("Migration to version %s complete", entry.version)
     return True
 
 

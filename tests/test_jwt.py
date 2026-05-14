@@ -200,6 +200,14 @@ def test_resolve_token_expiry_falls_back_and_warns(caplog) -> None:
     """A malformed token returns `now + 1h - margin` AND logs a warning."""
     import logging
 
+    # The H9b rate-limit flag (`_JWT_EXP_FALLBACK_WARNED`) is process-global,
+    # so a prior test in the same session can leave it `True` — at which
+    # point the fallback fires at DEBUG instead of WARNING and this test's
+    # caplog comes back empty. Reset the flag so the very-first-warning
+    # branch fires regardless of test order.
+    from custom_components.iaqualink_robots import coordinator as coord_mod
+    coord_mod._JWT_EXP_FALLBACK_WARNED = False
+
     caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.coordinator")
     before = datetime.datetime.now()
 

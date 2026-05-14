@@ -635,9 +635,10 @@ class AqualinkClient:
                 return
 
             except aiohttp.WSServerHandshakeError as e:
-                # Typed check replaces the fragile `"401" in str(e)` match
-                # (H9b AC#3). 401 is auth-failed → surface to coordinator as
-                # AuthFailedError so HA reauth fires. 403 stays an error log.
+                # Typed status check replaces the pre-H9b fragile substring
+                # match on the exception message (AC#3). 401 is auth-failed →
+                # surface to coordinator as AuthFailedError so HA reauth
+                # fires. 403 stays an error log.
                 self._ws_consecutive_failures += 1
                 await self._close_websocket()
                 if e.status == 401:

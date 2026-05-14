@@ -182,12 +182,17 @@ async def test_ws_handshake_401_drives_auth_failed_after_retry(monkeypatch) -> N
 
 
 def test_string_match_removed() -> None:
-    """Source-level guard: ``"401" in str(e)`` must not reappear in coordinator.py.
+    """Source-level guard: ``"401" in <expr>`` must not reappear in coordinator.py.
 
     Locks in the AC#3 contract the same way M18 locked the wall_only /
     walls_only distinction — if a future refactor reintroduces the fragile
     substring match, this test fails loudly.
+
+    Sign-off P3: regex covers BOTH single- and double-quoted variants so a
+    quote-style refactor cannot accidentally bypass the guard.
     """
+    import re
+
     coordinator_src = (
         Path(__file__).parent.parent
         / "custom_components"
@@ -195,13 +200,141 @@ def test_string_match_removed() -> None:
         / "coordinator.py"
     ).read_text(encoding="utf-8")
 
-    assert '"401" in error_msg' not in coordinator_src, (
+    # Matches: "401" in <expr>, '401' in <expr>, "401" in str(...), etc.
+    # The bracket character class catches both quote styles in one pattern.
+    pattern = re.compile(r"""['"]401['"]\s+in\s+""")
+    matches = pattern.findall(coordinator_src)
+    assert not matches, (
         "Substring match on '401' was reintroduced — H9b AC#3 requires the typed "
-        "aiohttp.WSServerHandshakeError(status=401) check instead."
+        "aiohttp.WSServerHandshakeError(status=401) check instead. "
+        f"Found {len(matches)} matche(s)."
     )
-    assert '"401" in str' not in coordinator_src, (
-        "Substring match `\"401\" in str(...)` is back — see H9b AC#3."
+
+
+# ---------------------------------------------------------------------------
+# Sign-off P1 — send_login must surface Cognito-side credential rejection as
+# AuthFailedError so the coordinator boundary triggers reauth. Three rejection
+# shapes are covered: explicit 401, explicit 403, and a 200-shaped response
+# whose body is missing the expected ``userPoolOAuth``/``authentication_token``
+# envelope (Cognito's ``NotAuthorizedException`` response).
+# ---------------------------------------------------------------------------
+
+
+async def test_send_login_401_raises_auth_failed(monkeypatch) -> None:
+    """A 401 response from Cognito must raise ``AuthFailedError`` so the
+    coordinator translates it to ``ConfigEntryAuthFailed`` and HA dispatches
+    reauth.
+    """
+    client = AqualinkClient(username="u", password="p", api_key="k")
+
+    class _FakeResponse:
+        status = 401
+        headers: dict = {}
+        request_info = MagicMock()
+        history: tuple = ()
+
+        async def text(self) -> str:
+            return ""
+
+        async def json(self) -> dict:
+            return {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+    class _FakeSession:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        _FakeSession,
     )
+
+    with pytest.raises(AuthFailedError, match="401"):
+        await client.send_login(json.dumps({"email": "u"}), {})
+
+
+async def test_send_login_403_raises_auth_failed(monkeypatch) -> None:
+    """A 403 response from Cognito must raise ``AuthFailedError`` (not
+    ``ClientResponseError`` — that was the pre-sign-off behaviour and meant
+    the coordinator broad-except absorbed it as transient noise).
+    """
+    client = AqualinkClient(username="u", password="p", api_key="k")
+
+    class _FakeResponse:
+        status = 403
+        headers: dict = {}
+        request_info = MagicMock()
+        history: tuple = ()
+
+        async def text(self) -> str:
+            return ""
+
+        async def json(self) -> dict:
+            return {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+    class _FakeSession:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        _FakeSession,
+    )
+
+    with pytest.raises(AuthFailedError, match="403"):
+        await client.send_login(json.dumps({"email": "u"}), {})
+
+
+async def test_authenticate_missing_keys_raises_auth_failed(monkeypatch) -> None:
+    """A 200-shaped Cognito response with a body that is missing the expected
+    envelope (e.g. ``NotAuthorizedException``) must surface as
+    ``AuthFailedError`` from ``_authenticate``, not propagate as ``KeyError``.
+
+    This closes the password-rotation reauth gap: before sign-off P1, a
+    rotated-password retry path landed in ``_authenticate`` → KeyError →
+    coordinator broad-except → transient-failure ladder → no reauth.
+    """
+    client = AqualinkClient(username="u", password="p", api_key="k")
+
+    async def fake_send_login(data, headers):
+        # Cognito's NotAuthorizedException response shape — JSON but
+        # without the expected ``userPoolOAuth`` / ``authentication_token``
+        # keys.
+        return {"__type": "NotAuthorizedException", "message": "Incorrect username or password."}
+
+    monkeypatch.setattr(client, "send_login", fake_send_login)
+
+    with pytest.raises(AuthFailedError, match="unexpected body shape"):
+        await client._authenticate(force=True)
 
 
 # ---------------------------------------------------------------------------

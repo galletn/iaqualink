@@ -458,7 +458,7 @@ class AqualinkClient:
             # let a partial-failure state slip past the recheck.
             if not force and self._id_token and not self._is_token_expired():
                 if self._debug_mode:
-                    _LOGGER.debug("Skipping authenticate — token refreshed by peer")
+                    _LOGGER.debug("Skipping authenticate — token still valid")
                 return
             if self._debug_mode:
                 _LOGGER.debug("Authenticating with iAqualink API...")
@@ -471,12 +471,25 @@ class AqualinkClient:
                 data = json.dumps(data)
                 auth = await asyncio.wait_for(self.send_login(data, self._headers), timeout=30)
 
-                self._first_name = auth["first_name"]
-                self._last_name = auth["last_name"]
-                self._id = auth["id"]
-                self._auth_token = auth["authentication_token"]
-                self._id_token = auth["userPoolOAuth"]["IdToken"]
-                self._app_client_id = auth["cognitoPool"]["appClientId"]
+                # H9b sign-off: a 200-shaped Cognito body that is missing the
+                # expected envelope means the response is an error payload
+                # (e.g. ``{"__type": "NotAuthorizedException", ...}``).
+                # Translate the resulting KeyError to AuthFailedError so the
+                # coordinator boundary triggers reauth instead of letting the
+                # broad-except ladder absorb it as transient noise.
+                try:
+                    self._first_name = auth["first_name"]
+                    self._last_name = auth["last_name"]
+                    self._id = auth["id"]
+                    self._auth_token = auth["authentication_token"]
+                    self._id_token = auth["userPoolOAuth"]["IdToken"]
+                    self._app_client_id = auth["cognitoPool"]["appClientId"]
+                except (KeyError, TypeError) as err:
+                    raise AuthFailedError(
+                        f"send_login returned an unexpected body shape "
+                        f"(missing or wrong-typed key {err}); treating as "
+                        "credential rejection"
+                    ) from err
 
                 # Prefer the real `exp` claim from the JWT; fall back to a
                 # conservative 1h (minus the safety margin, consistent with the
@@ -1713,32 +1726,41 @@ class AqualinkClient:
         return dt + datetime.timedelta(minutes=minutes)
 
     async def send_login(self, data, headers):
-        """Post a login request to the iaqualink_robots API."""
+        """Post a login request to the iaqualink_robots API.
+
+        Surfaces Cognito-side credential rejection as ``AuthFailedError`` so
+        the coordinator boundary translates it to ``ConfigEntryAuthFailed``
+        and HA's reauth flow fires. Three rejection shapes are handled:
+        explicit 401, explicit 403, and a 2xx response whose body is not the
+        expected JSON envelope (Cognito occasionally returns a 200 with an
+        error body or a non-JSON content type). Without this, a 200-shaped
+        rejection slipped through and only blew up on the ``auth["...":]``
+        dict accesses in ``_authenticate`` as ``KeyError`` — which the
+        coordinator broad-except handled as transient noise and the user
+        never saw the reauth prompt.
+        """
         try:
             async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.post(URL_LOGIN, data=data) as response:
+                    if response.status == 401:
+                        if self._debug_mode:
+                            _LOGGER.debug("Authentication failed: 401 Unauthorized.")
+                        raise AuthFailedError("401 Unauthorized on send_login")
+
                     if response.status == 403:
                         if self._debug_mode:
                             _LOGGER.error("Authentication failed: 403 Forbidden. Check your credentials or API key.")
-                        raise aiohttp.ClientResponseError(
-                            response.request_info,
-                            response.history,
-                            status=response.status,
-                            message="Authentication failed: 403 Forbidden",
-                            headers=response.headers
-                        )
+                        raise AuthFailedError("403 Forbidden on send_login")
 
                     content_type = response.headers.get('Content-Type', '')
                     if 'application/json' not in content_type:
                         text = await response.text()
                         if self._debug_mode:
                             _LOGGER.error(f"Unexpected content type: {content_type}. Response: {text[:200]}...")
-                        raise aiohttp.ClientResponseError(
-                            response.request_info,
-                            response.history,
-                            status=response.status,
-                            message=f"Unexpected content type: {content_type}",
-                            headers=response.headers
+                        # Cognito returns non-JSON only when the request is
+                        # rejected (e.g. an HTML error page on auth failure).
+                        raise AuthFailedError(
+                            f"send_login returned non-JSON content type: {content_type}"
                         )
 
                     return await response.json()
@@ -1844,7 +1866,14 @@ class AqualinkClient:
                 # H9b review P1: auth failures must propagate to the coordinator
                 # so HA reauth fires — never swallow them into the resilient
                 # "return None" path used for transient WS noise.
-                await self._close_websocket()
+                # Sign-off P7: close is best-effort during auth-failure
+                # propagation — a teardown error here must NOT mask the
+                # AuthFailedError, or the broad-except below absorbs it and
+                # reauth never fires.
+                try:
+                    await self._close_websocket()
+                except Exception:  # noqa: BLE001 — close is best-effort
+                    pass
                 raise
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -1923,7 +1952,11 @@ class AqualinkClient:
                 # H9b review P1: command-time WS 401 must propagate so HA
                 # reauth fires; the broad-except below is for transient WS
                 # noise only.
-                await self._close_websocket()
+                # Sign-off P7: best-effort close — see get_device_status.
+                try:
+                    await self._close_websocket()
+                except Exception:  # noqa: BLE001 — close is best-effort
+                    pass
                 raise
             except Exception as e:
                 if attempt < max_retries - 1:

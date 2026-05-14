@@ -212,7 +212,13 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_reauth_confirm(self, user_input=None):
         """Prompt the user for a new password and re-validate credentials."""
         errors = {}
-        assert self._reauth_entry is not None  # set by async_step_reauth
+        # Sign-off P2: defensive `is None` check instead of `assert`. Under
+        # `python -O` assertions are stripped, and an HA dispatch that lost
+        # `entry_id` (or pointed at a deleted entry) would have crashed on
+        # `self._reauth_entry.data["username"]` with AttributeError. Abort
+        # cleanly instead.
+        if self._reauth_entry is None:
+            return self.async_abort(reason="reauth_unavailable")
 
         if user_input is not None:
             new_password = user_input["password"]
@@ -237,12 +243,28 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._reauth_entry,
                     data={**self._reauth_entry.data, "password": new_password},
                 )
-                await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
+                # Sign-off P6: reload is best-effort. If it raises we've
+                # already updated the entry data, so HA will retry on the
+                # next coordinator cycle. Surface the failure as a WARN so
+                # operators can see it without blocking the user-visible
+                # success message.
+                try:
+                    await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
+                except Exception as reload_err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Reauth succeeded but reload failed (%s); HA will "
+                        "retry on the next update cycle",
+                        reload_err,
+                    )
                 return self.async_abort(reason="reauth_successful")
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required("password"): str}),
+            # Sign-off P4: enforce min length 1 locally so an empty submit
+            # fails the form schema instead of round-tripping to Cognito.
+            data_schema=vol.Schema({
+                vol.Required("password"): vol.All(str, vol.Length(min=1)),
+            }),
             errors=errors,
             description_placeholders={
                 "username": self._reauth_entry.data["username"],

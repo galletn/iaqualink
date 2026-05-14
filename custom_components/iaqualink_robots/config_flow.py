@@ -47,25 +47,49 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_INCLUDE_SECONDS_REMAINING, DEFAULT_INCLUDE_SECONDS_REMAINING
             )
 
-            # C6: pre-discovery username probe. If the user is re-adding an
-            # already-configured account, abort BEFORE the AWS Cognito round-
-            # trip in `discover_devices`. Trade-off (spec Risks/Mitigation):
-            # this is over-eager for users with two robots on one iAqualink
-            # account — adding a second robot on an existing account will
-            # also hit `already_configured`. Workaround: remove the existing
-            # entry, then re-add via the select_device step to pick the
-            # newly-discovered robot. The narrower second-robot path is not
-            # the common case; the optimisation favours the typical
-            # one-robot-one-account user.
-            for existing in self._async_current_entries():
-                if existing.data.get("username") == self._username:
-                    return self.async_abort(reason="already_configured")
+            # C6 (refined per post-implementation review): identify entries
+            # already configured for this account so we can dedupe by serial
+            # after discovery, instead of aborting before it. The earlier
+            # pre-discovery abort broke multi-robot-per-account: a user with
+            # one robot configured could not add a second robot on the same
+            # iAqualink account. The refined design preserves the spec's
+            # original "the existing C2 logic stays" intent for multi-robot
+            # users — we still skip the spurious entry-create for re-adds of
+            # the same robot, just one Cognito round-trip later.
+            #
+            # Username comparison is case- and whitespace-normalized because
+            # Cognito treats email-style usernames case-insensitively and
+            # mobile autocomplete commonly trails a space. `include_ignore`
+            # is False so users who once "ignored" this integration are not
+            # permanently locked out.
+            normalized_username = self._username.strip().casefold()
+            existing_serials_for_account = {
+                entry.data["serial_number"]
+                for entry in self._async_current_entries(include_ignore=False)
+                if (entry.data.get("username") or "").strip().casefold()
+                == normalized_username
+                and entry.data.get("serial_number")
+            }
 
             # Try to discover devices with these credentials
             try:
                 self._devices = await AqualinkClient.discover_devices(
                     self._username, self._password, API_KEY
                 )
+
+                # C6 filter: drop devices already configured for this account.
+                # If every discovered device is already configured, abort —
+                # this is the re-add-same-account case the original C6 was
+                # targeting. If at least one is new, fall through to the
+                # standard single-device / select_device path on the filtered
+                # set so the user only sees devices they don't already have.
+                if existing_serials_for_account:
+                    self._devices = [
+                        d for d in self._devices
+                        if d.get("serial_number") not in existing_serials_for_account
+                    ]
+                    if not self._devices:
+                        return self.async_abort(reason="already_configured")
 
                 if not self._devices:
                     errors["base"] = "no_devices"
@@ -114,10 +138,13 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.error(f"Error discovering devices: {e}")
                 errors["base"] = "cannot_connect"
 
-        # Define form schema
+        # Define form schema. C6 review P3: enforce min length 1 on username
+        # so an empty submit fails the form schema instead of probing
+        # existing entries with an empty string and accidentally matching
+        # a corrupted entry whose stored username is also empty.
         data_schema = vol.Schema({
             vol.Required("name", default="My Pool Robot"): str,
-            vol.Required("username"): str,
+            vol.Required("username"): vol.All(str, vol.Length(min=1)),
             vol.Required("password"): str,
             vol.Optional(
                 CONF_INCLUDE_SECONDS_REMAINING,

@@ -10,6 +10,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import voluptuous as vol
 from homeassistant import config_entries, data_entry_flow
 from homeassistant.core import HomeAssistant
 
@@ -116,19 +117,22 @@ async def test_duplicate_entry_aborts(hass: HomeAssistant) -> None:
 
 
 @pytest.mark.usefixtures("mock_discover_two_devices", "bypass_setup_fixture")
-async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> None:
-    """C6 pre-discovery dedupe fires regardless of how the first entry was
-    created.
+async def test_second_robot_on_same_account_auto_added(hass: HomeAssistant) -> None:
+    """C6 (refined) multi-robot-per-account contract: with one robot from a
+    two-robot iAqualink account already configured, a second flow with the
+    same credentials discovers both robots, filters out the configured one,
+    and creates an entry for the remaining robot via the single-device
+    shortcut.
 
-    The first entry is registered via the select_device step (two-robot
-    `discover_devices` payload, user picks one). The second flow with the
-    same username hits the C6 pre-discovery probe and aborts at the user
-    step — it never reaches select_device. Pre-C6 this test asserted the
-    abort at the select_device step via the post-discovery serial check;
-    that path is now unreachable for the same-username case because C6
-    short-circuits earlier.
+    Pre-refinement (the original C6 pre-discovery probe) this scenario
+    aborted with `already_configured`, blocking multi-robot users entirely
+    — a regression vs the spec's Risks-clause intent that "the existing
+    C2 logic stays" for two-robots-on-one-account. The refined post-review
+    design preserves the spec's intent while still preventing spurious
+    second entries for a user who simply re-types the same credentials on
+    a single-robot account (covered by test_duplicate_entry_aborts).
     """
-    # First entry via select_device.
+    # First entry via select_device — user picks robot #1 (MOCK_SERIAL).
     result1 = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
@@ -143,41 +147,45 @@ async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> 
         user_input={"device": MOCK_SERIAL, "name": "First copy"},
     )
     assert first["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
-    # M13 regression guard: unique_id must be the serial, not the email.
     assert first["result"].unique_id == MOCK_SERIAL
     await hass.async_block_till_done()
 
-    # Second attempt — same username — C6 probe aborts at user step BEFORE
-    # discover_devices runs, so the select_device form is never reached.
+    # Second attempt with the same credentials: discover returns both
+    # robots, MOCK_SERIAL is filtered out, MOCK_DEVICE_SECOND remains,
+    # single-device shortcut creates its entry.
+    second_serial = MOCK_DEVICE_SECOND["serial_number"]
     result2 = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    result2_final = await hass.config_entries.flow.async_configure(
+    final = await hass.config_entries.flow.async_configure(
         result2["flow_id"], user_input=MOCK_USER_INPUT
     )
-    assert result2_final["type"] == data_entry_flow.FlowResultType.ABORT
-    assert result2_final["reason"] == "already_configured"
+    assert final["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert final["result"].unique_id == second_serial
+    assert final["data"]["serial_number"] == second_serial
 
 
 # ---------------------------------------------------------------------------
-# C6: pre-discovery dedupe — duplicate username aborts BEFORE the cloud call.
+# C6 (refined): post-discovery dedupe by serial. All-already-configured →
+# abort. Case/whitespace-variant credentials still dedupe correctly. Empty
+# username rejected by schema.
 # ---------------------------------------------------------------------------
 
 
-async def test_duplicate_account_aborts_before_discovery(hass: HomeAssistant) -> None:
-    """A second flow with credentials matching an existing entry's username
-    must abort with `already_configured` BEFORE `discover_devices` runs.
+@pytest.mark.usefixtures("mock_discover_single_device", "bypass_setup_fixture")
+async def test_all_account_robots_already_configured_aborts(hass: HomeAssistant) -> None:
+    """When every discovered robot for an account is already configured
+    locally, abort with `already_configured`. Exercises the C6 filter on
+    a single-device account: the existing entry's serial matches the only
+    discovered serial → filtered list is empty → abort.
 
-    Locks the C6 contract: the pre-discovery username probe saves the
-    pointless AWS Cognito round-trip when a user re-adds an already-
-    configured account. Asserting `discover_devices.assert_not_called()`
-    is the load-bearing check — without that, the test would also pass
-    via the existing post-discovery serial dedupe (C2), defeating C6's
-    whole point.
+    Note: under the refined design, `discover_devices` IS called (we no
+    longer pre-abort). The win over pre-C6 is that the user does NOT see
+    the select_device step or get the post-create unique_id collision
+    message; they see the clean `already_configured` abort instead.
     """
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-    # Pre-seed an existing entry for MOCK_USERNAME with some serial.
     existing = MockConfigEntry(
         domain=DOMAIN,
         unique_id=MOCK_SERIAL,
@@ -185,22 +193,86 @@ async def test_duplicate_account_aborts_before_discovery(hass: HomeAssistant) ->
     )
     existing.add_to_hass(hass)
 
-    # discover_devices MUST NOT be called by the second flow.
-    discover_mock = AsyncMock()
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    final = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=MOCK_USER_INPUT
+    )
+
+    assert final["type"] == data_entry_flow.FlowResultType.ABORT
+    assert final["reason"] == "already_configured"
+
+
+@pytest.mark.usefixtures("mock_discover_single_device", "bypass_setup_fixture")
+async def test_case_variant_username_still_dedupes(hass: HomeAssistant) -> None:
+    """C6 review P1: the username comparison is case- and whitespace-
+    normalized so a user retyping `Test@Example.com ` (mixed case + trailing
+    space) is recognized as the same account as `test@example.com` and the
+    dedupe filter still fires. Without `.strip().casefold()` on both sides,
+    the second flow would create a duplicate entry (Cognito treats email-
+    style usernames case-insensitively, so the actual second discover_devices
+    call returns the same robot, but the filter would miss it).
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    existing = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=MOCK_SERIAL,
+        data=MOCK_ENTRY_DATA,
+    )
+    existing.add_to_hass(hass)
+
+    # Variant credentials: mixed case + trailing space.
+    variant_input = {
+        **MOCK_USER_INPUT,
+        "username": " " + MOCK_USER_INPUT["username"].upper() + " ",
+    }
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    final = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=variant_input
+    )
+
+    assert final["type"] == data_entry_flow.FlowResultType.ABORT
+    assert final["reason"] == "already_configured"
+
+
+async def test_user_flow_empty_username_rejected_by_schema(hass: HomeAssistant) -> None:
+    """C6 review P3: the username form schema enforces `vol.Length(min=1)`
+    so an empty submit fails locally rather than probing existing entries
+    with `""` and accidentally matching a corrupted entry. Mirrors the H9b
+    sign-off P4 pattern applied to the reauth password field.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+
+    bad_input = {**MOCK_USER_INPUT, "username": ""}
+    # The schema rejects the input — the flow may surface this as a form
+    # re-display or as a voluptuous validation error depending on HA's
+    # behaviour; either way, no entry is created and discover_devices is
+    # not called.
     with patch(
         "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
-        new=discover_mock,
-    ):
-        result = await hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": config_entries.SOURCE_USER}
-        )
-        result2 = await hass.config_entries.flow.async_configure(
-            result["flow_id"], user_input=MOCK_USER_INPUT
-        )
+        new=AsyncMock(return_value=[]),
+    ) as discover_mock:
+        try:
+            final = await hass.config_entries.flow.async_configure(
+                result["flow_id"], user_input=bad_input
+            )
+            # If the framework surfaces it as a form re-display, assert
+            # the username field is unfilled and discovery was skipped.
+            assert final["type"] == data_entry_flow.FlowResultType.FORM
+            assert final["step_id"] == "user"
+        except vol.Invalid:
+            # Alternative path: voluptuous raises directly. Acceptable.
+            pass
 
-    assert result2["type"] == data_entry_flow.FlowResultType.ABORT
-    assert result2["reason"] == "already_configured"
     discover_mock.assert_not_called()
+    assert hass.config_entries.async_entries(DOMAIN) == []
 
 
 @pytest.mark.usefixtures("mock_discover_two_devices", "bypass_setup_fixture")

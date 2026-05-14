@@ -22,22 +22,25 @@ api_key: EOOEMOW4YR6QNB07
 
 ## Supported Models:
 
-- EX 4000 iQ
-- RA 6500 iQ
-- RA 6570 iQ
-- RA 6900 iQ
-- Polaris - VRX iQ+
-- CNX 30 iQ
-- CNX 40 Iq
-- CNX 50 iQ
-- CNX 4090 iQ
-- OV 5490 iQ
-- RF 5600 iQ
-- P965 iQ
+- EX 4000 iQ / EX 5000 iQ / EX 6000 iQ
+- RA 6500 iQ / RA 6570 iQ / RA 6900 iQ
+- Polaris VRX iQ+
+- CNX 30 iQ / CNX 40 iQ / CNX 50 iQ / CNX 4090 iQ
+- OV 5490 iQ / RF 5600 iQ
+- OA 6400 iQ
+- P965 iQ / 9650 iQ
+- VortraX TRX 8500 iQ
+- Polaris Freedom Cordless
+- Aqua Products EVO 614iQ / Polaris Epic 8642iQ / Scout 42iQ
+- Zodiac XA 5095 iQ
+- Zodiac RE 4400 iQ / RE 4600 iQ
+- Zodiac GV 5480 iQ
+- Cyclobot & CycloNext models
+- Vortrax models
 
 ## Known Models to have issues:
 
-- 
+- *(none currently — please report if you encounter problems)*
 
 
 ## Stop Start Example:

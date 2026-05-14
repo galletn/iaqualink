@@ -118,6 +118,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .coordinator import AqualinkClient, AqualinkDataUpdateCoordinator
     from .const import SCAN_INTERVAL
 
+    # M19 AC#8: stray api_key cleanup. The M17 migration drops the dead
+    # `api_key` field from entry.data, but a user who restored a backup
+    # from before migration can land here with the field still present
+    # and the version already at CURRENT_VERSION (so async_migrate_entry
+    # is never invoked). Strip it lazily here as a belt-and-braces.
+    if "api_key" in entry.data:
+        _LOGGER.debug(
+            "async_setup_entry: stray api_key found in entry.data; dropping it"
+        )
+        new_data = {k: v for k, v in entry.data.items() if k != "api_key"}
+        hass.config_entries.async_update_entry(entry, data=new_data)
+
     # Get credentials from entry
     username = entry.data["username"]
     password = entry.data["password"]

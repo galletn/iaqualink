@@ -279,6 +279,49 @@ async def test_migrate_v1_to_current_without_serial_is_safe(hass: HomeAssistant)
     assert "api_key" not in entry.data
 
 
+async def test_migrate_v1_without_serial_preserves_registry(hass: HomeAssistant) -> None:
+    """M19 AC#6: v1-no-serial path must leave the registry untouched.
+
+    Guards against a regression where the missing-serial branch would
+    rebuild unique_ids as `_<cmd>` (empty-serial prefix), corrupting the
+    user's existing button entries. The migration should detect no serial,
+    log a warning, skip the rewrite entirely, and the legacy entities must
+    keep their original unique_ids.
+    """
+    from custom_components.iaqualink_robots import async_migrate_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        data={k: v for k, v in MOCK_ENTRY_DATA.items() if k != "serial_number"},
+        title="Bobby the Robot",
+    )
+    entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    legacy_prefix = "bobby_the_robot"
+    legacy_commands = [
+        "forward", "backward", "rotate_left", "rotate_right",
+        "stop", "add_fifteen_minutes", "reduce_fifteen_minutes",
+    ]
+    for cmd in legacy_commands:
+        registry.async_get_or_create(
+            domain="button",
+            platform=DOMAIN,
+            unique_id=f"{legacy_prefix}_{cmd}",
+            config_entry=entry,
+        )
+
+    assert await async_migrate_entry(hass, entry)
+    assert entry.version == CURRENT_VERSION
+
+    # Legacy unique_ids must remain intact; no `_<cmd>` (empty-prefix) entries
+    # may have been created.
+    for cmd in legacy_commands:
+        assert registry.async_get_entity_id("button", DOMAIN, f"{legacy_prefix}_{cmd}") is not None
+        assert registry.async_get_entity_id("button", DOMAIN, f"_{cmd}") is None
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle — XFAIL until P3 (runtime_data) and platform-fixture polish lands.
 # ---------------------------------------------------------------------------

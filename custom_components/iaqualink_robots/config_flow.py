@@ -42,6 +42,11 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     if len(self._devices) == 1:
                         device = self._devices[0]
                         serial = device.get("serial_number")
+                        # M19 AC#1: reject non-string serial types (int/list/dict)
+                        # before they can reach async_set_unique_id, which would
+                        # otherwise raise an opaque TypeError deep inside HA.
+                        if serial is not None and not isinstance(serial, str):
+                            return self.async_abort(reason="no_serial")
                         if isinstance(serial, str):
                             serial = serial.strip()
                         if not serial:
@@ -97,6 +102,10 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             if selected_device:
                 serial = selected_device.get("serial_number")
+                # M19 AC#1: reject non-string serial types (int/list/dict)
+                # before they can reach async_set_unique_id.
+                if serial is not None and not isinstance(serial, str):
+                    return self.async_abort(reason="no_serial")
                 if isinstance(serial, str):
                     serial = serial.strip()
                 if not serial:

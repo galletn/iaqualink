@@ -117,7 +117,17 @@ async def test_duplicate_entry_aborts(hass: HomeAssistant) -> None:
 
 @pytest.mark.usefixtures("mock_discover_two_devices", "bypass_setup_fixture")
 async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> None:
-    """Adding the same robot twice via select_device step also aborts."""
+    """C6 pre-discovery dedupe fires regardless of how the first entry was
+    created.
+
+    The first entry is registered via the select_device step (two-robot
+    `discover_devices` payload, user picks one). The second flow with the
+    same username hits the C6 pre-discovery probe and aborts at the user
+    step — it never reaches select_device. Pre-C6 this test asserted the
+    abort at the select_device step via the post-discovery serial check;
+    that path is now unreachable for the same-username case because C6
+    short-circuits earlier.
+    """
     # First entry via select_device.
     result1 = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -137,16 +147,13 @@ async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> 
     assert first["result"].unique_id == MOCK_SERIAL
     await hass.async_block_till_done()
 
-    # Second attempt — pick the same device — must abort.
+    # Second attempt — same username — C6 probe aborts at user step BEFORE
+    # discover_devices runs, so the select_device form is never reached.
     result2 = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    selection2 = await hass.config_entries.flow.async_configure(
-        result2["flow_id"], user_input=MOCK_USER_INPUT
-    )
     result2_final = await hass.config_entries.flow.async_configure(
-        selection2["flow_id"],
-        user_input={"device": MOCK_SERIAL, "name": "Second copy"},
+        result2["flow_id"], user_input=MOCK_USER_INPUT
     )
     assert result2_final["type"] == data_entry_flow.FlowResultType.ABORT
     assert result2_final["reason"] == "already_configured"

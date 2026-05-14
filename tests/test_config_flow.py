@@ -232,6 +232,46 @@ async def test_empty_serial_via_select_device_aborts(hass: HomeAssistant) -> Non
 
 
 # ---------------------------------------------------------------------------
+# M19 AC#4: device_not_found branch in async_step_select_device.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("mock_discover_two_devices", "bypass_setup_fixture")
+async def test_select_device_missing_device_shows_device_not_found(
+    hass: HomeAssistant,
+) -> None:
+    """Surface `device_not_found` when the lookup miss occurs in select_device.
+
+    Reaches the select_device form, then clears `_devices` on the live flow
+    handler so the next-by-serial lookup returns `None`. The cur_step's
+    data_schema (already cached on the flow) still accepts the submitted
+    serial, so we exercise the lookup-miss branch rather than schema
+    rejection.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    selection = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=MOCK_USER_INPUT
+    )
+    assert selection["type"] == data_entry_flow.FlowResultType.FORM
+    assert selection["step_id"] == "select_device"
+
+    # Force a lookup miss: empty out `_devices` on the running flow handler.
+    flow = hass.config_entries.flow._progress[selection["flow_id"]]
+    flow._devices = []
+
+    final = await hass.config_entries.flow.async_configure(
+        selection["flow_id"],
+        user_input={"device": MOCK_SERIAL, "name": "Picked ghost"},
+    )
+
+    assert final["type"] == data_entry_flow.FlowResultType.FORM
+    assert final["step_id"] == "select_device"
+    assert final["errors"] == {"base": "device_not_found"}
+
+
+# ---------------------------------------------------------------------------
 # Placeholders for forthcoming stories.
 # ---------------------------------------------------------------------------
 

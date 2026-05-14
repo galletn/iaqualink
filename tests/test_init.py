@@ -279,6 +279,45 @@ async def test_migrate_v1_to_current_without_serial_is_safe(hass: HomeAssistant)
     assert "api_key" not in entry.data
 
 
+async def test_migrate_returns_false_on_v1_failure(hass: HomeAssistant) -> None:
+    """M19 AC#10: a raise inside v1->v2 returns False and leaves entry at v1.
+
+    Simulates a transient registry failure mid-migration: the entry must NOT
+    advance to v2 (so HA retries the migration on next setup), and the
+    function must return False rather than swallow the error.
+    """
+    from custom_components.iaqualink_robots import async_migrate_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        data=MOCK_ENTRY_DATA,
+        title="Bobby the Robot",
+    )
+    entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        domain="button",
+        platform=DOMAIN,
+        unique_id="bobby_the_robot_forward",
+        config_entry=entry,
+    )
+
+    # Force the registry update to raise — simulates an unexpected runtime
+    # error inside the migration body.
+    with patch.object(
+        registry,
+        "async_update_entity",
+        side_effect=RuntimeError("simulated registry failure"),
+    ):
+        result = await async_migrate_entry(hass, entry)
+
+    assert result is False
+    # Entry stays at v1 so HA retries on next setup.
+    assert entry.version == 1
+
+
 async def test_migrate_rerun_after_full_chain_is_noop(hass: HomeAssistant) -> None:
     """M19 AC#7: re-running migration on an already-migrated entry is a no-op.
 

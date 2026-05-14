@@ -118,18 +118,27 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not device_name or not device_type:
                     errors["base"] = "device_not_found"
                 else:
-                    await self.async_set_unique_id(serial)
-                    self._abort_if_unique_id_configured()
-                    return self.async_create_entry(
-                        title=user_input.get("name", device_name),
-                        data={
-                            "name": user_input.get("name", device_name),
-                            "username": self._username,
-                            "password": self._password,
-                            "serial_number": serial,
-                            "device_type": device_type,
-                        },
-                    )
+                    # M19 AC#3: explicit AbortFlow re-raise for defensive
+                    # symmetry with async_step_user. No broad Exception
+                    # handler exists here today, so AbortFlow already
+                    # propagates naturally — this guards against a future
+                    # PR adding a catch-all that would otherwise swallow
+                    # `already_configured` and similar abort reasons.
+                    try:
+                        await self.async_set_unique_id(serial)
+                        self._abort_if_unique_id_configured()
+                        return self.async_create_entry(
+                            title=user_input.get("name", device_name),
+                            data={
+                                "name": user_input.get("name", device_name),
+                                "username": self._username,
+                                "password": self._password,
+                                "serial_number": serial,
+                                "device_type": device_type,
+                            },
+                        )
+                    except data_entry_flow.AbortFlow:
+                        raise
             else:
                 errors["base"] = "device_not_found"
 

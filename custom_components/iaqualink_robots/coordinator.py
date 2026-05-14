@@ -2248,9 +2248,18 @@ class AqualinkClient:
                 }
 
         elif self._device_type == "cyclonext":
+            # The keys here MUST match the snake_case translation keys passed in
+            # by `vacuum.py::async_set_fan_speed` (which forwards the internal
+            # key after converting from any display-name input). Pre-issue-#76
+            # this map used the legacy display-name keys ("Floor only",
+            # "Floor and walls"), so `.get(fan_speed)` always returned None,
+            # `request` stayed None, and the command silently fell through to
+            # `{"success": False, ..., "error": "No valid request generated"}`.
+            # That's the "fan speed no longer propagates from HA to AquaLink"
+            # symptom reported in issue #76 (galletn comment on RE 4400 iQ).
             cycle_speed_map = {
-                "Floor only": "1",
-                "Floor and walls": "3"
+                "floor_only": "1",
+                "floor_and_walls": "3"
             }
             _cycle_speed = cycle_speed_map.get(fan_speed)
             if _cycle_speed:

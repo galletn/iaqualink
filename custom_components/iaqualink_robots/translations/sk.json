@@ -34,7 +34,8 @@
       "cannot_connect": "Nepodarilo sa pripojiť k službe iAquaLink. Skontrolujte svoje prihlasovacie údaje a skúste znova.",
       "no_devices": "Vo vašom účte neboli nájdení žiadni roboti. Skontrolujte, či je váš robot správne zaregistrovaný v iAquaLink.",
       "device_not_found": "Vybrané zariadenie sa nepodarilo nájsť. Skúste znova.",
-      "unknown": "Vyskytla sa neočakávaná chyba. Skúste znova."
+      "unknown": "Vyskytla sa neočakávaná chyba. Skúste znova.",
+      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again."
     },
     "abort": {
       "already_configured": "Tento robot je už nakonfigurovaný v Home Assistant.",

@@ -9,7 +9,7 @@ from .const import (
     DEFAULT_INCLUDE_SECONDS_REMAINING,
     DOMAIN,
 )
-from .coordinator import AqualinkClient
+from .coordinator import AqualinkClient, AuthFailedError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,6 +88,12 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # handler below would swallow them and show a misleading
                 # "cannot_connect" error.
                 raise
+            except AuthFailedError as e:
+                # H9b review P2: distinguish credential failures from network
+                # failures. The cloud's 401 response means the username or
+                # password is wrong, not that we couldn't reach the server.
+                _LOGGER.debug(f"Auth failed during discovery: {e}")
+                errors["base"] = "invalid_auth"
             except Exception as e:
                 _LOGGER.error(f"Error discovering devices: {e}")
                 errors["base"] = "cannot_connect"

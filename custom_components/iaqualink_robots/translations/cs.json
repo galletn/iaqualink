@@ -34,7 +34,8 @@
       "cannot_connect": "Nepodařilo se připojit k službě iAquaLink. Zkontrolujte své přihlašovací údaje a zkuste to znovu.",
       "no_devices": "Na vašem účtu nebyli nalezeni žádní roboti. Zkontrolujte, zda je váš robot správně registrován v iAquaLink.",
       "device_not_found": "Vybrané zařízení nebylo nalezeno. Zkuste to znovu.",
-      "unknown": "Došlo k neočekávané chybě. Zkuste to znovu."
+      "unknown": "Došlo k neočekávané chybě. Zkuste to znovu.",
+      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again."
     },
     "abort": {
       "already_configured": "Tento robot je již v Home Assistantovi nakonfigurován.",
@@ -218,7 +219,7 @@
       }
     },
     "reduce_fifteen_minutes": {
-      "name": "Odebrat 15 minut", 
+      "name": "Odebrat 15 minut",
       "description": "Odebere 15 minut z času čištění (pouze roboti VR a VortraX)",
       "fields": {
         "entity_id": {

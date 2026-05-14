@@ -34,7 +34,8 @@
       "cannot_connect": "Échec de la connexion au service iAquaLink. Veuillez vérifier vos identifiants et réessayer.",
       "no_devices": "Aucun robot trouvé sur votre compte. Veuillez vérifier que votre robot est correctement enregistré avec iAquaLink.",
       "device_not_found": "L'appareil sélectionné n'a pas pu être trouvé. Veuillez réessayer.",
-      "unknown": "Une erreur inattendue s'est produite. Veuillez réessayer."
+      "unknown": "Une erreur inattendue s'est produite. Veuillez réessayer.",
+      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again."
     },
     "abort": {
       "already_configured": "Ce robot est déjà configuré dans Home Assistant.",
@@ -145,13 +146,13 @@
       "fan_speed": {
         "floor_only": "Sol uniquement",
         "wall_only": "Mur uniquement",
-        "walls_only": "Murs uniquement", 
+        "walls_only": "Murs uniquement",
         "floor_and_walls": "Sol et murs",
         "smart_floor_and_walls": "SMART Sol et murs"
       },
       "time_format": {
         "hours": "Heure(s)",
-        "minutes": "Minute(s)", 
+        "minutes": "Minute(s)",
         "seconds": "Seconde(s)"
       }
     }
@@ -188,7 +189,7 @@
       }
     },
     "remote_rotate_right": {
-      "name": "Télécommande Rotation Droite", 
+      "name": "Télécommande Rotation Droite",
       "description": "Envoyer une commande de rotation droite au robot pour le contrôle à distance (robots VR et VortraX uniquement)",
       "fields": {
         "entity_id": {

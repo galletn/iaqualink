@@ -11,6 +11,7 @@ import time
 
 from datetime import timedelta
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed  # type: ignore # noqa
+from homeassistant.exceptions import ConfigEntryAuthFailed  # type: ignore # noqa
 # Note: This import requires Home Assistant 2025.1 or later
 from homeassistant.components.vacuum import VacuumActivity  # type: ignore # noqa
 from .const import (
@@ -22,10 +23,28 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class AuthFailedError(Exception):
+    """Internal marker raised by REST/WS layer on HTTP 401 (or equivalent).
+
+    Converted to ``homeassistant.exceptions.ConfigEntryAuthFailed`` at the
+    coordinator boundary so HA stops polling and dispatches its reauth flow.
+    Keeping this as a separate internal type lets the REST/WS layers stay
+    framework-agnostic — only ``AqualinkDataUpdateCoordinator._async_update_data``
+    translates to the HA-specific exception.
+    """
+
+
 # Safety margin subtracted from the JWT `exp` so we refresh slightly before
 # the cloud actually invalidates the token. Covers clock skew between AWS
 # Cognito and the HA host.
 _TOKEN_EXP_SAFETY_MARGIN_S = 60
+
+# Module-level one-shot flag for the JWT-exp fallback WARN. A malformed
+# Cognito token shape would otherwise trigger this warning on every hourly
+# refresh and flood the operator log. Once we've warned, subsequent fallbacks
+# log at DEBUG so the diagnostic info remains available without spam.
+_JWT_EXP_FALLBACK_WARNED = False
 
 
 def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
@@ -74,13 +93,22 @@ def _resolve_token_expiry(token: str | None) -> datetime.datetime:
     Wraps `_decode_jwt_exp` with the fallback-and-warn behavior the auth flow
     needs. The fallback path applies the SAME safety margin as the happy path
     so the two branches have consistent effective lifetimes.
+
+    The fallback WARN log is rate-limited via the module-level
+    ``_JWT_EXP_FALLBACK_WARNED`` flag: first malformed token warns, subsequent
+    ones log at DEBUG. Prevents log flooding on a persistently-bad Cognito
+    response without losing the diagnostic signal entirely.
     """
+    global _JWT_EXP_FALLBACK_WARNED
     decoded = _decode_jwt_exp(token)
     if decoded is not None:
         return decoded
-    _LOGGER.warning(
-        "JWT exp claim missing or unparseable; falling back to 1h hardcoded expiry"
-    )
+    msg = "JWT exp claim missing or unparseable; falling back to 1h hardcoded expiry"
+    if not _JWT_EXP_FALLBACK_WARNED:
+        _LOGGER.warning(msg)
+        _JWT_EXP_FALLBACK_WARNED = True
+    else:
+        _LOGGER.debug(msg)
     return (
         datetime.datetime.now()
         + datetime.timedelta(hours=1)
@@ -141,6 +169,14 @@ class AqualinkClient:
         self._max_ws_failures_before_offline = 5  # Allow 5 websocket connection failures before marking offline
         # Simple instance ID for logging purposes
         self._instance_id = f"ha-{hash(username + str(id(self))) % 10000:04d}"
+
+        # Serialises `_authenticate()` so two coordinator cycles overlapping
+        # near token expiry can't both fire parallel Cognito refresh requests
+        # (race on `self._id_token` / `self._token_expires_at`). H9b absorbed
+        # this from the H9a review. Double-checked locking pattern used inside
+        # `_authenticate` makes the second caller a no-op once the first
+        # refresh completes.
+        self._auth_lock = asyncio.Lock()
 
         # Status stabilization to prevent rapid connection status changes
         self._status_history = []  # Track recent status values
@@ -397,36 +433,61 @@ class AqualinkClient:
 
         return data
 
-    async def _authenticate(self):
-        """Authenticate with iAqualink API."""
-        if self._debug_mode:
-            _LOGGER.debug("Authenticating with iAqualink API...")
-        try:
-            data = {
-                "apiKey": self._api_key,
-                "email": self._username,
-                "password": self._password
-            }
-            data = json.dumps(data)
-            auth = await asyncio.wait_for(self.send_login(data, self._headers), timeout=30)
+    async def _authenticate(self, force: bool = False):
+        """Authenticate with iAqualink API.
 
-            self._first_name = auth["first_name"]
-            self._last_name = auth["last_name"]
-            self._id = auth["id"]
-            self._auth_token = auth["authentication_token"]
-            self._id_token = auth["userPoolOAuth"]["IdToken"]
-            self._app_client_id = auth["cognitoPool"]["appClientId"]
+        Serialised under ``self._auth_lock`` with a double-check guard so two
+        coordinator cycles overlapping near token expiry collapse into a
+        single Cognito refresh. The second caller acquires the lock after the
+        first completed, sees a valid token, and returns without re-auth.
 
-            # Prefer the real `exp` claim from the JWT; fall back to a
-            # conservative 1h (minus the safety margin, consistent with the
-            # decoded happy path) if the token is missing/malformed.
-            self._token_expires_at = _resolve_token_expiry(self._id_token)
+        ``force=True`` bypasses the recheck — used by the 401-retry paths so
+        the spec's "refresh-then-retry" mitigation does an actual Cognito
+        round-trip even when the local token still looks valid (a cloud-side
+        revocation looks locally-valid until the response says otherwise).
+        """
+        async with self._auth_lock:
+            # Double-check inside the lock: if a peer just refreshed, skip.
+            # Cheap when uncontested (single attribute reads); collapses the
+            # parallel-refresh race documented in the H9a review.
+            #
+            # H9b review P4: gate on `_id_token` (matching `fetch_status` and
+            # `_ensure_websocket_connection`) rather than `_auth_token`. The
+            # two are set together inside this method, but keying on the same
+            # attribute the caller gates on removes the asymmetry that could
+            # let a partial-failure state slip past the recheck.
+            if not force and self._id_token and not self._is_token_expired():
+                if self._debug_mode:
+                    _LOGGER.debug("Skipping authenticate — token refreshed by peer")
+                return
             if self._debug_mode:
-                _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
-        except asyncio.CancelledError:
-            if self._debug_mode:
-                _LOGGER.debug("Authentication cancelled")
-            raise  # Re-raise cancellation to preserve shutdown behavior
+                _LOGGER.debug("Authenticating with iAqualink API...")
+            try:
+                data = {
+                    "apiKey": self._api_key,
+                    "email": self._username,
+                    "password": self._password
+                }
+                data = json.dumps(data)
+                auth = await asyncio.wait_for(self.send_login(data, self._headers), timeout=30)
+
+                self._first_name = auth["first_name"]
+                self._last_name = auth["last_name"]
+                self._id = auth["id"]
+                self._auth_token = auth["authentication_token"]
+                self._id_token = auth["userPoolOAuth"]["IdToken"]
+                self._app_client_id = auth["cognitoPool"]["appClientId"]
+
+                # Prefer the real `exp` claim from the JWT; fall back to a
+                # conservative 1h (minus the safety margin, consistent with the
+                # decoded happy path) if the token is missing/malformed.
+                self._token_expires_at = _resolve_token_expiry(self._id_token)
+                if self._debug_mode:
+                    _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
+            except asyncio.CancelledError:
+                if self._debug_mode:
+                    _LOGGER.debug("Authentication cancelled")
+                raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def _discover_device(self, target_serial=None):
         """Get list of devices and pick the pool robot.
@@ -560,23 +621,59 @@ class AqualinkClient:
                 _LOGGER.debug(f"Established persistent websocket connection for robot {self._serial}")
                 return
 
+            except aiohttp.WSServerHandshakeError as e:
+                # Typed check replaces the fragile `"401" in str(e)` match
+                # (H9b AC#3). 401 is auth-failed → surface to coordinator as
+                # AuthFailedError so HA reauth fires. 403 stays an error log.
+                self._ws_consecutive_failures += 1
+                await self._close_websocket()
+                if e.status == 401:
+                    _LOGGER.warning(
+                        f"Websocket authentication failed (attempt {attempt + 1}): {e}"
+                    )
+                    if attempt < max_retries - 1:
+                        # Try a token refresh and retry once. If re-auth itself
+                        # raises, surface AuthFailedError immediately so the
+                        # coordinator's translation fires HA reauth.
+                        _LOGGER.debug("Refreshing authentication token due to websocket 401 error")
+                        try:
+                            await self._authenticate(force=True)
+                        except asyncio.CancelledError:
+                            # H9b review P7: never swallow cancellation as auth
+                            # failure — propagate the shutdown signal.
+                            raise
+                        except Exception as auth_err:
+                            _LOGGER.debug(f"Re-auth after WS 401 failed: {auth_err}")
+                            # H9b review P8: include both the WS handshake error
+                            # and the re-auth error in the message so the traceback
+                            # surfaces full context (was only `auth_err` before).
+                            raise AuthFailedError(
+                                f"WS handshake 401 ({e}) and re-auth failed: {auth_err}"
+                            ) from e
+                        _LOGGER.debug(f"Retrying websocket connection in {retry_delay}s...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 1.5
+                        continue
+                    # H9b review P6: drop the misleading "fall through to next
+                    # iteration" comment — we `raise` immediately here.
+                    raise AuthFailedError(f"WS handshake 401 after {max_retries} attempts") from e
+                if e.status == 403:
+                    _LOGGER.error(f"Websocket access forbidden (attempt {attempt + 1}): {e}")
+                else:
+                    _LOGGER.warning(f"Websocket handshake failed (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    _LOGGER.debug(f"Retrying websocket connection in {retry_delay}s...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 1.5
+                else:
+                    _LOGGER.error(
+                        f"Failed to establish websocket connection after {max_retries} attempts: {e}"
+                    )
+                    raise
             except Exception as e:
                 self._ws_consecutive_failures += 1
                 await self._close_websocket()
-
-                # Provide more specific error information for authentication issues
-                error_msg = str(e)
-                if "401" in error_msg or "Unauthorized" in error_msg:
-                    _LOGGER.warning(f"Websocket authentication failed (attempt {attempt + 1}): {e}")
-                    # If authentication fails, refresh token and retry
-                    if attempt < max_retries - 1:
-                        _LOGGER.debug("Refreshing authentication token due to websocket 401 error")
-                        await self._authenticate()
-                elif "403" in error_msg or "Forbidden" in error_msg:
-                    _LOGGER.error(f"Websocket access forbidden (attempt {attempt + 1}): {e}")
-                else:
-                    _LOGGER.warning(f"Websocket connection failed (attempt {attempt + 1}): {e}")
-
+                _LOGGER.warning(f"Websocket connection failed (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
                     _LOGGER.debug(f"Retrying websocket connection in {retry_delay}s...")
                     await asyncio.sleep(retry_delay)
@@ -1651,26 +1748,56 @@ class AqualinkClient:
             raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def get_devices(self, params, headers):
-        """Get device list from the iaqualink_robots API."""
-        try:
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(URL_GET_DEVICES, params=params) as response:
-                    return await response.json()
-        except asyncio.CancelledError:
-            if self._debug_mode:
-                _LOGGER.debug("Get devices request cancelled")
-            raise  # Re-raise cancellation to preserve shutdown behavior
+        """Get device list from the iaqualink_robots API.
+
+        Implements the spec's Risks-clause mitigation: on HTTP 401, refresh
+        the token once and retry; only the second 401 raises ``AuthFailedError``
+        so a transient cloud 401 doesn't trip HA reauth unnecessarily.
+        """
+        for attempt in range(2):
+            try:
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    async with session.get(URL_GET_DEVICES, params=params) as response:
+                        if response.status == 401:
+                            if attempt == 0:
+                                _LOGGER.debug("401 on get_devices — refreshing token and retrying once")
+                                await self._authenticate(force=True)
+                                # `params` carries `authentication_token` from the caller; refresh it
+                                # in-place so the retry uses the new token.
+                                if "authentication_token" in params:
+                                    params["authentication_token"] = self._auth_token
+                                continue
+                            raise AuthFailedError(
+                                f"401 Unauthorized on {URL_GET_DEVICES} after re-auth retry"
+                            )
+                        return await response.json()
+            except asyncio.CancelledError:
+                if self._debug_mode:
+                    _LOGGER.debug("Get devices request cancelled")
+                raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def get_device_features(self, url):
-        """Get device features from the iaqualink_robots API."""
-        try:
-            async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-                async with session.get(url) as response:
-                    return await response.json()
-        except asyncio.CancelledError:
-            if self._debug_mode:
-                _LOGGER.debug("Get device features request cancelled")
-            raise  # Re-raise cancellation to preserve shutdown behavior
+        """Get device features from the iaqualink_robots API.
+
+        Implements the spec's one-retry mitigation (see ``get_devices``).
+        """
+        for attempt in range(2):
+            try:
+                async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
+                    async with session.get(url) as response:
+                        if response.status == 401:
+                            if attempt == 0:
+                                _LOGGER.debug("401 on get_device_features — refreshing token and retrying once")
+                                await self._authenticate(force=True)
+                                continue  # next iteration re-reads self._id_token into a fresh session
+                            raise AuthFailedError(
+                                f"401 Unauthorized on {url} after re-auth retry"
+                            )
+                        return await response.json()
+            except asyncio.CancelledError:
+                if self._debug_mode:
+                    _LOGGER.debug("Get device features request cancelled")
+                raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def get_device_status(self, request):
         """Get device status from the iaqualink_robots API via websocket.
@@ -1713,6 +1840,12 @@ class AqualinkClient:
                 if self._debug_mode:
                     _LOGGER.debug("Get device status request cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
+            except AuthFailedError:
+                # H9b review P1: auth failures must propagate to the coordinator
+                # so HA reauth fires — never swallow them into the resilient
+                # "return None" path used for transient WS noise.
+                await self._close_websocket()
+                raise
             except Exception as e:
                 if attempt < max_retries - 1:
                     _LOGGER.debug(f"Device status attempt {attempt + 1} failed: {e}. Retrying...")
@@ -1727,15 +1860,29 @@ class AqualinkClient:
                     return None
 
     async def post_command_i2d(self, url, request):
-        """Send command to i2d robot via the iaqualink_robots API."""
-        try:
-            async with aiohttp.ClientSession(headers={"Authorization": self._id_token, "api_key": self._api_key}) as session:
-                async with session.post(url, json=request) as response:
-                    return await response.json()
-        except asyncio.CancelledError:
-            if self._debug_mode:
-                _LOGGER.debug("Post command i2d request cancelled")
-            raise  # Re-raise cancellation to preserve shutdown behavior
+        """Send command to i2d robot via the iaqualink_robots API.
+
+        Implements the spec's one-retry mitigation (see ``get_devices``).
+        """
+        for attempt in range(2):
+            try:
+                async with aiohttp.ClientSession(
+                    headers={"Authorization": self._id_token, "api_key": self._api_key}
+                ) as session:
+                    async with session.post(url, json=request) as response:
+                        if response.status == 401:
+                            if attempt == 0:
+                                _LOGGER.debug("401 on post_command_i2d — refreshing token and retrying once")
+                                await self._authenticate(force=True)
+                                continue  # next iteration re-reads self._id_token
+                            raise AuthFailedError(
+                                f"401 Unauthorized on {url} after re-auth retry"
+                            )
+                        return await response.json()
+            except asyncio.CancelledError:
+                if self._debug_mode:
+                    _LOGGER.debug("Post command i2d request cancelled")
+                raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def set_cleaner_state(self, request):
         """Set cleaner state via the iaqualink_robots API websocket.
@@ -1772,6 +1919,12 @@ class AqualinkClient:
                     # Don't fail the command just because we can't get a response
                     return response_data
 
+            except AuthFailedError:
+                # H9b review P1: command-time WS 401 must propagate so HA
+                # reauth fires; the broad-except below is for transient WS
+                # noise only.
+                await self._close_websocket()
+                raise
             except Exception as e:
                 if attempt < max_retries - 1:
                     _LOGGER.debug(f"Websocket command attempt {attempt + 1} failed: {e}. Retrying...")
@@ -2899,6 +3052,14 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             # No need for explicit signaling as CoordinatorEntity handles this
 
             return merged_data
+
+        except AuthFailedError as err:
+            # H9b AC#1/AC#2: surface auth failures to HA so reauth flow fires
+            # (delivered by P4). Caught *before* the broad Exception handler
+            # so the consecutive-failures ladder doesn't swallow them — a 401
+            # is not "transient cloud noise", it needs explicit user action.
+            _LOGGER.warning("Authentication failed; requesting HA reauth: %s", err)
+            raise ConfigEntryAuthFailed(str(err)) from err
 
         except Exception as err:
             self._consecutive_failures += 1

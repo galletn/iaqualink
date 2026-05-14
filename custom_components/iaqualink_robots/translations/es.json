@@ -34,7 +34,8 @@
       "cannot_connect": "Error al conectar con el servicio iAquaLink. Verifique sus credenciales e intente nuevamente.",
       "no_devices": "No se encontraron robots en su cuenta. Verifique que su robot esté correctamente registrado con iAquaLink.",
       "device_not_found": "No se pudo encontrar el dispositivo seleccionado. Intente nuevamente.",
-      "unknown": "Ocurrió un error inesperado. Intente nuevamente."
+      "unknown": "Ocurrió un error inesperado. Intente nuevamente.",
+      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again."
     },
     "abort": {
       "already_configured": "Este robot ya está configurado en Home Assistant.",
@@ -151,7 +152,7 @@
       },
       "time_format": {
         "hours": "Hora(s)",
-        "minutes": "Minuto(s)", 
+        "minutes": "Minuto(s)",
         "seconds": "Segundo(s)"
       }
     }

@@ -34,7 +34,8 @@
       "cannot_connect": "Impossibile connettersi al servizio iAquaLink. Controlla le credenziali e riprova.",
       "no_devices": "Nessun robot trovato nel tuo account. Verifica che il tuo robot sia registrato correttamente con iAquaLink.",
       "device_not_found": "Il dispositivo selezionato non è stato trovato. Riprova.",
-      "unknown": "Si è verificato un errore imprevisto. Riprova."
+      "unknown": "Si è verificato un errore imprevisto. Riprova.",
+      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again."
     },
     "abort": {
       "already_configured": "Questo robot è già configurato in Home Assistant.",

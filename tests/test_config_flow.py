@@ -14,6 +14,7 @@ from homeassistant import config_entries, data_entry_flow
 from homeassistant.core import HomeAssistant
 
 from custom_components.iaqualink_robots.const import DOMAIN
+from custom_components.iaqualink_robots.coordinator import AuthFailedError
 
 from tests.const import (
     MOCK_DEVICE_SECOND,
@@ -299,6 +300,32 @@ async def test_select_device_missing_device_shows_device_not_found(
     assert final["type"] == data_entry_flow.FlowResultType.FORM
     assert final["step_id"] == "select_device"
     assert final["errors"] == {"base": "device_not_found"}
+
+
+# ---------------------------------------------------------------------------
+# H9b review P2: invalid credentials surface as `invalid_auth` (not `cannot_connect`).
+# ---------------------------------------------------------------------------
+
+
+async def test_user_flow_invalid_auth_shows_invalid_auth(hass: HomeAssistant) -> None:
+    """When discover_devices raises `AuthFailedError`, the user form re-shows
+    with `invalid_auth` — distinct from the generic `cannot_connect` shown
+    for network errors. H9b review P2 fix.
+    """
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(side_effect=AuthFailedError("401 Unauthorized on /get_devices")),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input=MOCK_USER_INPUT
+        )
+
+    assert result2["type"] == data_entry_flow.FlowResultType.FORM
+    assert result2["step_id"] == "user"
+    assert result2["errors"] == {"base": "invalid_auth"}
 
 
 # ---------------------------------------------------------------------------

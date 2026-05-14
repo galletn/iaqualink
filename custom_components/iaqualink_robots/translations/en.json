@@ -34,7 +34,8 @@
       "cannot_connect": "Failed to connect to iAquaLink service. Please check your credentials and try again.",
       "no_devices": "No robots found on your account. Please check that your robot is properly registered with iAquaLink.",
       "device_not_found": "Selected device could not be found. Please try again.",
-      "unknown": "Unexpected error occurred. Please try again."
+      "unknown": "Unexpected error occurred. Please try again.",
+      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again."
     },
     "abort": {
       "already_configured": "This robot is already configured in Home Assistant.",
@@ -144,14 +145,14 @@
     "vacuum": {
       "fan_speed": {
         "floor_only": "Floor only",
-        "wall_only": "Wall only", 
+        "wall_only": "Wall only",
         "walls_only": "Walls only",
         "floor_and_walls": "Floor and walls",
         "smart_floor_and_walls": "SMART Floor and walls"
       },
       "time_format": {
         "hours": "Hour(s)",
-        "minutes": "Minute(s)", 
+        "minutes": "Minute(s)",
         "seconds": "Second(s)"
       }
     }
@@ -168,7 +169,7 @@
       }
     },
     "remote_backward": {
-      "name": "Remote Backward", 
+      "name": "Remote Backward",
       "description": "Send backward command to the robot for remote control (VR and VortraX robots only)",
       "fields": {
         "entity_id": {
@@ -182,7 +183,7 @@
       "description": "Send rotate left command to the robot for remote control (VR and VortraX robots only)",
       "fields": {
         "entity_id": {
-          "name": "Entity", 
+          "name": "Entity",
           "description": "Vacuum entity to control"
         }
       }

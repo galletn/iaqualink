@@ -34,7 +34,8 @@
       "cannot_connect": "Kan geen verbinding maken met iAquaLink service. Controleer uw gegevens en probeer opnieuw.",
       "no_devices": "Geen robots gevonden op uw account. Controleer of uw robot correct geregistreerd is bij iAquaLink.",
       "device_not_found": "Geselecteerde apparaat kon niet gevonden worden. Probeer opnieuw.",
-      "unknown": "Er is een onverwachte fout opgetreden. Probeer opnieuw."
+      "unknown": "Er is een onverwachte fout opgetreden. Probeer opnieuw.",
+      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again."
     },
     "abort": {
       "already_configured": "Deze robot is al geconfigureerd in Home Assistant.",
@@ -100,7 +101,7 @@
         "name": "Ventilatorsnelheid",
         "state": {
           "floor_only": "Alleen bodem",
-          "wall_only": "Alleen wand", 
+          "wall_only": "Alleen wand",
           "walls_only": "Alleen wanden",
           "floor_and_walls": "Bodem en wanden",
           "smart_floor_and_walls": "SMART Bodem en wanden"

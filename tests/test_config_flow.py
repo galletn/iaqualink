@@ -7,6 +7,8 @@ and the reauth flow respectively.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from homeassistant import config_entries, data_entry_flow
 from homeassistant.core import HomeAssistant
@@ -229,6 +231,34 @@ async def test_empty_serial_via_select_device_aborts(hass: HomeAssistant) -> Non
     assert final["type"] == data_entry_flow.FlowResultType.ABORT
     assert final["reason"] == "no_serial"
     assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+# ---------------------------------------------------------------------------
+# M19 AC#5: AbortFlow re-raise contract in async_step_user.
+# ---------------------------------------------------------------------------
+
+
+async def test_user_flow_abortflow_re_raised(hass: HomeAssistant) -> None:
+    """A non-already_configured AbortFlow from discover_devices must surface.
+
+    Asserts the explicit `except AbortFlow: raise` in async_step_user really
+    fires — without it the broad `except Exception` clause below would
+    swallow the abort and show `cannot_connect`, hiding the real reason.
+    """
+    custom_abort = data_entry_flow.AbortFlow("custom_abort_reason")
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(side_effect=custom_abort),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input=MOCK_USER_INPUT
+        )
+
+    assert result2["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result2["reason"] == "custom_abort_reason"
 
 
 # ---------------------------------------------------------------------------

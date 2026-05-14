@@ -147,12 +147,36 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
             if device_type:
                 self._supported_features = ROBOT_FEATURES.get(device_type, ROBOT_FEATURES["default"])
 
-                # Set fan speed list based on device type
+                # Set fan speed list based on device type. The list MUST mirror
+                # the per-device-type `cycle_speed_map` keys in
+                # `coordinator.py::_set_other_fan_speed` and `_set_i2d_fan_speed`,
+                # otherwise the user can pick a mode the cloud has no encoding
+                # for and the command silently no-ops (issue #76).
+                #
+                # Glossary:
+                #   `wall_only`  = cycle the robot runs when ONLY scrubbing walls
+                #                  (vr/cyclobat capability). NOT a typo for
+                #                  `walls_only`.
+                #   `walls_only` = i2d_robot's "waterline only" mode (mode 0x04).
+                #                  Distinct cloud-side encoding from `wall_only`;
+                #                  cyclonext does NOT support this mode.
                 if device_type == "vr":
+                    self._fan_speed_list = ["wall_only", "floor_only", "smart_floor_and_walls", "floor_and_walls"]
+                elif device_type == "cyclobat":
+                    # cyclobat cloud encoding: 0=floor_only, 1=floor_and_walls,
+                    # 2=smart_floor_and_walls, 3=wall_only (see coordinator.py).
                     self._fan_speed_list = ["wall_only", "floor_only", "smart_floor_and_walls", "floor_and_walls"]
                 elif device_type == "vortrax":
                     self._fan_speed_list = ["floor_only", "floor_and_walls"]
+                elif device_type == "cyclonext":
+                    # cyclonext cloud encoding only supports cycle=1 (floor_only)
+                    # and cycle=3 (floor_and_walls). Pre-fix this branch fell
+                    # through to the i2d-shaped 3-entry list and exposed a
+                    # non-functional "Walls only" option (issue #76).
+                    self._fan_speed_list = ["floor_only", "floor_and_walls"]
                 else:
+                    # i2d_robot (and any unknown future type) keeps the
+                    # 3-entry list which IS valid for i2d (mode 0x04).
                     self._fan_speed_list = ["floor_only", "walls_only", "floor_and_walls"]
 
             # Update current fan speed from coordinator data (store as raw key) - only if not unknown

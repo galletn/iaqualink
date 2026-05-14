@@ -279,6 +279,70 @@ async def test_migrate_v1_to_current_without_serial_is_safe(hass: HomeAssistant)
     assert "api_key" not in entry.data
 
 
+async def test_migrate_rerun_after_full_chain_is_noop(hass: HomeAssistant) -> None:
+    """M19 AC#7: re-running migration on an already-migrated entry is a no-op.
+
+    Mirrors HA's real-world behavior where `async_migrate_entry` can be
+    invoked again after a successful migration (e.g., entry reload). The
+    second call must not bump the version past CURRENT_VERSION, must not
+    re-write any registry entries (snapshot the registry's update count),
+    and must not mutate `entry.data` further.
+    """
+    from custom_components.iaqualink_robots import async_migrate_entry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        data=MOCK_ENTRY_DATA,
+        title="Bobby the Robot",
+    )
+    entry.add_to_hass(hass)
+
+    registry = er.async_get(hass)
+    legacy_prefix = "bobby_the_robot"
+    legacy_commands = [
+        "forward", "backward", "rotate_left", "rotate_right",
+        "stop", "add_fifteen_minutes", "reduce_fifteen_minutes",
+    ]
+    for cmd in legacy_commands:
+        registry.async_get_or_create(
+            domain="button",
+            platform=DOMAIN,
+            unique_id=f"{legacy_prefix}_{cmd}",
+            config_entry=entry,
+        )
+
+    # First migration: full v1 -> v3 chain.
+    assert await async_migrate_entry(hass, entry)
+    assert entry.version == CURRENT_VERSION
+    first_pass_data = dict(entry.data)
+    first_pass_uids = {
+        cmd: registry.async_get_entity_id("button", DOMAIN, f"{MOCK_SERIAL}_{cmd}")
+        for cmd in legacy_commands
+    }
+    # Sanity: the chain actually moved the entities.
+    assert all(uid is not None for uid in first_pass_uids.values())
+
+    # Second migration: must be a true no-op.
+    with patch.object(
+        registry, "async_update_entity", wraps=registry.async_update_entity
+    ) as update_spy:
+        assert await async_migrate_entry(hass, entry)
+
+    # No further registry writes triggered by the rerun.
+    assert update_spy.call_count == 0
+    # Version stays at CURRENT_VERSION (no over-bump).
+    assert entry.version == CURRENT_VERSION
+    # entry.data unchanged.
+    assert dict(entry.data) == first_pass_data
+    # Entity ids unchanged (same registry entries point to same unique_ids).
+    for cmd in legacy_commands:
+        assert (
+            registry.async_get_entity_id("button", DOMAIN, f"{MOCK_SERIAL}_{cmd}")
+            == first_pass_uids[cmd]
+        )
+
+
 async def test_migrate_v1_without_serial_preserves_registry(hass: HomeAssistant) -> None:
     """M19 AC#6: v1-no-serial path must leave the registry untouched.
 

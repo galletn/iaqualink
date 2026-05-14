@@ -4,7 +4,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN, PLATFORMS, API_KEY
+from .const import (
+    API_KEY,
+    CONF_INCLUDE_SECONDS_REMAINING,
+    DEFAULT_INCLUDE_SECONDS_REMAINING,
+    DOMAIN,
+    PLATFORMS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -161,7 +167,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Debug mode disabled by default to reduce log verbosity
     # To enable debug mode for troubleshooting, change False to True below
     debug_mode = False
-    client = AqualinkClient(username, password, API_KEY, debug_mode=debug_mode)
+    # Resolve the include_seconds_remaining option. entry.options (set by
+    # the OptionsFlow at runtime) takes precedence over entry.data (set by
+    # the initial ConfigFlow). Falls back to the default for entries that
+    # pre-date the option's introduction.
+    include_seconds_remaining = entry.options.get(
+        CONF_INCLUDE_SECONDS_REMAINING,
+        entry.data.get(CONF_INCLUDE_SECONDS_REMAINING, DEFAULT_INCLUDE_SECONDS_REMAINING),
+    )
+    client = AqualinkClient(
+        username,
+        password,
+        API_KEY,
+        debug_mode=debug_mode,
+        include_seconds_remaining=include_seconds_remaining,
+    )
 
     # If a specific serial is provided, use it for device discovery
     if target_serial:
@@ -186,7 +206,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id]["coordinator"] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Reload the entry when the user toggles an option in the OptionsFlow
+    # so the coordinator picks up the new value without an HA restart.
+    entry.async_on_unload(entry.add_update_listener(_async_update_options))
+
     return True
+
+
+async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the integration when an OptionsFlow value changes."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

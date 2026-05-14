@@ -7,12 +7,14 @@
         "data": {
           "name": "Device Name",
           "username": "Username",
-          "password": "Password"
+          "password": "Password",
+          "include_seconds_remaining": "Include seconds in time-remaining display"
         },
         "data_description": {
           "name": "Name for your pool robot in Home Assistant",
           "username": "Your iAquaLink account username",
-          "password": "Your iAquaLink account password"
+          "password": "Your iAquaLink account password",
+          "include_seconds_remaining": "When enabled, the time-remaining sensor updates every poll interval (every few seconds) and includes seconds in its value. Disable to update only when the minute ticks over — this dramatically reduces Home Assistant activity-log entries during long cleaning cycles without slowing down remote-control button responsiveness. Can be toggled later via Configure."
         }
       },
       "select_device": {
@@ -37,6 +39,20 @@
     "abort": {
       "already_configured": "This robot is already configured in Home Assistant.",
       "no_serial": "No serial number was returned for this robot. The cloud account is reachable but the device list is empty or incomplete. Please try again later."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "iAqualink Robot Options",
+        "description": "Adjust runtime behavior for this robot.",
+        "data": {
+          "include_seconds_remaining": "Include seconds in time-remaining display"
+        },
+        "data_description": {
+          "include_seconds_remaining": "When enabled, the time-remaining sensor updates every poll interval (every few seconds) and includes seconds in its value. Disable to update only when the minute ticks over — this dramatically reduces Home Assistant activity-log entries during long cleaning cycles without slowing down remote-control button responsiveness."
+        }
+      }
     }
   },
   "entity": {

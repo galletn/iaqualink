@@ -91,10 +91,22 @@ def _resolve_token_expiry(token: str | None) -> datetime.datetime:
 class AqualinkClient:
     """Client to interact with iAqualink API for multiple robot types."""
 
-    def __init__(self, username: str, password: str, api_key: str, debug_mode: bool = False):
+    def __init__(
+        self,
+        username: str,
+        password: str,
+        api_key: str,
+        debug_mode: bool = False,
+        include_seconds_remaining: bool = True,
+    ):
         self._username = username
         self._password = password
         self._api_key = api_key
+        # Whether to include seconds in `time_remaining_human`. Setting this
+        # to False reduces HA activity-log entries from ~one-per-poll to
+        # one-per-minute without changing SCAN_INTERVAL. Plumbed in from the
+        # config-flow / options-flow option `include_seconds_remaining`.
+        self._include_seconds_remaining = include_seconds_remaining
         self._auth_token: str = ""
         self._id: str = ""
         self._id_token: str = ""
@@ -1562,10 +1574,19 @@ class AqualinkClient:
                     total_minutes = max(0, int(total_seconds / 60))
                     result["time_remaining"] = total_minutes  # This will be numeric minutes
 
-                    # Format human readable time for display
+                    # Format human readable time for display. Seconds are
+                    # gated behind the `include_seconds_remaining` option:
+                    # when disabled, the sensor changes only when the minute
+                    # ticks over, eliminating ~20× of activity-log entries
+                    # per cleaning cycle. When enabled (default), the
+                    # historical seconds-precision behavior is preserved.
                     hours = int(total_seconds // 3600)
                     minutes = int((total_seconds % 3600) // 60)
-                    seconds = int(total_seconds % 60)
+                    seconds = (
+                        int(total_seconds % 60)
+                        if self._include_seconds_remaining
+                        else 0
+                    )
                     result["time_remaining_human"] = self._format_time_human(hours, minutes, seconds)
 
                     _LOGGER.debug("Time remaining (minutes): %d, human readable: %s",

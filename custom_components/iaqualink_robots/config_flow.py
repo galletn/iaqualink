@@ -1,8 +1,14 @@
 import logging
 from homeassistant import config_entries, data_entry_flow
+from homeassistant.core import callback
 import voluptuous as vol
 
-from .const import DOMAIN, API_KEY
+from .const import (
+    API_KEY,
+    CONF_INCLUDE_SECONDS_REMAINING,
+    DEFAULT_INCLUDE_SECONDS_REMAINING,
+    DOMAIN,
+)
 from .coordinator import AqualinkClient
 
 _LOGGER = logging.getLogger(__name__)
@@ -15,11 +21,18 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 3
     CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Return the OptionsFlow for runtime toggles."""
+        return IaqualinkOptionsFlow(config_entry)
+
     def __init__(self):
         """Initialize the config flow."""
         self._username = None
         self._password = None
         self._devices = []
+        self._include_seconds_remaining = DEFAULT_INCLUDE_SECONDS_REMAINING
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
@@ -28,6 +41,9 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._username = user_input["username"]
             self._password = user_input["password"]
+            self._include_seconds_remaining = user_input.get(
+                CONF_INCLUDE_SECONDS_REMAINING, DEFAULT_INCLUDE_SECONDS_REMAINING
+            )
 
             # Try to discover devices with these credentials
             try:
@@ -60,7 +76,8 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                 "username": self._username,
                                 "password": self._password,
                                 "serial_number": serial,
-                                "device_type": device["device_type"]
+                                "device_type": device["device_type"],
+                                CONF_INCLUDE_SECONDS_REMAINING: self._include_seconds_remaining,
                             },
                         )
                     # If multiple devices are found, go to the device selection step
@@ -80,6 +97,10 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required("name", default="My Pool Robot"): str,
             vol.Required("username"): str,
             vol.Required("password"): str,
+            vol.Optional(
+                CONF_INCLUDE_SECONDS_REMAINING,
+                default=DEFAULT_INCLUDE_SECONDS_REMAINING,
+            ): bool,
         })
 
         return self.async_show_form(
@@ -135,6 +156,7 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                 "password": self._password,
                                 "serial_number": serial,
                                 "device_type": device_type,
+                                CONF_INCLUDE_SECONDS_REMAINING: self._include_seconds_remaining,
                             },
                         )
                     except data_entry_flow.AbortFlow:
@@ -159,3 +181,30 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=data_schema,
             errors=errors,
         )
+
+
+class IaqualinkOptionsFlow(config_entries.OptionsFlow):
+    """Runtime-togglable options for an existing entry.
+
+    Currently exposes one knob: whether `time_remaining_human` includes
+    seconds (story T1). Toggling reloads the integration so the coordinator
+    picks up the new setting.
+    """
+
+    def __init__(self, config_entry):
+        self.config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current = self.config_entry.options.get(
+            CONF_INCLUDE_SECONDS_REMAINING,
+            self.config_entry.data.get(
+                CONF_INCLUDE_SECONDS_REMAINING, DEFAULT_INCLUDE_SECONDS_REMAINING
+            ),
+        )
+        data_schema = vol.Schema({
+            vol.Optional(CONF_INCLUDE_SECONDS_REMAINING, default=current): bool,
+        })
+        return self.async_show_form(step_id="init", data_schema=data_schema)

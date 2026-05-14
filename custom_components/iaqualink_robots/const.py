@@ -19,6 +19,15 @@ API_KEY: Final = "EOOEMOW4YR6QNB07"
 SCAN_INTERVAL: Final = timedelta(seconds=3)  # Balanced update interval for efficiency
 # Real-time websocket listener provides instant updates, moderate polling backup
 
+# User-toggleable option keys (configurable via config flow + options flow).
+# Whether the `time_remaining_human` sensor includes seconds. Default True
+# preserves the historical behavior; users complaining about activity-log
+# churn can flip it off via Settings → Devices & Services → Configure to
+# get minute-granular updates without slowing down the global SCAN_INTERVAL
+# (which would also slow remote-control button responsiveness).
+CONF_INCLUDE_SECONDS_REMAINING: Final = "include_seconds_remaining"
+DEFAULT_INCLUDE_SECONDS_REMAINING: Final = True
+
 # Load manifest data efficiently
 
 

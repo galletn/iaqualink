@@ -50,7 +50,11 @@ def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
             return None
         payload_b64 = parts[1]
         # base64url decoding needs the trailing '=' padding (multiple of 4).
-        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        # M19 AC#9: split the negative-modulo trick into two named steps for
+        # readability. Behavior unchanged — `test_unpadded_base64_handled`
+        # still covers it.
+        missing = (4 - len(payload_b64) % 4) % 4
+        padded = payload_b64 + "=" * missing
         payload = json.loads(base64.urlsafe_b64decode(padded))
         if not isinstance(payload, dict):
             return None

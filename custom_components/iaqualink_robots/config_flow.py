@@ -110,18 +110,26 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     serial = serial.strip()
                 if not serial:
                     return self.async_abort(reason="no_serial")
-                await self.async_set_unique_id(serial)
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=user_input.get("name", selected_device["name"]),
-                    data={
-                        "name": user_input.get("name", selected_device["name"]),
-                        "username": self._username,
-                        "password": self._password,
-                        "serial_number": serial,
-                        "device_type": selected_device["device_type"]
-                    },
-                )
+                # M19 AC#2: use .get() with the device_not_found fallback so a
+                # missing `name`/`device_type` key surfaces the same error the
+                # `else` branch shows rather than raising KeyError.
+                device_name = selected_device.get("name")
+                device_type = selected_device.get("device_type")
+                if not device_name or not device_type:
+                    errors["base"] = "device_not_found"
+                else:
+                    await self.async_set_unique_id(serial)
+                    self._abort_if_unique_id_configured()
+                    return self.async_create_entry(
+                        title=user_input.get("name", device_name),
+                        data={
+                            "name": user_input.get("name", device_name),
+                            "username": self._username,
+                            "password": self._password,
+                            "serial_number": serial,
+                            "device_type": device_type,
+                        },
+                    )
             else:
                 errors["base"] = "device_not_found"
 

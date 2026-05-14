@@ -19,6 +19,7 @@ from custom_components.iaqualink_robots.coordinator import AuthFailedError
 from tests.const import (
     MOCK_DEVICE_SECOND,
     MOCK_DEVICE_TYPE,
+    MOCK_ENTRY_DATA,
     MOCK_NAME,
     MOCK_SERIAL,
     MOCK_USER_INPUT,
@@ -329,11 +330,107 @@ async def test_user_flow_invalid_auth_shows_invalid_auth(hass: HomeAssistant) ->
 
 
 # ---------------------------------------------------------------------------
-# Placeholders for forthcoming stories.
+# Story P4 (bundled with H9b per the spec's pair-land Dependencies line):
+# async_step_reauth + async_step_reauth_confirm.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason="Story P4: async_step_reauth not yet implemented", strict=True)
+async def _setup_reauth_entry(hass: HomeAssistant) -> config_entries.ConfigEntry:
+    """Build a config entry suitable for triggering async_step_reauth.
+
+    The entry is added without `async_setup_entry` running because reauth
+    only needs the entry's `data` (username) and `entry_id` (context).
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=MOCK_SERIAL,
+        data=MOCK_ENTRY_DATA,
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
 async def test_reauth_flow_updates_password(hass: HomeAssistant) -> None:
-    """Reauth keeps unique_id, updates password, reloads entry. Implemented in P4."""
-    raise NotImplementedError
+    """Reauth happy path: new password is accepted, entry data is updated in
+    place (unique_id preserved → entity registry intact), and the entry is
+    reloaded so the coordinator picks up the new credentials.
+    """
+    entry = await _setup_reauth_entry(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(return_value=[{"serial_number": MOCK_SERIAL, "device_type": "vr", "name": "x"}]),
+    ), patch.object(
+        hass.config_entries, "async_reload", new=AsyncMock(return_value=True)
+    ) as reload_mock:
+        # Trigger reauth — HA passes entry_id via context.
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_REAUTH, "entry_id": entry.entry_id},
+            data=entry.data,
+        )
+        assert result["type"] == data_entry_flow.FlowResultType.FORM
+        assert result["step_id"] == "reauth_confirm"
+
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={"password": "new-password"}
+        )
+
+    assert final["type"] == data_entry_flow.FlowResultType.ABORT
+    assert final["reason"] == "reauth_successful"
+    assert entry.data["password"] == "new-password"
+    # unique_id preserved (M13 regression guard semantics).
+    assert entry.unique_id == MOCK_SERIAL
+    reload_mock.assert_awaited_once_with(entry.entry_id)
+
+
+async def test_reauth_flow_invalid_password_shows_form(hass: HomeAssistant) -> None:
+    """When the new password is rejected by Cognito (AuthFailedError), the
+    reauth form re-displays with `invalid_auth` and the entry is NOT updated.
+    """
+    entry = await _setup_reauth_entry(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(side_effect=AuthFailedError("still 401")),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_REAUTH, "entry_id": entry.entry_id},
+            data=entry.data,
+        )
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={"password": "wrong-password"}
+        )
+
+    assert final["type"] == data_entry_flow.FlowResultType.FORM
+    assert final["step_id"] == "reauth_confirm"
+    assert final["errors"] == {"base": "invalid_auth"}
+    # Entry data unchanged.
+    assert entry.data["password"] == MOCK_ENTRY_DATA["password"]
+
+
+async def test_reauth_flow_network_error_shows_cannot_connect(hass: HomeAssistant) -> None:
+    """When discovery fails for non-auth reasons (network error), the form
+    re-displays with `cannot_connect` — distinct from `invalid_auth`.
+    """
+    entry = await _setup_reauth_entry(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(side_effect=RuntimeError("simulated network error")),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_REAUTH, "entry_id": entry.entry_id},
+            data=entry.data,
+        )
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={"password": "anything"}
+        )
+
+    assert final["type"] == data_entry_flow.FlowResultType.FORM
+    assert final["step_id"] == "reauth_confirm"
+    assert final["errors"] == {"base": "cannot_connect"}

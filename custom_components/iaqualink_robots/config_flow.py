@@ -33,6 +33,8 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._password = None
         self._devices = []
         self._include_seconds_remaining = DEFAULT_INCLUDE_SECONDS_REMAINING
+        # Set by async_step_reauth, consumed by async_step_reauth_confirm. P4.
+        self._reauth_entry = None
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
@@ -186,6 +188,65 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="select_device",
             data_schema=data_schema,
             errors=errors,
+        )
+
+    # ------------------------------------------------------------------
+    # Reauthentication flow (story P4, bundled with H9b per the spec's
+    # `Dependencies: [P4] lands in same PR pair` line).
+    #
+    # Triggered when the coordinator raises `ConfigEntryAuthFailed`.
+    # Shows the user a password form (email is read-only), validates the
+    # new credentials by attempting `discover_devices` once, and on
+    # success updates the existing entry in place — preserving the
+    # entry's `unique_id` and every entity_id / area / automation
+    # referencing it. No history loss, no re-add.
+    # ------------------------------------------------------------------
+
+    async def async_step_reauth(self, entry_data):
+        """Entry point invoked by HA when ConfigEntryAuthFailed fires."""
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        """Prompt the user for a new password and re-validate credentials."""
+        errors = {}
+        assert self._reauth_entry is not None  # set by async_step_reauth
+
+        if user_input is not None:
+            new_password = user_input["password"]
+            try:
+                # Re-run discovery with the new password — same validation
+                # path as initial setup. Cheap (single HTTP call) and proves
+                # the credentials reach Cognito.
+                await AqualinkClient.discover_devices(
+                    self._reauth_entry.data["username"],
+                    new_password,
+                    API_KEY,
+                )
+            except AuthFailedError:
+                errors["base"] = "invalid_auth"
+            except Exception as e:  # noqa: BLE001 — surface as cannot_connect
+                _LOGGER.error(f"Error during reauth discovery: {e}")
+                errors["base"] = "cannot_connect"
+            else:
+                # Update password in place. unique_id, entity_id, area,
+                # automations, history all preserved.
+                self.hass.config_entries.async_update_entry(
+                    self._reauth_entry,
+                    data={**self._reauth_entry.data, "password": new_password},
+                )
+                await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
+                return self.async_abort(reason="reauth_successful")
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required("password"): str}),
+            errors=errors,
+            description_placeholders={
+                "username": self._reauth_entry.data["username"],
+            },
         )
 
 

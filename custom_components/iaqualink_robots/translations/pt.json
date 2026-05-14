@@ -28,6 +28,16 @@
           "device": "Escolha o robô que deseja adicionar",
           "name": "Opcional: Substituir o nome padrão deste robô"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate iAqualink Robot",
+        "description": "Your iAquaLink credentials for {username} are no longer accepted. Enter the current password to resume the integration without losing entity history.",
+        "data": {
+          "password": "Password"
+        },
+        "data_description": {
+          "password": "Your current iAquaLink account password"
+        }
       }
     },
     "error": {
@@ -39,7 +49,8 @@
     },
     "abort": {
       "already_configured": "Este robô já está configurado no Home Assistant.",
-      "no_serial": "No serial number was returned for this robot. The cloud account is reachable but the device list is empty or incomplete. Please try again later."
+      "no_serial": "No serial number was returned for this robot. The cloud account is reachable but the device list is empty or incomplete. Please try again later.",
+      "reauth_successful": "Reauthentication successful. The integration has resumed."
     }
   },
   "options": {

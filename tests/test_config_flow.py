@@ -152,6 +152,50 @@ async def test_duplicate_entry_via_select_device_aborts(hass: HomeAssistant) -> 
     assert result2_final["reason"] == "already_configured"
 
 
+# ---------------------------------------------------------------------------
+# C6: pre-discovery dedupe — duplicate username aborts BEFORE the cloud call.
+# ---------------------------------------------------------------------------
+
+
+async def test_duplicate_account_aborts_before_discovery(hass: HomeAssistant) -> None:
+    """A second flow with credentials matching an existing entry's username
+    must abort with `already_configured` BEFORE `discover_devices` runs.
+
+    Locks the C6 contract: the pre-discovery username probe saves the
+    pointless AWS Cognito round-trip when a user re-adds an already-
+    configured account. Asserting `discover_devices.assert_not_called()`
+    is the load-bearing check — without that, the test would also pass
+    via the existing post-discovery serial dedupe (C2), defeating C6's
+    whole point.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    # Pre-seed an existing entry for MOCK_USERNAME with some serial.
+    existing = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=MOCK_SERIAL,
+        data=MOCK_ENTRY_DATA,
+    )
+    existing.add_to_hass(hass)
+
+    # discover_devices MUST NOT be called by the second flow.
+    discover_mock = AsyncMock()
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=discover_mock,
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input=MOCK_USER_INPUT
+        )
+
+    assert result2["type"] == data_entry_flow.FlowResultType.ABORT
+    assert result2["reason"] == "already_configured"
+    discover_mock.assert_not_called()
+
+
 @pytest.mark.usefixtures("mock_discover_two_devices", "bypass_setup_fixture")
 async def test_select_device_picks_second_device(hass: HomeAssistant) -> None:
     """Picking the second device in select_device creates an entry keyed to its serial."""

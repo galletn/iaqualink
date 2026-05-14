@@ -47,6 +47,20 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_INCLUDE_SECONDS_REMAINING, DEFAULT_INCLUDE_SECONDS_REMAINING
             )
 
+            # C6: pre-discovery username probe. If the user is re-adding an
+            # already-configured account, abort BEFORE the AWS Cognito round-
+            # trip in `discover_devices`. Trade-off (spec Risks/Mitigation):
+            # this is over-eager for users with two robots on one iAqualink
+            # account — adding a second robot on an existing account will
+            # also hit `already_configured`. Workaround: remove the existing
+            # entry, then re-add via the select_device step to pick the
+            # newly-discovered robot. The narrower second-robot path is not
+            # the common case; the optimisation favours the typical
+            # one-robot-one-account user.
+            for existing in self._async_current_entries():
+                if existing.data.get("username") == self._username:
+                    return self.async_abort(reason="already_configured")
+
             # Try to discover devices with these credentials
             try:
                 self._devices = await AqualinkClient.discover_devices(

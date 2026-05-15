@@ -4,6 +4,10 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 
 ## Unreleased
 
+### Added
+
+- **Diagnostics download (story P5).** Adds `custom_components/iaqualink_robots/diagnostics.py` so the integration's device card now exposes the **Download diagnostics** button in Home Assistant's UI. The exported JSON contains entry data, the cached coordinator state, and per-client counters (token-expiry, consecutive WebSocket failures, last update success) with credentials and PII redacted: `username`, `password`, `id_token`, `auth_token`, `refresh_token`, `api_key`, `first_name`, `last_name`, `email` are replaced with `"**REDACTED**"`, and the robot serial is partially redacted to the shape `R23***678` so cross-issue triage still works without exposing the full cloud-account pivot key. A new `tests/test_diagnostics.py::test_no_token_or_password_key_appears_unredacted` walks the rendered payload and fails CI if any future-added key matching `*token*` / `*password*` / `username` is ever emitted unredacted — the long-term net against drift when new credential fields are introduced.
+
 ## 3.0.0-beta.1 — 2026-05-15
 
 First pre-release of the 3.x line. Major version bump signals two breaking-ish

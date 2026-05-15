@@ -8,10 +8,12 @@ from homeassistant.components.vacuum import (
     VacuumActivity,  # Note: This requires Home Assistant 2025.1 or later
 )
 
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import AqualinkDataUpdateCoordinator
 from .const import DOMAIN
+from .device import build_device_info
 
 _LOGGER = logging.getLogger(__name__)
 ROBOT_FEATURES = {
@@ -215,9 +217,8 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
         return f"{DOMAIN}_{self._serial_number}"
 
     @property
-    def device_info(self) -> Dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Return device information about this entity."""
-        from .device import build_device_info
         return build_device_info(self.coordinator)
 
     @property

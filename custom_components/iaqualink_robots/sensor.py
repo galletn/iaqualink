@@ -5,6 +5,7 @@ import logging
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
+from .device import build_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -220,5 +221,4 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self):
-        from .device import build_device_info
         return build_device_info(self.coordinator)

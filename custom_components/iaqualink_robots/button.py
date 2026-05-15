@@ -9,6 +9,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import AqualinkDataUpdateCoordinator
+from .device import build_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,7 +65,6 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
     @property
     def device_info(self):
         """Defer to the shared device-registry hook so all platforms group together."""
-        from .device import build_device_info
         return build_device_info(self.coordinator)
 
     @property

@@ -20,7 +20,6 @@ def mock_client_and_coordinator():
     client = MagicMock()
     client.serial = MOCK_SERIAL
     client.device_type = MOCK_DEVICE_TYPE
-    client._model = "VRX IQ+"
     client.robot_id = MOCK_SERIAL
     client.robot_name = "Test Pool Robot"
 

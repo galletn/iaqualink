@@ -19,8 +19,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from homeassistant.helpers.device_registry import DeviceInfo
-
 from tests.const import MOCK_DEVICE_TYPE, MOCK_SERIAL
 
 
@@ -45,17 +43,23 @@ def _coordinator_for(
 def test_build_device_info_returns_typed_DeviceInfo() -> None:
     """The helper returns ``homeassistant.helpers.device_registry.DeviceInfo``.
 
-    Tightens the contract: switching the dict-based implementations over to
-    the dataclass form is the central P9 change. A future regression that
-    returns a plain ``dict`` (working but untyped) silently bypasses HA's
-    DeviceInfo validation; this test catches that.
+    Shape check rather than ``isinstance``: ``DeviceInfo`` is a ``TypedDict``
+    (PEP 589) and ``isinstance(obj, DeviceInfo)`` raises ``TypeError`` at
+    runtime -- TypedDicts intentionally don't support instance / class
+    checks. We instead assert the shape: it's a ``dict`` and carries the
+    required ``DeviceInfo`` keys. The remaining tests in this module exercise
+    the value semantics for each key.
     """
     from custom_components.iaqualink_robots.device import build_device_info
 
     info = build_device_info(_coordinator_for())
-    assert isinstance(info, DeviceInfo), (
-        f"build_device_info must return DeviceInfo, got {type(info).__name__}"
+    assert isinstance(info, dict), (
+        f"build_device_info must return a DeviceInfo-shaped mapping, got {type(info).__name__}"
     )
+    # DeviceInfo's required-for-merging field is ``identifiers``; the others
+    # are total=False. Asserting ``identifiers`` is present is the smallest
+    # contract that prevents a regression to a bare/empty dict.
+    assert "identifiers" in info
 
 
 def test_build_device_info_identifiers_keyed_on_serial() -> None:
@@ -152,6 +156,18 @@ def test_build_device_info_model_prefers_coordinator_data_then_device_type() -> 
     coord = _coordinator_for(device_type="", data=None)
     info = build_device_info(coord)
     assert info["model"] == "Unknown"
+
+    # Case 4: coordinator writes "Unknown" as the quick-setup placeholder ->
+    # treated as falsy so device_type wins (the docstring's promised
+    # behavior; without the Unknown/Hidden filter this used to silently
+    # return "Unknown" and the device_type fallback was dead code).
+    info = build_device_info(_coordinator_for(device_type="vortrax", data={"model": "Unknown"}))
+    assert info["model"] == "vortrax"
+
+    # Case 5: coordinator writes "Hidden" for i2d_robot -> treated as falsy
+    # so the user sees the device-type instead of a "Hidden" device card.
+    info = build_device_info(_coordinator_for(device_type="i2d_robot", data={"model": "Hidden"}))
+    assert info["model"] == "i2d_robot"
 
 
 def test_build_device_info_sw_version_is_none_when_unknown() -> None:

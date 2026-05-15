@@ -46,7 +46,14 @@ def build_device_info(coordinator: "AqualinkDataUpdateCoordinator") -> DeviceInf
     (populated by the cloud's model-fetch path) and falls back to
     ``client.device_type`` (e.g. ``"vortrax"``, ``"cyclobat"``) so the
     user sees something meaningful before the first model fetch lands.
-    Final fallback is the literal ``"Unknown"``.
+    Final fallback is the literal ``"Unknown"``. The placeholder strings
+    ``"Unknown"`` and ``"Hidden"`` -- which the coordinator unconditionally
+    writes into ``data["model"]`` during quick-setup, on the i2d_robot
+    path, and on exhausted-retry caching respectively -- are treated as
+    falsy so the ``device_type`` fallback actually fires. Without this,
+    every i2d_robot device card would display ``Model: Hidden`` forever
+    and every pre-discovery card would display ``Model: Unknown`` even
+    when ``device_type`` already disambiguates the family.
 
     ``sw_version`` is the **device firmware** -- we do not surface the
     integration's manifest version here, even though pre-P9 ``vacuum.py``
@@ -70,7 +77,11 @@ def build_device_info(coordinator: "AqualinkDataUpdateCoordinator") -> DeviceInf
     else:
         name = client.robot_id
 
-    model = data.get("model") or client.device_type or "Unknown"
+    model_raw = data.get("model")
+    if model_raw and model_raw not in ("Unknown", "Hidden"):
+        model = model_raw
+    else:
+        model = client.device_type or "Unknown"
 
     return DeviceInfo(
         identifiers={(DOMAIN, serial)},

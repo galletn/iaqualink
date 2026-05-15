@@ -21,18 +21,30 @@ from unittest.mock import MagicMock
 
 from tests.const import MOCK_DEVICE_TYPE, MOCK_SERIAL
 
+# Sentinel for the ``data`` keyword in ``_coordinator_for`` -- lets callers
+# pass ``data=None`` to mean "set ``coordinator.data = None``" (the realistic
+# pre-first-refresh state) while still having a useful default when the
+# argument is omitted. A plain ``data=None`` parameter default would collapse
+# both cases to the same path and silently hide a `data is None`-vs-default
+# regression -- which is exactly what fooled the original CI run for
+# ``test_build_device_info_model_prefers_coordinator_data_then_device_type``.
+_UNSET = object()
+
 
 def _coordinator_for(
     *,
     serial: str = MOCK_SERIAL,
     device_type: str = MOCK_DEVICE_TYPE,
     title: str | None = "Backyard Robot",
-    data: dict | None = None,
+    data=_UNSET,
 ) -> MagicMock:
     """Build a MagicMock coordinator with the surface ``build_device_info`` reads."""
     coordinator = MagicMock()
     coordinator.title = title
-    coordinator.data = data if data is not None else {"model": "VRX iQ+", "sw_version": "3.2.1"}
+    if data is _UNSET:
+        coordinator.data = {"model": "VRX iQ+", "sw_version": "3.2.1"}
+    else:
+        coordinator.data = data
     coordinator.client = MagicMock()
     coordinator.client.serial = serial
     coordinator.client.device_type = device_type

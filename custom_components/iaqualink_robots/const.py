@@ -30,6 +30,19 @@ SCAN_INTERVAL: Final = timedelta(seconds=3)  # Balanced update interval for effi
 # inline magic-number.
 PENDING_STOP_RESET_MAX_AGE_SECONDS: Final = 10
 
+# Long-outage threshold for marking entities unavailable (story H7). Pre-H7
+# entities flipped to `available=False` after 30 consecutive update failures
+# regardless of how much time those failures spanned. Combined with adaptive
+# polling (1.5 s ↔ 10 s) that meant a transient ISP blip of 45 s – 5 min
+# could disable user automations that depend on the `available` state. H7
+# replaces the count-based gate with a wall-clock threshold: entities stay
+# `available=True` with stale data through any outage shorter than this
+# value, then flip to `available=False` once it's exceeded. The
+# `is_serving_stale_data` (a.k.a. `restored`) attribute exposed on every
+# entity tells advanced users which window they're in. 30 minutes is a
+# starting point — soak observations may tune it.
+LONG_OUTAGE_THRESHOLD_SECONDS: Final = 30 * 60
+
 # User-toggleable option keys (configurable via config flow + options flow).
 # Whether the `time_remaining_human` sensor includes seconds. Default True
 # preserves the historical behavior; users complaining about activity-log

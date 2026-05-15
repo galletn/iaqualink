@@ -269,17 +269,37 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
 
     @property
     def available(self) -> bool:
-        """Keep vacuum available as long as we have data, even during temporary connection issues."""
-        # Vacuum should remain available as long as we have coordinator data
-        # This prevents the vacuum from going unavailable during temporary connection issues
-        return self.coordinator.data is not None
+        """Vacuum stays available across short cloud blips, unavailable on long outage.
+
+        H7: pre-rewrite this only checked ``coordinator.data is not None``,
+        so the vacuum stayed available indefinitely while the coordinator
+        served stale ``_last_data`` through the broad-except path. The new
+        ``coordinator.is_long_outage`` property flips to True once the
+        outage exceeds ``LONG_OUTAGE_THRESHOLD_SECONDS``, so user
+        automations bound to ``available`` no longer break on ISP blips
+        but are honestly notified of a real multi-minute outage.
+        """
+        return (
+            self.coordinator.data is not None
+            and not self.coordinator.is_long_outage
+        )
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        """Return entity specific state attributes."""
-        # Filter out fan_speed from attributes since it's handled by the fan_speed property
-        # This prevents conflicts between raw coordinator data and display names
+        """Return entity-specific state attributes plus the H7 `restored` flag.
+
+        ``restored`` (H7 AC #3): ``True`` whenever the vacuum's last update
+        came from the coordinator's cached ``_last_data`` rather than a
+        fresh poll. Flips back to ``False`` automatically on the next
+        successful poll.
+
+        ``fan_speed`` is filtered out of the underlying attributes dict
+        because it has a dedicated property — leaving the raw key here
+        conflicts with the display-name conversion in
+        ``IAquaLinkRobotVacuum.fan_speed``.
+        """
         filtered_attributes = {k: v for k, v in self._attributes.items() if k != "fan_speed"}
+        filtered_attributes["restored"] = self.coordinator.is_serving_stale_data
         return filtered_attributes
 
     @property

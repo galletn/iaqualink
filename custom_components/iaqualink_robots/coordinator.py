@@ -21,6 +21,7 @@ from .const import (
     URL_WS,
     URL_GET_DEVICE_FEATURES,
     PENDING_STOP_RESET_MAX_AGE_SECONDS,
+    LONG_OUTAGE_THRESHOLD_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -3110,6 +3111,15 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         self._debug_mode = debug_mode
         self._last_data = {}
         self._consecutive_failures = 0
+        # Wall-clock timestamp of the first failure in the current outage
+        # streak (story H7). Set on the 0→1 transition of
+        # ``_consecutive_failures`` and cleared back to ``None`` whenever
+        # the counter returns to 0 on a successful update. Consulted by the
+        # ``is_long_outage`` property to gate when entities flip to
+        # ``available=False`` — replaces the prior count-based gate which
+        # could trigger after as little as 45 s of failures at the fast
+        # adaptive polling rate.
+        self._first_failure_at: "datetime | None" = None
         # Backs the public ``title`` property; set by ``__init__.py`` from
         # ``entry.title`` so entities and tests can read a stable display
         # name via the public API (story M15). Kept underscored so the
@@ -3118,8 +3128,6 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         # the subclass property here cleanly overrides it without an
         # attribute-shadowing surprise.
         self._title: str | None = None
-        # Increasing from 3 to 30 - this is 15 minutes with default 30 second scan interval
-        self._max_failures_before_unavailable = 30  # Allow 30 failures before marking unavailable
         self._setup_complete = False  # Flag to track if initial setup is complete
         self._last_timing_command = 0  # Timestamp of last timing command for debouncing
 
@@ -3148,6 +3156,63 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     @title.setter
     def title(self, value: str | None) -> None:
         self._title = value
+
+    # -- H7: outage-aware availability -----------------------------------------
+    #
+    # Two properties surface the coordinator's outage state to entity platforms:
+    #
+    #   * ``is_long_outage``        — True when the current outage has lasted
+    #                                 longer than ``LONG_OUTAGE_THRESHOLD_SECONDS``;
+    #                                 entity ``available`` properties consult
+    #                                 this to flip to False after a sustained
+    #                                 outage while ignoring short blips.
+    #   * ``is_serving_stale_data`` — True any time the integration is returning
+    #                                 last-known-good data because the latest
+    #                                 poll failed; surfaced as the ``restored``
+    #                                 attribute so power users can detect a
+    #                                 transient outage in templates / automations.
+    #
+    # Both are computed; no state beyond ``_first_failure_at`` and
+    # ``_consecutive_failures`` (both maintained in ``_async_update_data``).
+
+    def _outage_age_seconds(self) -> float:
+        """Seconds since the current outage streak began; ``0.0`` if no outage.
+
+        Helper used by both ``is_long_outage`` and the broad-except log
+        messages. Returning ``0.0`` rather than ``None`` keeps the
+        log-formatter happy without a special case at every call site.
+        """
+        if self._first_failure_at is None:
+            return 0.0
+        return (dt_util.utcnow() - self._first_failure_at).total_seconds()
+
+    @property
+    def is_long_outage(self) -> bool:
+        """``True`` when the current outage exceeds ``LONG_OUTAGE_THRESHOLD_SECONDS``.
+
+        Pre-H7 entity ``available`` flipped to False after 30 consecutive
+        failures at adaptive polling — anywhere from 45 s (active robot,
+        1.5 s interval) to 5 min (idle robot, 10 s interval). H7 replaces
+        the count with a wall-clock threshold so user automations that
+        depend on the ``available`` state are not killed by short ISP
+        blips. See AC #1 / AC #2.
+        """
+        if self._first_failure_at is None:
+            return False
+        return self._outage_age_seconds() > LONG_OUTAGE_THRESHOLD_SECONDS
+
+    @property
+    def is_serving_stale_data(self) -> bool:
+        """``True`` while the integration is returning ``_last_data`` because
+        the latest poll failed (story H7, AC #3 / AC #6).
+
+        Surfaced verbatim as the ``restored`` attribute on every entity so
+        advanced users can branch automations on it
+        (``{{ state_attr('vacuum.x', 'restored') }}``). Flips back to
+        ``False`` automatically on the next successful poll (the success
+        path clears ``_first_failure_at`` and ``_consecutive_failures``).
+        """
+        return self._consecutive_failures > 0
 
     # Persistent websocket connection provides resilient command execution
     # Automatic retry logic and circuit breaker patterns prevent device unavailability
@@ -3275,8 +3340,13 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                 except Exception as e:
                     _LOGGER.warning(f"Failed to clear desired state after natural completion: {e}")
 
-            # Reset failure count on successful update
+            # Reset failure count + outage timestamp on successful update.
+            # H7: clearing ``_first_failure_at`` here flips
+            # ``is_serving_stale_data`` back to ``False`` so the
+            # ``restored`` entity attribute reverts to ``False`` once a
+            # poll succeeds (AC #6).
             self._consecutive_failures = 0
+            self._first_failure_at = None
 
             # Reset websocket failure count on successful status update
             self.client._reset_websocket_failures()
@@ -3307,23 +3377,36 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
 
         except Exception as err:
             self._consecutive_failures += 1
+            # Stamp the wall-clock start of this outage streak on the 0→1
+            # transition (story H7). The ``is_long_outage`` property
+            # consults the elapsed time against
+            # ``LONG_OUTAGE_THRESHOLD_SECONDS`` to decide when to flip
+            # entities to ``available=False``.
+            if self._first_failure_at is None:
+                self._first_failure_at = dt_util.utcnow()
 
             # Get detailed error information
             import traceback
             error_details = traceback.format_exc()
 
-            # Only log as error after multiple failures to reduce log spam
-            if self._consecutive_failures <= self._max_failures_before_unavailable:
+            if not self.is_long_outage:
                 if self._debug_mode:
                     _LOGGER.warning(
-                        f"Update failed (attempt {self._consecutive_failures}/{self._max_failures_before_unavailable}): {err}")
+                        f"Update failed (attempt {self._consecutive_failures}, "
+                        f"outage age {self._outage_age_seconds():.0f}s "
+                        f"< {LONG_OUTAGE_THRESHOLD_SECONDS}s threshold): {err}")
 
-                # Return last known good data if available to keep entity available
+                # Return last known good data if available to keep entity available.
+                # Entity `available` properties also consult `is_long_outage`,
+                # so the entity stays usable for short blips and gracefully
+                # flips to unavailable once the outage exceeds the threshold.
                 if self._last_data:
                     _LOGGER.debug("Returning last known good data to keep entity available")
                     return self._last_data.copy()
                 else:
-                    # No previous data available, return minimal data to prevent unavailable state
+                    # No previous data — return minimal offline data so
+                    # platforms can render a coherent "offline" state until
+                    # is_long_outage flips and HA marks the entity unavailable.
                     _LOGGER.debug("No previous data available, returning minimal data")
                     return {
                         "serial_number": self.client.serial,
@@ -3334,9 +3417,18 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                     }
             else:
                 _LOGGER.error(
-                    f"Update failed after {self._consecutive_failures} attempts: {err}\nDetails:\n{error_details}")
-                # Only raise UpdateFailed after max failures to mark entity unavailable
-                raise UpdateFailed(f"Failed after {self._consecutive_failures} attempts: {err}")
+                    f"Update failed after {self._consecutive_failures} attempts "
+                    f"({self._outage_age_seconds():.0f}s outage, "
+                    f"≥ {LONG_OUTAGE_THRESHOLD_SECONDS}s threshold): {err}"
+                    f"\nDetails:\n{error_details}")
+                # Long-outage threshold exceeded — raise UpdateFailed so HA
+                # marks the entity unavailable. The `is_long_outage` gate on
+                # entity `available` properties also short-circuits to False
+                # before this point if the platform queries it independently.
+                raise UpdateFailed(
+                    f"Failed after {self._consecutive_failures} attempts "
+                    f"over {self._outage_age_seconds():.0f}s: {err}"
+                )
 
     async def async_start_cleaning(self):
         """Start cleaning - centralized business logic."""

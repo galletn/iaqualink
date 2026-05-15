@@ -78,10 +78,32 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
 
     @property
     def available(self):
-        """Return if entity is available."""
-        # Keep buttons available as long as we have coordinator data, same as sensors
-        # This prevents buttons from going unavailable during temporary connection issues
-        return self.coordinator.data is not None
+        """Button stays available across short cloud blips, unavailable on long outage.
+
+        H7: pre-rewrite this only checked ``coordinator.data is not None``,
+        so buttons stayed available indefinitely while the coordinator
+        served stale ``_last_data``. The new ``coordinator.is_long_outage``
+        property flips to True once the outage exceeds
+        ``LONG_OUTAGE_THRESHOLD_SECONDS``, so a pressed button hitting a
+        dead cloud now surfaces as the entity being unavailable rather
+        than as a silent no-op command.
+        """
+        return (
+            self.coordinator.data is not None
+            and not self.coordinator.is_long_outage
+        )
+
+    @property
+    def extra_state_attributes(self):
+        """Expose the ``restored`` flag (H7, AC #3).
+
+        ``True`` whenever the button's last coordinator update came from
+        cached ``_last_data`` rather than a fresh poll. Useful for users
+        who want to inspect via ``state_attr`` whether a button press is
+        being issued against a robot whose status the integration last
+        observed minutes ago.
+        """
+        return {"restored": self.coordinator.is_serving_stale_data}
 
     async def async_press(self) -> None:
         """Handle the button press."""

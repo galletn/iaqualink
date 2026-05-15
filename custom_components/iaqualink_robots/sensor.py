@@ -226,11 +226,33 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def available(self):
-        """Keep sensors available as long as we have data, even during temporary connection issues."""
-        # Sensors should remain available as long as we have coordinator data
-        # This prevents sensors from going unavailable during temporary connection issues
-        # while still allowing them to go unavailable if the coordinator has never succeeded
-        return self.coordinator.data is not None
+        """Sensor stays available across short cloud blips, unavailable on long outage.
+
+        H7: pre-rewrite this only checked ``coordinator.data is not None``,
+        so sensors stayed available indefinitely as the coordinator served
+        stale ``_last_data`` through the broad-except path. The new
+        ``coordinator.is_long_outage`` property flips to True once the
+        outage exceeds ``LONG_OUTAGE_THRESHOLD_SECONDS``, so user
+        automations bound to ``available`` no longer break on ISP blips
+        but are still honestly notified of a real multi-minute outage.
+        """
+        return (
+            self.coordinator.data is not None
+            and not self.coordinator.is_long_outage
+        )
+
+    @property
+    def extra_state_attributes(self):
+        """Expose the ``restored`` flag (H7, AC #3).
+
+        ``True`` whenever the sensor's last update came from the
+        coordinator's cached ``_last_data`` rather than a fresh poll —
+        i.e. the integration is in a transient outage and returning
+        stale values. Power users can branch automations on this:
+        ``{{ state_attr('sensor.x', 'restored') }}``. Flips back to
+        ``False`` automatically on the next successful poll.
+        """
+        return {"restored": self.coordinator.is_serving_stale_data}
 
     @property
     def device_info(self):

@@ -601,3 +601,242 @@ async def test_handle_realtime_update_swallows_refresh_failure(
     await coord._handle_realtime_update()
 
     coord.async_request_refresh.assert_awaited_once()
+
+
+# ----------------------------------------------------------------------------
+# Story H7 — available-threshold rewrite with `restored` indicator
+# ----------------------------------------------------------------------------
+#
+# Pre-H7 entity `available` properties only checked `coordinator.data is not
+# None`. The coordinator served stale `_last_data` through the broad-except
+# path until `_consecutive_failures > _max_failures_before_unavailable`
+# (default 30), at which point it raised `UpdateFailed` and HA marked the
+# entity unavailable. With adaptive polling (1.5 s ↔ 10 s), 30 failures spans
+# anywhere from 45 s (active robot) to 5 min (idle robot) — short enough that
+# routine ISP blips would disable user automations bound to the `available`
+# state.
+#
+# H7 replaces the count-based gate with a wall-clock threshold:
+# `LONG_OUTAGE_THRESHOLD_SECONDS` (currently 30 min). The coordinator stamps
+# `_first_failure_at` on the 0→1 transition of `_consecutive_failures` and
+# clears it on a successful update. The new properties:
+#
+#   * `coordinator.is_long_outage`        — True once the outage exceeds the
+#                                           threshold; entity `available`
+#                                           properties consult it.
+#   * `coordinator.is_serving_stale_data` — True any time stale data is being
+#                                           returned; surfaced as the
+#                                           `restored` attribute on every
+#                                           entity.
+
+
+def test_is_long_outage_false_when_no_outage(coordinator_factory) -> None:
+    """Fresh coordinator with no failures → `is_long_outage` is False."""
+    coord, _client = coordinator_factory()
+    assert coord._first_failure_at is None
+    assert coord._consecutive_failures == 0
+    assert coord.is_long_outage is False
+    assert coord.is_serving_stale_data is False
+
+
+def test_is_long_outage_false_during_short_blip(coordinator_factory) -> None:
+    """A blip <`LONG_OUTAGE_THRESHOLD_SECONDS` (the AC #1 / AC #4 contract)
+    keeps `is_long_outage` False so entity `available` stays True.
+    """
+    import datetime as dt
+
+    from homeassistant.util import dt as dt_util
+
+    coord, _client = coordinator_factory()
+    coord._consecutive_failures = 5
+    coord._first_failure_at = dt_util.utcnow() - dt.timedelta(seconds=60)
+
+    assert coord.is_long_outage is False
+    assert coord.is_serving_stale_data is True  # stale-data flag IS True
+
+
+def test_is_long_outage_true_after_threshold_exceeded(coordinator_factory) -> None:
+    """Once the outage exceeds `LONG_OUTAGE_THRESHOLD_SECONDS` (AC #2 / AC #5)
+    `is_long_outage` is True — entity `available` then flips to False.
+    """
+    import datetime as dt
+
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.iaqualink_robots.const import (
+        LONG_OUTAGE_THRESHOLD_SECONDS,
+    )
+
+    coord, _client = coordinator_factory()
+    coord._consecutive_failures = 999
+    coord._first_failure_at = dt_util.utcnow() - dt.timedelta(
+        seconds=LONG_OUTAGE_THRESHOLD_SECONDS + 5
+    )
+
+    assert coord.is_long_outage is True
+    assert coord.is_serving_stale_data is True
+
+
+def test_is_long_outage_at_boundary_just_below_threshold_remains_false(
+    coordinator_factory,
+) -> None:
+    """At exactly `threshold − 0.5 s` the outage is NOT long yet.
+
+    Pins the inclusive side of the comparison so an off-by-one refactor that
+    flips ``> threshold`` to ``>= threshold`` is caught.
+    """
+    import datetime as dt
+
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.iaqualink_robots.const import (
+        LONG_OUTAGE_THRESHOLD_SECONDS,
+    )
+
+    coord, _client = coordinator_factory()
+    coord._consecutive_failures = 200
+    coord._first_failure_at = dt_util.utcnow() - dt.timedelta(
+        seconds=LONG_OUTAGE_THRESHOLD_SECONDS - 0.5
+    )
+
+    assert coord.is_long_outage is False
+
+
+def test_is_serving_stale_data_tracks_consecutive_failures(coordinator_factory) -> None:
+    """`is_serving_stale_data` mirrors `_consecutive_failures > 0`. Flips
+    automatically on recovery — AC #6.
+    """
+    coord, _client = coordinator_factory()
+    assert coord.is_serving_stale_data is False
+
+    coord._consecutive_failures = 1
+    assert coord.is_serving_stale_data is True
+
+    coord._consecutive_failures = 0  # recovery
+    assert coord.is_serving_stale_data is False
+
+
+async def test_first_failure_at_set_on_zero_to_one_transition(
+    coordinator_factory,
+) -> None:
+    """The broad-except path stamps `_first_failure_at` on the first failure
+    of a new streak.
+    """
+    coord, client = coordinator_factory()
+    client.fetch_status.side_effect = RuntimeError("simulated cloud outage")
+
+    # Pre-failure: no streak.
+    assert coord._first_failure_at is None
+
+    await coord._async_update_data()
+
+    # First failure: timestamp populated.
+    assert coord._first_failure_at is not None
+    assert coord._consecutive_failures == 1
+
+
+async def test_first_failure_at_unchanged_on_subsequent_failures(
+    coordinator_factory,
+) -> None:
+    """Subsequent failures within a streak do NOT re-stamp `_first_failure_at`
+    — that would mask the true outage duration.
+    """
+    import datetime as dt
+
+    from homeassistant.util import dt as dt_util
+
+    coord, client = coordinator_factory()
+    client.fetch_status.side_effect = RuntimeError("simulated cloud outage")
+
+    # Seed an existing streak from 30 s ago.
+    coord._first_failure_at = dt_util.utcnow() - dt.timedelta(seconds=30)
+    coord._consecutive_failures = 10
+    original_stamp = coord._first_failure_at
+
+    await coord._async_update_data()
+
+    # Stamp unchanged; counter incremented.
+    assert coord._first_failure_at == original_stamp
+    assert coord._consecutive_failures == 11
+
+
+async def test_first_failure_at_cleared_on_successful_recovery(
+    coordinator_factory,
+) -> None:
+    """Recovery from an outage clears `_first_failure_at` AND
+    `_consecutive_failures` so `is_serving_stale_data` flips back to False
+    on the next poll (AC #6).
+    """
+    import datetime as dt
+
+    from homeassistant.util import dt as dt_util
+
+    coord, _client = coordinator_factory(
+        last_data={"activity": "idle"},
+        fetch_status_return={"activity": "idle"},
+    )
+
+    # Seed an in-progress outage.
+    coord._first_failure_at = dt_util.utcnow() - dt.timedelta(seconds=60)
+    coord._consecutive_failures = 5
+    assert coord.is_serving_stale_data is True
+
+    # A successful poll recovers.
+    await coord._async_update_data()
+
+    assert coord._first_failure_at is None
+    assert coord._consecutive_failures == 0
+    assert coord.is_serving_stale_data is False
+    assert coord.is_long_outage is False
+
+
+async def test_long_outage_raises_update_failed(coordinator_factory) -> None:
+    """When `is_long_outage` is True at the moment a failure lands, the
+    coordinator raises `UpdateFailed` (HA marks the entity unavailable)
+    rather than returning stale `_last_data`.
+    """
+    import datetime as dt
+
+    from homeassistant.util import dt as dt_util
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+    import pytest
+
+    from custom_components.iaqualink_robots.const import (
+        LONG_OUTAGE_THRESHOLD_SECONDS,
+    )
+
+    coord, client = coordinator_factory(last_data={"activity": "idle"})
+    client.fetch_status.side_effect = RuntimeError("simulated long outage")
+
+    # Pre-seed a streak that is *already* past the long-outage threshold,
+    # so this failure tips the gate.
+    coord._first_failure_at = dt_util.utcnow() - dt.timedelta(
+        seconds=LONG_OUTAGE_THRESHOLD_SECONDS + 5
+    )
+    coord._consecutive_failures = 100
+
+    with pytest.raises(UpdateFailed):
+        await coord._async_update_data()
+
+
+async def test_short_outage_returns_last_data_not_update_failed(
+    coordinator_factory,
+) -> None:
+    """When `is_long_outage` is False at the moment a failure lands, the
+    coordinator returns cached `_last_data` so entities stay available
+    through the blip (AC #1 / AC #4).
+    """
+    coord, client = coordinator_factory(last_data={"activity": "cleaning", "model": "RA"})
+    client.fetch_status.side_effect = RuntimeError("simulated transient blip")
+
+    result = await coord._async_update_data()
+
+    # Cached data returned; no UpdateFailed raised.
+    assert result["activity"] == "cleaning"
+    assert result["model"] == "RA"
+    # Streak started.
+    assert coord._first_failure_at is not None
+    assert coord._consecutive_failures == 1
+    # Not yet a long outage.
+    assert coord.is_long_outage is False
+    assert coord.is_serving_stale_data is True

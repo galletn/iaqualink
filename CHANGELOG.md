@@ -4,6 +4,18 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 
 ## Unreleased
 
+## 3.0.0-beta.1 — 2026-05-15
+
+First pre-release of the 3.x line. Major version bump signals two breaking-ish
+changes (timestamp wire format, vacuum entity friendly-name derivation —
+details under **Fixed** and **Migration / manual cleanup notes** below), 16
+completed stories of foundation work (config-flow hardening, reauth flow,
+shared device card, datetime hygiene, HA-2024+ entity naming), and a community
+bug fix that stops VR robots from auto-restarting after a natural cycle.
+
+**Pre-release** — HACS users on the default channel will not see this version;
+toggle "Show beta versions" in the integration's HACS panel to install it.
+
 ### Added
 
 - **Config flow now rejects duplicate robots.** Adding the same robot twice aborts with `already_configured` instead of silently spawning a second coordinator (story C2).

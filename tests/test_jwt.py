@@ -35,27 +35,35 @@ def _make_jwt(payload: dict, *, signature: str = "fake-signature") -> str:
 
 
 def test_decodes_future_exp() -> None:
-    """A JWT with a future `exp` returns a datetime 60s before that epoch."""
-    future_epoch = int(datetime.datetime.now().timestamp()) + 3600  # 1 hour out
+    """A JWT with a future `exp` returns a datetime 60s before that epoch.
+
+    H8: both sides aware-UTC. The pre-H8 naive-local round-trip was brittle
+    around DST transitions; UTC has no DST, so this is now structurally smooth.
+    """
+    utc = datetime.timezone.utc
+    future_epoch = int(datetime.datetime.now(tz=utc).timestamp()) + 3600  # 1 hour out
     token = _make_jwt({"exp": future_epoch, "sub": "user@example.com"})
 
     result = _decode_jwt_exp(token)
 
     assert result is not None
-    expected = datetime.datetime.fromtimestamp(future_epoch - _TOKEN_EXP_SAFETY_MARGIN_S)
+    expected = datetime.datetime.fromtimestamp(
+        future_epoch - _TOKEN_EXP_SAFETY_MARGIN_S, tz=utc
+    )
     # exact match (no tz arithmetic involved)
     assert result == expected
 
 
 def test_decodes_past_exp() -> None:
     """Past exp still decodes — caller logic (is_token_expired) handles 'expired'."""
-    past_epoch = int(datetime.datetime.now().timestamp()) - 3600  # 1 hour ago
+    utc = datetime.timezone.utc
+    past_epoch = int(datetime.datetime.now(tz=utc).timestamp()) - 3600  # 1 hour ago
     token = _make_jwt({"exp": past_epoch})
 
     result = _decode_jwt_exp(token)
 
     assert result is not None
-    assert result < datetime.datetime.now()
+    assert result < datetime.datetime.now(tz=utc)
 
 
 def test_safety_margin_applied() -> None:
@@ -185,14 +193,15 @@ def test_non_string_token_returns_none(bad_token) -> None:
 
 def test_resolve_token_expiry_uses_decoded_exp_when_valid() -> None:
     """A parseable token returns the decoded expiry, no warning emitted."""
-    import logging
-
-    future_epoch = int(datetime.datetime.now().timestamp()) + 3600
+    utc = datetime.timezone.utc
+    future_epoch = int(datetime.datetime.now(tz=utc).timestamp()) + 3600
     token = _make_jwt({"exp": future_epoch})
 
     result = _resolve_token_expiry(token)
 
-    expected = datetime.datetime.fromtimestamp(future_epoch - _TOKEN_EXP_SAFETY_MARGIN_S)
+    expected = datetime.datetime.fromtimestamp(
+        future_epoch - _TOKEN_EXP_SAFETY_MARGIN_S, tz=utc
+    )
     assert result == expected
 
 
@@ -209,7 +218,8 @@ def test_resolve_token_expiry_falls_back_and_warns(caplog) -> None:
     coord_mod._JWT_EXP_FALLBACK_WARNED = False
 
     caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.coordinator")
-    before = datetime.datetime.now()
+    utc = datetime.timezone.utc
+    before = datetime.datetime.now(tz=utc)
 
     result = _resolve_token_expiry("garbage")
 
@@ -230,12 +240,13 @@ def test_resolve_token_expiry_fallback_applies_safety_margin() -> None:
     """The fallback branch subtracts the same safety margin as the happy path,
     so the two branches don't have asymmetric effective lifetimes.
     """
-    before = datetime.datetime.now()
+    utc = datetime.timezone.utc
+    before = datetime.datetime.now(tz=utc)
     result = _resolve_token_expiry(None)
-    naive_no_margin = before + datetime.timedelta(hours=1)
+    aware_no_margin = before + datetime.timedelta(hours=1)
 
-    # Result must be EARLIER than naive `now + 1h` by approximately the margin.
-    drift = (naive_no_margin - result).total_seconds()
+    # Result must be EARLIER than `now + 1h` by approximately the margin.
+    drift = (aware_no_margin - result).total_seconds()
     assert _TOKEN_EXP_SAFETY_MARGIN_S - 5 < drift < _TOKEN_EXP_SAFETY_MARGIN_S + 5, (
         f"fallback margin drift {drift}s outside expected ~{_TOKEN_EXP_SAFETY_MARGIN_S}s"
     )

@@ -2,10 +2,19 @@
 
 import logging
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .device import build_device_info
+
+# Sensor keys that surface an aware-UTC datetime from the coordinator (H8).
+# Marking these with device_class=TIMESTAMP makes HA's frontend render the
+# value in the user's local timezone instead of as a raw ISO string.
+_TIMESTAMP_SENSOR_KEYS = frozenset({
+    "cycle_start_time",
+    "estimated_end_time",
+    "last_online",
+})
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -129,6 +138,10 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
         unit = UNIT_MAP.get(key)
         if unit:
             self._attr_native_unit_of_measurement = unit
+        # H8: HA's frontend renders timestamp entities in the user's local tz
+        # when device_class=TIMESTAMP and native_value is an aware datetime.
+        if key in _TIMESTAMP_SENSOR_KEYS:
+            self._attr_device_class = SensorDeviceClass.TIMESTAMP
 
         # Set translation key for entity name (HA will handle translation)
         self._attr_translation_key = key

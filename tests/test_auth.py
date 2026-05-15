@@ -146,7 +146,7 @@ async def test_ws_handshake_401_drives_auth_failed_after_retry(monkeypatch) -> N
     client._id_token = _make_jwt({"exp": 2_524_608_000})
     client._auth_token = "fake-auth"
     client._token_expires_at = (
-        datetime.datetime.now() + datetime.timedelta(hours=1)
+        datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(hours=1)
     )
 
     # Mock send_login so the WS 401 retry's _authenticate(force=True) doesn't
@@ -416,7 +416,7 @@ async def test_force_authenticate_bypasses_recheck(monkeypatch) -> None:
     client._id_token = _make_jwt({"exp": 2_524_608_000})
     client._auth_token = "stale-but-locally-valid"
     client._token_expires_at = (
-        datetime.datetime.now() + datetime.timedelta(hours=1)
+        datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(hours=1)
     )
 
     send_login_calls = 0

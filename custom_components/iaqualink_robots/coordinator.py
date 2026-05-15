@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.exceptions import ConfigEntryAuthFailed  # type: ignore # noqa
 # Note: This import requires Home Assistant 2025.1 or later
 from homeassistant.components.vacuum import VacuumActivity  # type: ignore # noqa
+from homeassistant.util import dt as dt_util  # type: ignore # noqa
 from .const import (
     URL_LOGIN,
     URL_GET_DEVICES,
@@ -48,7 +49,7 @@ _JWT_EXP_FALLBACK_WARNED = False
 
 
 def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
-    """Decode the `exp` claim from a JWT and return a naive local datetime.
+    """Decode the `exp` claim from a JWT and return an aware-UTC datetime.
 
     The Cognito `IdToken` is a standard JWT (`<header>.<payload>.<signature>`).
     The middle segment is base64url-encoded JSON containing an `exp` field —
@@ -58,10 +59,8 @@ def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
 
     Returns the parsed expiry (minus a safety margin) on success, or None on
     any parse failure so the caller can fall back to a conservative default.
-
-    TODO(H8): align with homeassistant.util.dt for timezone hygiene; the
-    naive-local return matches the existing `datetime.datetime.now()` call
-    site at the moment.
+    H8 swapped this from naive-local to aware-UTC via `dt_util.utc_from_timestamp`,
+    matching the rest of the integration's datetime hygiene.
     """
     try:
         parts = token.split(".")
@@ -82,7 +81,7 @@ def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
         # require finite and positive epoch. Anything else hits the fallback.
         if type(exp) not in (int, float) or not math.isfinite(exp) or exp <= 0:
             return None
-        return datetime.datetime.fromtimestamp(int(exp) - _TOKEN_EXP_SAFETY_MARGIN_S)
+        return dt_util.utc_from_timestamp(int(exp) - _TOKEN_EXP_SAFETY_MARGIN_S)
     except (AttributeError, OSError, OverflowError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
@@ -110,7 +109,7 @@ def _resolve_token_expiry(token: str | None) -> datetime.datetime:
     else:
         _LOGGER.debug(msg)
     return (
-        datetime.datetime.now()
+        dt_util.utcnow()
         + datetime.timedelta(hours=1)
         - datetime.timedelta(seconds=_TOKEN_EXP_SAFETY_MARGIN_S)
     )
@@ -367,10 +366,17 @@ class AqualinkClient:
         return getattr(self, "_title", f"{self._device_type}_{self._serial}")
 
     def _is_token_expired(self) -> bool:
-        """Check if authentication token is expired."""
+        """Check if authentication token is expired.
+
+        Both sides of the comparison are aware-UTC after H8: `_token_expires_at`
+        is set by `_resolve_token_expiry` (aware-UTC) and `dt_util.utcnow()`
+        returns aware-UTC. Pre-H8 both were naive-local; the comparison still
+        worked but produced subtly-wrong values around DST and was a latent
+        timezone-correctness bug.
+        """
         if not self._token_expires_at:
             return True
-        return datetime.datetime.now() >= self._token_expires_at
+        return dt_util.utcnow() >= self._token_expires_at
 
     def set_hass(self, hass):
         """Set Home Assistant instance for translations."""
@@ -964,7 +970,7 @@ class AqualinkClient:
 
         # Record this attempt
         self._model_fetch_attempts += 1
-        self._model_last_attempt = datetime.datetime.now()
+        self._model_last_attempt = dt_util.utcnow()
 
         # For vortrax robots, get model from web based on product number
         if self._device_type == "vortrax":
@@ -1042,7 +1048,7 @@ class AqualinkClient:
         backoff_minutes = [0, 5, 15, 30, 60]
         wait_minutes = backoff_minutes[min(self._model_fetch_attempts - 1, len(backoff_minutes) - 1)]
 
-        time_since_last = datetime.datetime.now() - self._model_last_attempt
+        time_since_last = dt_util.utcnow() - self._model_last_attempt
         if time_since_last.total_seconds() >= (wait_minutes * 60):
             _LOGGER.debug(f"Retrying model fetch after {wait_minutes} minute wait")
             return True
@@ -1182,11 +1188,13 @@ class AqualinkClient:
                     result["activity"] = "idle"
                     result["error_state"] = "no_error"
 
-                # Calculate estimated end time if cleaning
+                # Calculate estimated end time if cleaning. H8: emit aware-UTC
+                # datetime objects (not isoformat strings) so the sensor with
+                # device_class=TIMESTAMP renders correctly in HA's local timezone.
                 if time_remaining > 0 and self._activity == VacuumActivity.CLEANING:
                     estimated_end_time = self.add_minutes_to_datetime(
-                        datetime.datetime.now(), time_remaining)
-                    result["estimated_end_time"] = estimated_end_time.isoformat()
+                        dt_util.utcnow(), time_remaining)
+                    result["estimated_end_time"] = estimated_end_time
                     result["time_remaining_human"] = self._format_time_human(
                         time_remaining // 60, time_remaining % 60, 0)
 
@@ -1283,11 +1291,12 @@ class AqualinkClient:
                 result["error_state"] = "update_failed"
                 return result
 
-        # Convert timestamp to datetime (only if we have valid data)
+        # Convert timestamp to datetime (only if we have valid data).
+        # H8: aware-UTC datetime object stored directly (no .isoformat()) so
+        # the sensor entity declaring device_class=TIMESTAMP renders correctly.
         if data and 'payload' in data:
             timestamp = data['payload']['robot']['state']['reported']['aws']['timestamp'] / 1000
-            last_online = datetime.datetime.fromtimestamp(timestamp)
-            result["last_online"] = last_online.isoformat()
+            result["last_online"] = dt_util.utc_from_timestamp(timestamp)
 
             # Only update device-specific data if we have valid payload data
             # Update based on device type
@@ -1393,11 +1402,12 @@ class AqualinkClient:
             self._fan_speed = "floor_only"  # Default to floor only if we can't determine
             result["fan_speed"] = self._fan_speed
 
-        # Convert timestamp to datetime
+        # Convert timestamp to datetime. H8: aware-UTC datetime objects stored
+        # directly (no .isoformat()); sensor entity uses device_class=TIMESTAMP.
         try:
             timestamp = robot_data['cycleStartTime']
-            cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
-            result["cycle_start_time"] = cycle_start_time.isoformat()
+            cycle_start_time = dt_util.utc_from_timestamp(timestamp)
+            result["cycle_start_time"] = cycle_start_time
 
             cycle_duration = self._resolve_cycle_duration(
                 robot_data['durations'], result["cycle"]
@@ -1408,7 +1418,7 @@ class AqualinkClient:
             self._calculate_times(cycle_start_time, cycle_duration, result, robot_data)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for VR robot: {e}")
-            result["cycle_start_time"] = datetime.datetime.now().isoformat()
+            result["cycle_start_time"] = dt_util.utcnow()
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
             result["time_remaining_human"] = self._format_time_human(0, 0, 0)
@@ -1496,11 +1506,12 @@ class AqualinkClient:
         result["first_smart_done"] = str(cycles_data.get('firstSmartDone', 'false'))
         result["lift_pattern_time"] = str(cycles_data.get('liftPatternTim', '0'))
 
-        # Convert timestamp to datetime for cycle start time with safe access
+        # Convert timestamp to datetime for cycle start time with safe access.
+        # H8: aware-UTC datetime objects emitted directly (no .isoformat()).
         try:
             timestamp = main_data['cycleStartTime']
-            cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
-            result["cycle_start_time"] = cycle_start_time.isoformat()
+            cycle_start_time = dt_util.utc_from_timestamp(timestamp)
+            result["cycle_start_time"] = cycle_start_time
 
             # Get the appropriate cycle duration based on the current cycle type
             cycle_type = last_cycle_data['endCycleType']
@@ -1524,7 +1535,7 @@ class AqualinkClient:
                 result["time_remaining_human"] = self._format_time_human(0, 0, 0)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for cyclobat robot: {e}")
-            result["cycle_start_time"] = datetime.datetime.now().isoformat()
+            result["cycle_start_time"] = dt_util.utcnow()
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
             result["time_remaining_human"] = self._format_time_human(0, 0, 0)
@@ -1591,11 +1602,12 @@ class AqualinkClient:
         except (KeyError, TypeError):
             result["total_hours"] = 0
 
-        # Convert timestamp to datetime with safe access
+        # Convert timestamp to datetime with safe access.
+        # H8: aware-UTC datetime objects emitted directly (no .isoformat()).
         try:
             timestamp = robot_data['cycleStartTime']
-            cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
-            result["cycle_start_time"] = cycle_start_time.isoformat()
+            cycle_start_time = dt_util.utc_from_timestamp(timestamp)
+            result["cycle_start_time"] = cycle_start_time
 
             result["cycle"] = robot_data['prCyc']
 
@@ -1608,7 +1620,7 @@ class AqualinkClient:
             self._calculate_times(cycle_start_time, cycle_duration, result)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for vortrax robot: {e}")
-            result["cycle_start_time"] = datetime.datetime.now().isoformat()
+            result["cycle_start_time"] = dt_util.utcnow()
             result["cycle"] = 0
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
@@ -1658,11 +1670,12 @@ class AqualinkClient:
             # Not supported by some cyclonext models
             result["total_hours"] = 0
 
-        # Convert timestamp to datetime with safe access
+        # Convert timestamp to datetime with safe access.
+        # H8: aware-UTC datetime objects emitted directly (no .isoformat()).
         try:
             timestamp = robot_data['cycleStartTime']
-            cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
-            result["cycle_start_time"] = cycle_start_time.isoformat()
+            cycle_start_time = dt_util.utc_from_timestamp(timestamp)
+            result["cycle_start_time"] = cycle_start_time
 
             result["cycle"] = robot_data['cycle']
 
@@ -1675,7 +1688,7 @@ class AqualinkClient:
             self._calculate_times(cycle_start_time, cycle_duration, result)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for cyclonext robot: {e}")
-            result["cycle_start_time"] = datetime.datetime.now().isoformat()
+            result["cycle_start_time"] = dt_util.utcnow()
             result["cycle"] = 0
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
@@ -1708,10 +1721,12 @@ class AqualinkClient:
 
             # Duration calculation debug logging removed to prevent logbook flooding with 1-second polling
 
-            # Calculate cycle end time using adjusted duration
+            # Calculate cycle end time using adjusted duration. H8: aware-UTC
+            # datetime objects emitted directly (no .isoformat()) so the sensor
+            # entity uses device_class=TIMESTAMP for local-timezone rendering.
             cycle_end_time = self.add_minutes_to_datetime(start_time, adjusted_duration)
-            result["cycle_end_time"] = cycle_end_time.isoformat()
-            result["estimated_end_time"] = cycle_end_time.isoformat()
+            result["cycle_end_time"] = cycle_end_time
+            result["estimated_end_time"] = cycle_end_time
 
             # If the device is idle (not cleaning/returning), always report 0 time remaining
             # regardless of what the webservice reports for cycle start time
@@ -1722,8 +1737,9 @@ class AqualinkClient:
                 # Debug logging removed to prevent logbook flooding with 1-second polling
                 return
 
-            # Calculate remaining time only if device is actively cleaning or returning
-            now = datetime.datetime.now()
+            # Calculate remaining time only if device is actively cleaning or returning.
+            # H8: aware-UTC on both sides of the comparison/subtraction.
+            now = dt_util.utcnow()
 
             # Only calculate time remaining if we have valid times
             if start_time and cycle_end_time:
@@ -1774,7 +1790,15 @@ class AqualinkClient:
             result["time_remaining_human"] = self._format_time_human(0, 0, 0)
 
     def add_minutes_to_datetime(self, dt, minutes):
-        """Add minutes to a datetime object."""
+        """Add minutes to an aware datetime object.
+
+        H8: rejects naive datetimes at the boundary so a future regression
+        anywhere upstream surfaces here rather than silently producing
+        wrong-timezone arithmetic far away from the bug site.
+        """
+        assert dt.tzinfo is not None, (
+            "add_minutes_to_datetime requires a tz-aware datetime (H8)"
+        )
         return dt + datetime.timedelta(minutes=minutes)
 
     async def send_login(self, data, headers):
@@ -2025,10 +2049,11 @@ class AqualinkClient:
     async def start_cleaning(self):
         """Start the vacuum cleaning."""
         if self._device_type == "i2d_robot":
-            # Record the start time when starting cleaning for i2d robots
-            now = datetime.datetime.now()
+            # Record the start time when starting cleaning for i2d robots.
+            # H8: aware-UTC datetime stored directly (no .isoformat()).
+            now = dt_util.utcnow()
             result = {
-                "cycle_start_time": now.isoformat(),
+                "cycle_start_time": now,
                 "activity": "cleaning"
             }
             request = {
@@ -2214,13 +2239,14 @@ class AqualinkClient:
                     "version": 1
                 }
 
-        # Create result with reset time values always, regardless of robot type
-        now = datetime.datetime.now()
+        # Create result with reset time values always, regardless of robot type.
+        # H8: aware-UTC datetimes stored directly (no .isoformat()).
+        now = dt_util.utcnow()
         reset_values = {
-            "estimated_end_time": now.isoformat(),
+            "estimated_end_time": now,
             "time_remaining": 0,
             "time_remaining_human": self._format_time_human(0, 0, 0),
-            "cycle_start_time": now.isoformat(),
+            "cycle_start_time": now,
             "activity": "idle"  # Also set activity to idle to ensure proper state
         }
 

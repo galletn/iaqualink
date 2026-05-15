@@ -2,7 +2,7 @@ import asyncio
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import config_validation as cv, entity_registry as er
 
 from .const import (
     API_KEY,
@@ -13,6 +13,11 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Hassfest requires integrations that define `async_setup` to declare a
+# CONFIG_SCHEMA. This integration is config-entry-only (no YAML), so the
+# helper `cv.config_entry_only_config_schema` is the HA-recommended shape.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 # Commands previously used to suffix button unique_ids. Kept here (not imported
 # from button.py) so the migration is self-contained and doesn't break if

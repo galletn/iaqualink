@@ -154,20 +154,7 @@
         "name": "Riduci 15 Minuti"
       }
     },
-    "vacuum": {
-      "fan_speed": {
-        "floor_only": "Solo pavimento",
-        "wall_only": "Solo parete",
-        "walls_only": "Solo pareti",
-        "floor_and_walls": "Pavimento e pareti",
-        "smart_floor_and_walls": "SMART Pavimento e pareti"
-      },
-      "time_format": {
-        "hours": "Ora(e)",
-        "minutes": "Minuto(i)",
-        "seconds": "Secondo(i)"
-      }
-    }
+    "vacuum": {}
   },
   "services": {
     "remote_forward": {

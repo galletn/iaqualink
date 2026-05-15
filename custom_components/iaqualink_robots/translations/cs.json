@@ -154,20 +154,7 @@
         "name": "Odebrat 15 minut"
       }
     },
-    "vacuum": {
-      "fan_speed": {
-        "floor_only": "Pouze podlaha",
-        "wall_only": "Pouze stěna",
-        "walls_only": "Pouze stěny",
-        "floor_and_walls": "Podlaha a stěny",
-        "smart_floor_and_walls": "SMART podlaha a stěny"
-      },
-      "time_format": {
-        "hours": "Hodina(y)",
-        "minutes": "Minuta(y)",
-        "seconds": "Sekunda(y)"
-      }
-    }
+    "vacuum": {}
   },
   "services": {
     "remote_forward": {

@@ -154,20 +154,7 @@
         "name": "Reduce 15 Minutes"
       }
     },
-    "vacuum": {
-      "fan_speed": {
-        "floor_only": "Floor only",
-        "wall_only": "Wall only",
-        "walls_only": "Walls only",
-        "floor_and_walls": "Floor and walls",
-        "smart_floor_and_walls": "SMART Floor and walls"
-      },
-      "time_format": {
-        "hours": "Hour(s)",
-        "minutes": "Minute(s)",
-        "seconds": "Second(s)"
-      }
-    }
+    "vacuum": {}
   },
   "services": {
     "remote_forward": {

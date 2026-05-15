@@ -154,20 +154,7 @@
         "name": "Odobrať 15 minút"
       }
     },
-    "vacuum": {
-      "fan_speed": {
-        "floor_only": "Len podlaha",
-        "wall_only": "Len stena",
-        "walls_only": "Len steny",
-        "floor_and_walls": "Podlaha a steny",
-        "smart_floor_and_walls": "SMART podlaha a steny"
-      },
-      "time_format": {
-        "hours": "Hodina(y)",
-        "minutes": "Minúta(y)",
-        "seconds": "Sekunda(y)"
-      }
-    }
+    "vacuum": {}
   },
   "services": {
     "remote_forward": {

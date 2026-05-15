@@ -175,20 +175,7 @@
         "name": "15 Minuten Verminderen"
       }
     },
-    "vacuum": {
-      "fan_speed": {
-        "floor_only": "Alleen bodem",
-        "wall_only": "Alleen wand",
-        "walls_only": "Alleen wanden",
-        "floor_and_walls": "Bodem en wanden",
-        "smart_floor_and_walls": "SMART Bodem en wanden"
-      },
-      "time_format": {
-        "hours": "Uur/Uren",
-        "minutes": "Minuut/Minuten",
-        "seconds": "Seconde/Seconden"
-      }
-    }
+    "vacuum": {}
   },
   "services": {
     "remote_forward": {

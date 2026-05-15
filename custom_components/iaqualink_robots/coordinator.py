@@ -376,6 +376,32 @@ class AqualinkClient:
         """Set Home Assistant instance for translations."""
         self._hass = hass
 
+    def _resolve_cycle_duration(self, durations, cycle) -> int:
+        """Look up the cycle duration for cycle code ``cycle`` (story C5).
+
+        Pre-C5, the three callers each did
+        ``list(durations.values())[result["cycle"]]`` -- a positional lookup
+        that silently raised ``IndexError`` (masked by the surrounding
+        broad-except) when ``cycle`` was unexpected. C5 extracts the
+        lookup into this helper so all three call sites share one
+        implementation and out-of-range / non-int cycle codes fall back to
+        0 with an explicit DEBUG breadcrumb instead of an exception the
+        operator never sees.
+
+        Behavior on the success path is unchanged (positional values
+        lookup over insertion-ordered dict). The cloud-side key names for
+        the ``durations`` sub-dict are not currently documented and the
+        team review explicitly downgraded "switch to named keys" out of
+        scope until we have a verified API sample.
+        """
+        if not isinstance(cycle, int) or not (0 <= cycle < len(durations)):
+            _LOGGER.debug(
+                "Unexpected cycle code %r for durations=%r; falling back to 0",
+                cycle, durations,
+            )
+            return 0
+        return list(durations.values())[cycle]
+
     def _format_time_human(self, hours: int, minutes: int, seconds: int) -> str:
         """Format time in human readable format with translations."""
         if not self._hass:
@@ -1359,8 +1385,9 @@ class AqualinkClient:
             cycle_start_time = datetime.datetime.fromtimestamp(timestamp)
             result["cycle_start_time"] = cycle_start_time.isoformat()
 
-            cycle_duration_values = robot_data['durations']
-            cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
+            cycle_duration = self._resolve_cycle_duration(
+                robot_data['durations'], result["cycle"]
+            )
             result["cycle_duration"] = cycle_duration
 
             # Calculate end time and remaining time with stepper adjustments
@@ -1558,8 +1585,9 @@ class AqualinkClient:
 
             result["cycle"] = robot_data['prCyc']
 
-            cycle_duration_values = robot_data['durations']
-            cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
+            cycle_duration = self._resolve_cycle_duration(
+                robot_data['durations'], result["cycle"]
+            )
             result["cycle_duration"] = cycle_duration
 
             # Calculate end time and remaining time
@@ -1624,8 +1652,9 @@ class AqualinkClient:
 
             result["cycle"] = robot_data['cycle']
 
-            cycle_duration_values = robot_data['durations']
-            cycle_duration = list(cycle_duration_values.values())[result["cycle"]]
+            cycle_duration = self._resolve_cycle_duration(
+                robot_data['durations'], result["cycle"]
+            )
             result["cycle_duration"] = cycle_duration
 
             # Calculate end time and remaining time

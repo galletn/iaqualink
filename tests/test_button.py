@@ -18,14 +18,14 @@ from tests.const import MOCK_DEVICE_TYPE, MOCK_SERIAL
 def mock_client_and_coordinator():
     """Minimal coordinator + client mocks for AqualinkRemoteButton.__init__."""
     client = MagicMock()
-    client._serial = MOCK_SERIAL
-    client._device_type = MOCK_DEVICE_TYPE
+    client.serial = MOCK_SERIAL
+    client.device_type = MOCK_DEVICE_TYPE
     client._model = "VRX IQ+"
     client.robot_id = MOCK_SERIAL
     client.robot_name = "Test Pool Robot"
 
     coordinator = MagicMock()
-    coordinator._title = "Bobby the Robot"  # legacy title — must NOT influence unique_id
+    coordinator.title = "Bobby the Robot"  # legacy title — must NOT influence unique_id
     coordinator.data = {}
     return coordinator, client
 
@@ -54,7 +54,7 @@ async def test_button_unique_id_uses_serial(
     assert button.unique_id == f"{MOCK_SERIAL}_{command}"
     # And specifically NOT derived from the (legacy) title.
     assert "bobby" not in button.unique_id.lower()
-    assert coordinator._title.lower().replace(" ", "_") not in button.unique_id
+    assert coordinator.title.lower().replace(" ", "_") not in button.unique_id
 
 
 async def test_button_unique_id_stable_across_title_rename(
@@ -68,7 +68,7 @@ async def test_button_unique_id_stable_across_title_rename(
     original_uid = b1.unique_id
 
     # Simulate a rename — change the title attribute then construct another button.
-    coordinator._title = "Pool Robot Renamed"
+    coordinator.title = "Pool Robot Renamed"
     b2 = AqualinkRemoteButton(coordinator, client, "forward", "remote_forward", "mdi:x")
 
     assert b2.unique_id == original_uid

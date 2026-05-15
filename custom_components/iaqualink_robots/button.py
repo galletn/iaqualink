@@ -23,7 +23,7 @@ async def async_setup_entry(
     client = hass.data[DOMAIN][config_entry.entry_id]["client"]
 
     # Only create remote control buttons for VR and VortraX robots
-    if client._device_type in ["vr", "vortrax"]:
+    if client.device_type in ["vr", "vortrax"]:
         buttons = [
             AqualinkRemoteButton(coordinator, client, "forward", "remote_forward", "mdi:chevron-up-circle"),
             AqualinkRemoteButton(coordinator, client, "backward", "remote_backward", "mdi:chevron-down-circle"),
@@ -52,8 +52,7 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         # derivation (entry.title lowercased + underscores) broke whenever the user
         # renamed the entry — every rename forked a new entity in the registry.
         # Migration of pre-M12 unique_ids lives in __init__.async_migrate_entry.
-        # TODO: switch to client.serial once story M15 (public properties) lands.
-        self._attr_unique_id = f"{client._serial}_{command}"
+        self._attr_unique_id = f"{client.serial}_{command}"
         self._attr_should_poll = False
 
         # Set proper button names - store the name to prevent override

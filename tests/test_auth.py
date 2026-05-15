@@ -73,7 +73,7 @@ def _build_mock_client(*, fetch_status_side_effect=None) -> MagicMock:
     """
     client = MagicMock()
     client.robot_id = "test_robot"
-    client._device_type = "vr"
+    client.device_type = "vr"
     client._pending_stop_reset = False
     client.set_hass = MagicMock()
     client.set_coordinator_callback = MagicMock()

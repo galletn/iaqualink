@@ -32,7 +32,7 @@ def _build_mock_client(
     """
     client = MagicMock()
     client.robot_id = "test_robot"
-    client._device_type = device_type
+    client.device_type = device_type
     client._pending_stop_reset = pending_stop_reset
     # Constructor wiring
     client.set_hass = MagicMock()

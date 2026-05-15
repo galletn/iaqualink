@@ -82,7 +82,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     client = data["client"]
 
     # Efficiently filter sensor types based on device type
-    device_type = client._device_type
+    device_type = client.device_type
 
     if device_type == "cyclobat":
         # Include all sensors for cyclobat
@@ -227,7 +227,11 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
 
         return {
             "identifiers": {(DOMAIN, self.client.robot_id)},
-            "name": getattr(self.coordinator, "_title", self.client.robot_id),
+            "name": (
+                self.coordinator.title
+                if self.coordinator.title is not None
+                else self.client.robot_id
+            ),
             "manufacturer": "Zodiac",
             "model": model,
         }

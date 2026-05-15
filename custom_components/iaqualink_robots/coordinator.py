@@ -354,6 +354,14 @@ class AqualinkClient:
         return self._serial or self._username
 
     @property
+    def serial(self) -> str:
+        return self._serial
+
+    @property
+    def device_type(self) -> str:
+        return self._device_type
+
+    @property
     def robot_name(self) -> str:
         # Use provided title if available
         return getattr(self, "_title", f"{self._device_type}_{self._serial}")
@@ -2905,7 +2913,14 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         self._debug_mode = debug_mode
         self._last_data = {}
         self._consecutive_failures = 0
-        self._title = None  # Add this property to store the device title/name
+        # Backs the public ``title`` property; set by ``__init__.py`` from
+        # ``entry.title`` so entities and tests can read a stable display
+        # name via the public API (story M15). Kept underscored so the
+        # public name stays free for HA's ``DataUpdateCoordinator`` base
+        # class — if a future HA version adds its own ``title`` attribute,
+        # the subclass property here cleanly overrides it without an
+        # attribute-shadowing surprise.
+        self._title: str | None = None
         # Increasing from 3 to 30 - this is 15 minutes with default 30 second scan interval
         self._max_failures_before_unavailable = 30  # Allow 30 failures before marking unavailable
         self._setup_complete = False  # Flag to track if initial setup is complete
@@ -2928,6 +2943,14 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         # Persistent websocket connection provides improved reliability and performance
         # Real-time websocket listener provides instant updates when robot state changes
         # Commands use persistent connection with automatic reconnection and retry logic
+
+    @property
+    def title(self) -> str | None:
+        return self._title
+
+    @title.setter
+    def title(self, value: str | None) -> None:
+        self._title = value
 
     # Persistent websocket connection provides resilient command execution
     # Automatic retry logic and circuit breaker patterns prevent device unavailability
@@ -3049,7 +3072,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             merged_data = status.copy()
 
             # For i2d robot, preserve cycle start time while cleaning
-            if (self.client._device_type == "i2d_robot" and
+            if (self.client.device_type == "i2d_robot" and
                 merged_data.get("activity") == "cleaning" and
                     self._last_data.get("cycle_start_time")):
                 merged_data["cycle_start_time"] = self._last_data["cycle_start_time"]
@@ -3116,8 +3139,8 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                     # No previous data available, return minimal data to prevent unavailable state
                     _LOGGER.debug("No previous data available, returning minimal data")
                     return {
-                        "serial_number": getattr(self.client, '_serial', 'unknown'),
-                        "device_type": getattr(self.client, '_device_type', 'unknown'),
+                        "serial_number": self.client.serial,
+                        "device_type": self.client.device_type,
                         "status": "offline",
                         "activity": "unknown",
                         "error_state": "connection_failed"
@@ -3142,7 +3165,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _execute_remote_command(self, command_method):
         """Execute a remote command with device type checking but no automatic refresh."""
-        if self.client._device_type not in {"vr", "vortrax"}:
+        if self.client.device_type not in {"vr", "vortrax"}:
             return
         await command_method()
         # Remove automatic refresh to improve responsiveness - let normal polling handle updates
@@ -3169,7 +3192,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def async_add_fifteen_minutes(self):
         """Add 15 minutes to cleaning time - centralized business logic."""
-        if self.client._device_type not in {"vr", "vortrax"}:
+        if self.client.device_type not in {"vr", "vortrax"}:
             return
 
         # Debouncing: Check if enough time has passed since last timing command
@@ -3229,7 +3252,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                         {
                             "title": "Pool Robot",
                             "message": result.get("message", "Added 15 minutes to cleaning time."),
-                            "notification_id": f"robot_time_change_{self.client._serial}"
+                            "notification_id": f"robot_time_change_{self.client.serial}"
                         }
                     )
             else:
@@ -3240,7 +3263,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                     {
                         "title": "Pool Robot Error",
                         "message": result.get("message", "Failed to add 15 minutes."),
-                        "notification_id": f"robot_error_{self.client._serial}"
+                        "notification_id": f"robot_error_{self.client.serial}"
                     }
                 )
 
@@ -3249,7 +3272,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def async_reduce_fifteen_minutes(self):
         """Reduce 15 minutes from cleaning time - centralized business logic."""
-        if self.client._device_type not in {"vr", "vortrax"}:
+        if self.client.device_type not in {"vr", "vortrax"}:
             return
 
         # Debouncing: Check if enough time has passed since last timing command
@@ -3309,7 +3332,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                         {
                             "title": "Pool Robot",
                             "message": result.get("message", "Reduced cleaning time by 15 minutes."),
-                            "notification_id": f"robot_time_change_{self.client._serial}"
+                            "notification_id": f"robot_time_change_{self.client.serial}"
                         }
                     )
             else:
@@ -3320,7 +3343,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                     {
                         "title": "Pool Robot Error",
                         "message": result.get("message", "Failed to reduce 15 minutes."),
-                        "notification_id": f"robot_error_{self.client._serial}"
+                        "notification_id": f"robot_error_{self.client.serial}"
                     }
                 )
 

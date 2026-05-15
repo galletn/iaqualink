@@ -196,7 +196,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Create coordinator with this client
     coordinator = AqualinkDataUpdateCoordinator(hass, client, SCAN_INTERVAL.total_seconds(), debug_mode=debug_mode)
-    coordinator._title = entry.title  # type: ignore  # Dynamic attribute used for display name
+    coordinator.title = entry.title
 
     # Initial refresh to get data
     await coordinator.async_config_entry_first_refresh()

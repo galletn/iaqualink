@@ -15,7 +15,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.iaqualink_robots.const import DOMAIN
+from custom_components.iaqualinkrobots.const import DOMAIN
 
 from tests.const import MOCK_ENTRY_DATA, MOCK_NAME, MOCK_SERIAL
 
@@ -99,7 +99,7 @@ CURRENT_VERSION = 3
 
 async def test_migrate_v1_to_current_rewrites_button_unique_ids(hass: HomeAssistant) -> None:
     """Legacy v1 entries get the full migration chain: button uids fixed AND api_key dropped."""
-    from custom_components.iaqualink_robots import async_migrate_entry
+    from custom_components.iaqualinkrobots import async_migrate_entry
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -137,7 +137,7 @@ async def test_migrate_v1_to_current_rewrites_button_unique_ids(hass: HomeAssist
 
 async def test_migrate_v2_to_v3_drops_api_key(hass: HomeAssistant) -> None:
     """A v2 entry (post-M12, pre-M17) just has api_key stripped."""
-    from custom_components.iaqualink_robots import async_migrate_entry
+    from custom_components.iaqualinkrobots import async_migrate_entry
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -159,7 +159,7 @@ async def test_migrate_v2_to_v3_drops_api_key(hass: HomeAssistant) -> None:
 
 async def test_migrate_idempotent(hass: HomeAssistant) -> None:
     """Running migration on an already-current entry is a no-op."""
-    from custom_components.iaqualink_robots import async_migrate_entry
+    from custom_components.iaqualinkrobots import async_migrate_entry
 
     current_data = {k: v for k, v in MOCK_ENTRY_DATA.items() if k != "api_key"}
     entry = MockConfigEntry(
@@ -190,7 +190,7 @@ async def test_migrate_v1_skips_existing_v2_shape_collision(hass: HomeAssistant)
     must NOT cause the migration to crash. The legacy entry is left in place
     with a warning so the user can resolve manually.
     """
-    from custom_components.iaqualink_robots import async_migrate_entry
+    from custom_components.iaqualinkrobots import async_migrate_entry
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -230,7 +230,7 @@ async def test_migrate_v1_leaves_non_button_entities_untouched(hass: HomeAssista
     """Sensor / vacuum / other domain entities must NOT be rewritten by the M12
     button migration, even if their unique_id happens to end with a command suffix.
     """
-    from custom_components.iaqualink_robots import async_migrate_entry
+    from custom_components.iaqualinkrobots import async_migrate_entry
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -262,7 +262,7 @@ async def test_migrate_v1_to_current_without_serial_is_safe(hass: HomeAssistant)
     the M12 rewrite, drops api_key (M17), bumps to current version, and the
     integration remains loadable.
     """
-    from custom_components.iaqualink_robots import async_migrate_entry
+    from custom_components.iaqualinkrobots import async_migrate_entry
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -286,7 +286,7 @@ async def test_migrate_returns_false_on_v1_failure(hass: HomeAssistant) -> None:
     advance to v2 (so HA retries the migration on next setup), and the
     function must return False rather than swallow the error.
     """
-    from custom_components.iaqualink_robots import async_migrate_entry
+    from custom_components.iaqualinkrobots import async_migrate_entry
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -327,7 +327,7 @@ async def test_migrate_rerun_after_full_chain_is_noop(hass: HomeAssistant) -> No
     re-write any registry entries (snapshot the registry's update count),
     and must not mutate `entry.data` further.
     """
-    from custom_components.iaqualink_robots import async_migrate_entry
+    from custom_components.iaqualinkrobots import async_migrate_entry
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -391,7 +391,7 @@ async def test_migrate_v1_without_serial_preserves_registry(hass: HomeAssistant)
     log a warning, skip the rewrite entirely, and the legacy entities must
     keep their original unique_ids.
     """
-    from custom_components.iaqualink_robots import async_migrate_entry
+    from custom_components.iaqualinkrobots import async_migrate_entry
 
     entry = MockConfigEntry(
         domain=DOMAIN,

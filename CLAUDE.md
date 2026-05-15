@@ -4,13 +4,13 @@ This file is for Claude Code sessions (and any other AI agents) picking up work 
 
 ## What this is
 
-Home Assistant custom integration for **iAqualink robotic pool cleaners** (Zodiac, Polaris, Aqua Products and rebrands). Domain: `iaqualinkRobots`. The main code lives in [`custom_components/iaqualink_robots/`](custom_components/iaqualink_robots/).
+Home Assistant custom integration for **iAqualink robotic pool cleaners** (Zodiac, Polaris, Aqua Products and rebrands). Domain: `iaqualinkRobots`. The main code lives in [`custom_components/iaqualink_robots/`](custom_components/iaqualinkrobots/).
 
-The user-facing entry point is the config flow in [`config_flow.py`](custom_components/iaqualink_robots/config_flow.py); the heavy lifting (cloud auth, websocket, per-device parsing) is in [`coordinator.py`](custom_components/iaqualink_robots/coordinator.py).
+The user-facing entry point is the config flow in [`config_flow.py`](custom_components/iaqualinkrobots/config_flow.py); the heavy lifting (cloud auth, websocket, per-device parsing) is in [`coordinator.py`](custom_components/iaqualinkrobots/coordinator.py).
 
 ## Device types — the most important gotcha
 
-The integration handles **5 distinct device families** with **different cloud encodings**. Mismatching them silently breaks fan-speed / cycle commands. The split lives in `coordinator.py::AqualinkClient._set_other_fan_speed` and the per-type branches in [`vacuum.py::IAquaLinkRobotVacuum`](custom_components/iaqualink_robots/vacuum.py):
+The integration handles **5 distinct device families** with **different cloud encodings**. Mismatching them silently breaks fan-speed / cycle commands. The split lives in `coordinator.py::AqualinkClient._set_other_fan_speed` and the per-type branches in [`vacuum.py::IAquaLinkRobotVacuum`](custom_components/iaqualinkrobots/vacuum.py):
 
 | `device_type` | Modes (`_fan_speed_list`) | Example models |
 |---|---|---|
@@ -38,7 +38,7 @@ CI (`.github/workflows/ci.yaml`) runs: hassfest (informational), flake8, mypy (c
 
 ## Polling cadence — do not slow it globally
 
-[`const.py`](custom_components/iaqualink_robots/const.py) sets `SCAN_INTERVAL = 3s`. This is deliberately fast so the **vacuum entity's state reflects remote-control button presses (forward/backward/rotate/stop) within a few seconds**. Slowing it globally is a UX regression.
+[`const.py`](custom_components/iaqualinkrobots/const.py) sets `SCAN_INTERVAL = 3s`. This is deliberately fast so the **vacuum entity's state reflects remote-control button presses (forward/backward/rotate/stop) within a few seconds**. Slowing it globally is a UX regression.
 
 When users complain about activity-log spam from frequently-changing sensors, the right fix is **per-sensor**, not global. See the `include_seconds_remaining` option (commit `30eb650`) as the pattern: an OptionsFlow-toggleable knob that gates whether `time_remaining_human` includes seconds, defaulted to historical behavior, reloads on toggle via `entry.add_update_listener`.
 

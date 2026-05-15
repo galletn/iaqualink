@@ -46,7 +46,7 @@ async def test_button_unique_id_uses_serial(
     hass: HomeAssistant, mock_client_and_coordinator, command, translation_key,
 ) -> None:
     """Every button unique_id must be `<serial>_<command>` — never derived from entry.title."""
-    from custom_components.iaqualink_robots.button import AqualinkRemoteButton
+    from custom_components.iaqualinkrobots.button import AqualinkRemoteButton
 
     coordinator, client = mock_client_and_coordinator
     button = AqualinkRemoteButton(coordinator, client, command, translation_key, "mdi:icon")
@@ -61,7 +61,7 @@ async def test_button_unique_id_stable_across_title_rename(
     hass: HomeAssistant, mock_client_and_coordinator,
 ) -> None:
     """Renaming the entry must NOT change the unique_id."""
-    from custom_components.iaqualink_robots.button import AqualinkRemoteButton
+    from custom_components.iaqualinkrobots.button import AqualinkRemoteButton
 
     coordinator, client = mock_client_and_coordinator
     b1 = AqualinkRemoteButton(coordinator, client, "forward", "remote_forward", "mdi:x")

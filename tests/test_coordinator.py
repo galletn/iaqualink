@@ -60,7 +60,7 @@ def coordinator_factory(hass: HomeAssistant):
         fetch_status_return: dict | None = None,
         last_data: dict | None = None,
     ):
-        from custom_components.iaqualink_robots.coordinator import (
+        from custom_components.iaqualinkrobots.coordinator import (
             AqualinkDataUpdateCoordinator,
         )
 

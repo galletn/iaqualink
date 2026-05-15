@@ -43,7 +43,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from custom_components.iaqualink_robots import _M12_BUTTON_COMMANDS
+from custom_components.iaqualinkrobots import _M12_BUTTON_COMMANDS
 
 BUTTON_PY = (
     Path(__file__).parent.parent

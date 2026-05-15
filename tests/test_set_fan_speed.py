@@ -30,7 +30,7 @@ def _build_client(device_type: str):
     dispatch are simple instance attributes. Bypassing `__init__` keeps the
     test focused on the dispatch logic under test.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualinkrobots.coordinator import AqualinkClient
 
     client = AqualinkClient.__new__(AqualinkClient)
     client._device_type = device_type

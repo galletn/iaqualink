@@ -1,0 +1,78 @@
+# Remote control services for VR and VortraX robots
+# These services are also available as button entities for easier UI access
+remote_forward:
+  target:
+    entity:
+      domain: vacuum
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+
+remote_backward:
+  target:
+    entity:
+      domain: vacuum
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+
+remote_rotate_left:
+  target:
+    entity:
+      domain: vacuum
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+
+remote_rotate_right:
+  target:
+    entity:
+      domain: vacuum
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+
+remote_stop:
+  target:
+    entity:
+      domain: vacuum
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+
+add_fifteen_minutes:
+  target:
+    entity:
+      domain: vacuum
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum
+
+reduce_fifteen_minutes:
+  target:
+    entity:
+      domain: vacuum
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain: vacuum

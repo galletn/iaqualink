@@ -32,7 +32,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 
-from custom_components.iaqualink_robots.coordinator import (
+from custom_components.iaqualinkrobots.coordinator import (
     AqualinkClient,
     AqualinkDataUpdateCoordinator,
     AuthFailedError,
@@ -447,7 +447,7 @@ def test_jwt_exp_warn_rate_limited(caplog) -> None:
     DEBUG. Stops a persistently-malformed Cognito response from flooding the
     operator log every hour.
     """
-    from custom_components.iaqualink_robots import coordinator as coord_mod
+    from custom_components.iaqualinkrobots import coordinator as coord_mod
 
     # Reset the module-level flag so this test is deterministic regardless
     # of test ordering — other tests may have already tripped the warn.

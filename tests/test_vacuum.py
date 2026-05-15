@@ -40,7 +40,7 @@ def _make_vacuum(device_type: str | None = None):
     `device_type` is None the helper skips the coordinator-update step, so
     the returned entity reflects `__init__`-time defaults only.
     """
-    from custom_components.iaqualink_robots.vacuum import IAquaLinkRobotVacuum
+    from custom_components.iaqualinkrobots.vacuum import IAquaLinkRobotVacuum
 
     coordinator = MagicMock()
     coordinator.data = None

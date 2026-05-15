@@ -13,8 +13,8 @@ import pytest
 from homeassistant import config_entries, data_entry_flow
 from homeassistant.core import HomeAssistant
 
-from custom_components.iaqualink_robots.const import DOMAIN
-from custom_components.iaqualink_robots.coordinator import AuthFailedError
+from custom_components.iaqualinkrobots.const import DOMAIN
+from custom_components.iaqualinkrobots.coordinator import AuthFailedError
 
 from tests.const import (
     MOCK_DEVICE_SECOND,

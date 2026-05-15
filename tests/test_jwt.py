@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from custom_components.iaqualink_robots.coordinator import (
+from custom_components.iaqualinkrobots.coordinator import (
     _TOKEN_EXP_SAFETY_MARGIN_S,
     _decode_jwt_exp,
     _resolve_token_expiry,
@@ -205,7 +205,7 @@ def test_resolve_token_expiry_falls_back_and_warns(caplog) -> None:
     # point the fallback fires at DEBUG instead of WARNING and this test's
     # caplog comes back empty. Reset the flag so the very-first-warning
     # branch fires regardless of test order.
-    from custom_components.iaqualink_robots import coordinator as coord_mod
+    from custom_components.iaqualinkrobots import coordinator as coord_mod
     coord_mod._JWT_EXP_FALLBACK_WARNED = False
 
     caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.coordinator")

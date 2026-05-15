@@ -1,6 +1,6 @@
 """Constants shared across the test suite."""
 
-from custom_components.iaqualink_robots.const import DOMAIN as REAL_DOMAIN
+from custom_components.iaqualinkrobots.const import DOMAIN as REAL_DOMAIN
 
 # Re-export so tests don't import from the integration directly for this.
 DOMAIN = REAL_DOMAIN

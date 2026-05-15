@@ -19,6 +19,17 @@ API_KEY: Final = "EOOEMOW4YR6QNB07"
 SCAN_INTERVAL: Final = timedelta(seconds=3)  # Balanced update interval for efficiency
 # Real-time websocket listener provides instant updates, moderate polling backup
 
+# Maximum age (seconds) of a `_pending_stop_reset` snapshot before it is
+# discarded as stale (story H6). Pre-H6 the reset was applied on the very
+# next poll regardless of elapsed time, which meant a user who restarted
+# cleaning between issuing stop and the next poll would see their live
+# "cleaning" state silently overwritten back to "idle". 10 s is well above
+# typical cloud roundtrips (≈1 s on the websocket path, ≤3 s on REST) but
+# short enough that a reset queued before a long disconnect cannot zombie-
+# apply minutes later. Tune in soak via this constant rather than the
+# inline magic-number.
+PENDING_STOP_RESET_MAX_AGE_SECONDS: Final = 10
+
 # User-toggleable option keys (configurable via config flow + options flow).
 # Whether the `time_remaining_human` sensor includes seconds. Default True
 # preserves the historical behavior; users complaining about activity-log

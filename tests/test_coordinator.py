@@ -265,3 +265,223 @@ def test_resolve_cycle_duration_empty_durations_returns_zero() -> None:
     client = _build_client_for_resolve()
     assert client._resolve_cycle_duration({}, 0) == 0
     assert client._resolve_cycle_duration({"a": 30}, 3) == 0  # in-range cycle, undersized dict
+
+
+# ----------------------------------------------------------------------------
+# Story H6 — pending-stop-reset state-aware apply + max-age expiry
+# ----------------------------------------------------------------------------
+#
+# Pre-H6 the values dict queued by `stop_cleaning` (`_pending_stop_reset`) was
+# applied unconditionally on the next `fetch_status`, regardless of how much
+# time had elapsed or what the cloud actually reported. Two failure modes:
+#
+#   1) A user who pressed stop and then immediately restarted cleaning would
+#      see the live `activity == "cleaning"` from the cloud silently
+#      overwritten back to `"idle"` — the UI lied about what the robot was
+#      doing.
+#   2) If a poll never landed (long disconnect, network drop), the next
+#      successful poll — possibly minutes later — applied the stale reset
+#      and clobbered whatever the robot was doing by then.
+#
+# H6 introduces `_pending_stop_reset_at` as a paired timestamp set at the
+# same site that populates the values dict. The new helper
+# `AqualinkClient._apply_pending_stop_reset` consults the pair and either
+# applies (cloud=idle, age within window), discards as stale (age >
+# PENDING_STOP_RESET_MAX_AGE_SECONDS), or discards as superseded (cloud
+# already moved past idle). In every branch both halves of the flag pair
+# are cleared together — the reset is single-shot.
+
+
+_PENDING_STOP_RESET_VALUES = {
+    "estimated_end_time": None,
+    "time_remaining": 0,
+    "time_remaining_human": "0 Hour(s) 0 Minute(s) 0 Second(s)",
+    "cycle_start_time": None,
+    "activity": "idle",
+}
+
+
+def _build_client_for_pending_stop_reset() -> object:
+    """AqualinkClient shell for testing `_apply_pending_stop_reset`.
+
+    Bypasses `__init__` (which reaches into aiohttp + asyncio.Lock) — the
+    helper under test only reads `_pending_stop_reset`, `_pending_stop_reset_at`,
+    the imported constant `PENDING_STOP_RESET_MAX_AGE_SECONDS`, and
+    `dt_util.utcnow()`. Mirrors `_build_client_for_resolve` above.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    return AqualinkClient.__new__(AqualinkClient)
+
+
+def test_pending_stop_reset_applied_when_cloud_reports_idle_within_window() -> None:
+    """AC3 happy path. Cloud already moved to idle within the max-age window;
+    the queued reset values overlay onto `data` and both halves of the flag
+    pair clear so the next poll is a no-op.
+    """
+    import datetime as dt
+
+    from homeassistant.util import dt as dt_util
+
+    client = _build_client_for_pending_stop_reset()
+    client._pending_stop_reset = dict(_PENDING_STOP_RESET_VALUES)
+    client._pending_stop_reset_at = dt_util.utcnow() - dt.timedelta(seconds=2)
+    data = {"activity": "idle", "model": "VRX iQ+", "fan_speed": "floor_only"}
+
+    result = client._apply_pending_stop_reset(data)
+
+    # Reset values applied.
+    assert result["activity"] == "idle"
+    assert result["time_remaining"] == 0
+    assert result["estimated_end_time"] is None
+    assert result["cycle_start_time"] is None
+    # Existing keys not touched.
+    assert result["model"] == "VRX iQ+"
+    assert result["fan_speed"] == "floor_only"
+    # Flag pair cleared (single-shot).
+    assert client._pending_stop_reset is None
+    assert client._pending_stop_reset_at is None
+
+
+def test_pending_stop_reset_discarded_when_cloud_reports_cleaning() -> None:
+    """AC1 + AC4: user-restarts-between-stop-and-poll path.
+
+    Cloud reports `activity == "cleaning"` (the user already restarted).
+    The reset must NOT be applied — overwriting cleaning back to idle would
+    lie to the UI. The flag pair clears anyway so a second restart cycle
+    doesn't see a stale reset still queued.
+    """
+    import datetime as dt
+
+    from homeassistant.util import dt as dt_util
+
+    client = _build_client_for_pending_stop_reset()
+    client._pending_stop_reset = dict(_PENDING_STOP_RESET_VALUES)
+    client._pending_stop_reset_at = dt_util.utcnow() - dt.timedelta(seconds=2)
+    data = {"activity": "cleaning", "model": "VRX iQ+", "fan_speed": "floor_only"}
+
+    result = client._apply_pending_stop_reset(data)
+
+    # Live state preserved.
+    assert result["activity"] == "cleaning"
+    # Reset's nulls did NOT overwrite (no time_remaining key was added).
+    assert "time_remaining" not in result
+    # Existing keys untouched.
+    assert result["model"] == "VRX iQ+"
+    # Flag pair cleared (single-shot — superseded resets don't zombie back).
+    assert client._pending_stop_reset is None
+    assert client._pending_stop_reset_at is None
+
+
+def test_pending_stop_reset_expires_after_max_age() -> None:
+    """AC2: a reset older than `PENDING_STOP_RESET_MAX_AGE_SECONDS` is
+    discarded without applying.
+
+    Mocks `dt_util.utcnow` inside the coordinator module to advance the
+    clock past the threshold without actually sleeping. Uses
+    `max_age + 1 s` to avoid inclusive-vs-exclusive boundary ambiguity.
+    """
+    import datetime as dt
+    from unittest.mock import patch
+
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.iaqualink_robots.const import (
+        PENDING_STOP_RESET_MAX_AGE_SECONDS,
+    )
+
+    client = _build_client_for_pending_stop_reset()
+    set_at = dt_util.utcnow()
+    client._pending_stop_reset = dict(_PENDING_STOP_RESET_VALUES)
+    client._pending_stop_reset_at = set_at
+    data = {"activity": "idle", "model": "VRX iQ+"}
+
+    # Pretend the next poll lands `max_age + 1` seconds after stop.
+    advanced = set_at + dt.timedelta(seconds=PENDING_STOP_RESET_MAX_AGE_SECONDS + 1)
+    with patch(
+        "custom_components.iaqualink_robots.coordinator.dt_util.utcnow",
+        return_value=advanced,
+    ):
+        result = client._apply_pending_stop_reset(data)
+
+    # Reset NOT applied — data untouched (no time_remaining key added).
+    assert result == {"activity": "idle", "model": "VRX iQ+"}
+    # Flag pair cleared so it doesn't re-trigger on a subsequent poll.
+    assert client._pending_stop_reset is None
+    assert client._pending_stop_reset_at is None
+
+
+def test_pending_stop_reset_at_boundary_just_below_max_age_applies() -> None:
+    """Boundary check: a reset whose age sits at `max_age - 0.5 s` still
+    applies. Pins the inclusive side of the threshold.
+    """
+    import datetime as dt
+    from unittest.mock import patch
+
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.iaqualink_robots.const import (
+        PENDING_STOP_RESET_MAX_AGE_SECONDS,
+    )
+
+    client = _build_client_for_pending_stop_reset()
+    set_at = dt_util.utcnow()
+    client._pending_stop_reset = dict(_PENDING_STOP_RESET_VALUES)
+    client._pending_stop_reset_at = set_at
+    data = {"activity": "idle", "model": "VRX iQ+"}
+
+    advanced = set_at + dt.timedelta(
+        seconds=PENDING_STOP_RESET_MAX_AGE_SECONDS - 0.5
+    )
+    with patch(
+        "custom_components.iaqualink_robots.coordinator.dt_util.utcnow",
+        return_value=advanced,
+    ):
+        result = client._apply_pending_stop_reset(data)
+
+    # Just-below threshold: reset DOES apply.
+    assert result["time_remaining"] == 0
+    assert result["cycle_start_time"] is None
+    assert client._pending_stop_reset is None
+    assert client._pending_stop_reset_at is None
+
+
+def test_pending_stop_reset_no_op_when_flag_pair_is_none() -> None:
+    """No reset queued → helper is a no-op. Returns `data` unchanged."""
+    client = _build_client_for_pending_stop_reset()
+    client._pending_stop_reset = None
+    client._pending_stop_reset_at = None
+    data = {"activity": "cleaning", "model": "VRX iQ+"}
+
+    result = client._apply_pending_stop_reset(data)
+
+    assert result == data
+    assert client._pending_stop_reset is None
+    assert client._pending_stop_reset_at is None
+
+
+def test_pending_stop_reset_no_op_when_timestamp_missing() -> None:
+    """Defensive: a half-set state (values without timestamp) bails cleanly.
+
+    The invariant is "both halves set or both `None`" — both
+    `stop_cleaning` paths (vr/cyclobat/cyclonext via `_set_other_*` and
+    i2d via `_set_i2d_*`) maintain it. If a future bug breaks it, the
+    helper treats the half-set state as no-op (rather than crashing on
+    `None - datetime` arithmetic).
+    """
+    client = _build_client_for_pending_stop_reset()
+    client._pending_stop_reset = dict(_PENDING_STOP_RESET_VALUES)
+    client._pending_stop_reset_at = None  # invariant violation
+    data = {"activity": "cleaning", "model": "VRX iQ+"}
+
+    result = client._apply_pending_stop_reset(data)
+
+    # Reset values NOT applied; data passes through untouched.
+    assert result == data
+
+
+# Story H6 also widens the existing PR #94 / natural-completion tests above
+# by guaranteeing `_pending_stop_reset` stays a dict-or-None (the truthiness
+# the detector relies on is unchanged). The `_pending_stop_reset_at`
+# timestamp is invisible to that detector — it's a private contract between
+# `stop_cleaning` and `_apply_pending_stop_reset`.

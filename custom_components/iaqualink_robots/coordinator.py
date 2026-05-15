@@ -19,7 +19,8 @@ from .const import (
     URL_LOGIN,
     URL_GET_DEVICES,
     URL_WS,
-    URL_GET_DEVICE_FEATURES
+    URL_GET_DEVICE_FEATURES,
+    PENDING_STOP_RESET_MAX_AGE_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -147,6 +148,14 @@ class AqualinkClient:
         self._model_fetch_attempts = 0  # Track model fetch attempts
         self._model_last_attempt = None  # Track last model fetch attempt time
         self._pending_stop_reset = None  # Store reset values from stop command
+        # H6: paired with `_pending_stop_reset`. Set to ``dt_util.utcnow()`` at
+        # the same site that populates the reset dict; consulted in
+        # ``fetch_status`` to expire stale resets (>10 s old) and to discard
+        # the reset if the cloud has already moved past idle (the
+        # "user restarts between stop and poll" race). Cleared whenever
+        # ``_pending_stop_reset`` is cleared; the two are always set / both
+        # ``None`` together.
+        self._pending_stop_reset_at = None
         self._remote_control_active = False  # Track if we're in remote control mode
         self._activity = VacuumActivity.IDLE  # Default activity state
         self._hass = None  # Will be set by coordinator
@@ -479,12 +488,63 @@ class AqualinkClient:
                 self._model = await self._get_device_model()
             data["model"] = str(self._model)
 
-        # Apply any pending reset values from stop command
-        if self._pending_stop_reset:
+        # Apply any pending reset values from a manual stop command (H6).
+        self._apply_pending_stop_reset(data)
+
+        return data
+
+    def _apply_pending_stop_reset(self, data: dict) -> dict:
+        """Apply / discard a pending stop-reset based on age and live cloud state.
+
+        Returns ``data`` (possibly mutated). Always clears
+        ``_pending_stop_reset`` and ``_pending_stop_reset_at`` together; the
+        reset is single-shot in every branch.
+
+        Pre-H6 the reset was applied unconditionally on the next poll,
+        regardless of how much time had passed or what the cloud reported.
+        Two failure modes that H6 closes:
+
+          1) **User restarts cleaning between stop and the next poll.**
+             The cloud already reports ``activity == "cleaning"``; pre-H6
+             we still applied the reset and overwrote it back to ``"idle"``,
+             silently lying to the UI about what the robot was doing.
+
+          2) **Stale zombie reset.** If a poll never lands (long
+             disconnect, network drop), the next successful poll — possibly
+             minutes later — applied the reset and clobbered whatever the
+             robot was doing by then.
+
+        H6 guards (1) with a state-awareness check against
+        ``data["activity"]`` and (2) with a timestamp paired against
+        ``PENDING_STOP_RESET_MAX_AGE_SECONDS``.
+
+        Extracted into a method so the logic is directly unit-testable
+        without spinning up the full ``fetch_status`` cloud round-trip
+        (see ``tests/test_coordinator.py`` — apply-pending-stop-reset block).
+        """
+        if not self._pending_stop_reset or not self._pending_stop_reset_at:
+            return data
+
+        age_seconds = (dt_util.utcnow() - self._pending_stop_reset_at).total_seconds()
+        live_activity = data.get("activity")
+
+        if age_seconds > PENDING_STOP_RESET_MAX_AGE_SECONDS:
+            _LOGGER.debug(
+                "Discarding pending stop reset (age %.1fs > %ds; never observed an idle poll)",
+                age_seconds,
+                PENDING_STOP_RESET_MAX_AGE_SECONDS,
+            )
+        elif live_activity != "idle":
+            _LOGGER.debug(
+                "Discarding pending stop reset: cloud reports activity=%r (user restarted before reset applied)",
+                live_activity,
+            )
+        else:
             _LOGGER.debug("Applying pending stop reset values: %s", self._pending_stop_reset)
             data.update(self._pending_stop_reset)
-            self._pending_stop_reset = None  # Clear after applying
 
+        self._pending_stop_reset = None
+        self._pending_stop_reset_at = None
         return data
 
     async def _authenticate(self, force: bool = False):
@@ -2313,8 +2373,13 @@ class AqualinkClient:
             "activity": "idle"  # Also set activity to idle to ensure proper state
         }
 
-        # Store reset values to be applied in next status fetch
+        # Store reset values to be applied in next status fetch.
+        # H6: also stamp ``_pending_stop_reset_at`` so ``fetch_status`` can
+        # expire stale resets (>``PENDING_STOP_RESET_MAX_AGE_SECONDS`` old)
+        # and discard the reset entirely if the cloud has already moved
+        # past idle by the time the next poll lands.
         self._pending_stop_reset = reset_values.copy()
+        self._pending_stop_reset_at = dt_util.utcnow()
 
         if request:
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)

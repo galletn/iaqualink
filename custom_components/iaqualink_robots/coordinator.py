@@ -3153,41 +3153,31 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     # Automatic retry logic and circuit breaker patterns prevent device unavailability
 
     async def _handle_realtime_update(self):
-        """Handle real-time updates from websocket listener with immediate, unthrottled refresh."""
+        """Handle real-time updates from the websocket listener (story H10).
+
+        Pre-H10 this routed through a custom ``_immediate_refresh`` that:
+          - bypassed the coordinator's update lock by calling
+            ``_async_update_data()`` directly,
+          - manually iterated HA-private ``self._listeners`` to push entity
+            updates — a private-API reach-through that risked breakage on
+            HA minor releases that change the internal listener data
+            structure,
+          - then **also** called ``async_update_listeners()`` (the public
+            equivalent) two lines below, so the manual loop was redundant
+            with the public call.
+
+        H10 deletes that block in favour of ``async_request_refresh()`` —
+        HA's documented API for "fetch fresh data right now". It goes
+        through the coordinator's lock, fires the listener notification
+        via the public ``async_update_listeners`` path, and honours the
+        default ~0.3 s debouncer which collapses rapid websocket-event
+        bursts into a single update (a desirable property the old loop
+        didn't have).
+        """
         try:
-            # Force immediate data update bypassing normal coordinator throttling
-            # This provides instant responsiveness matching the websocket monitor
-            await self._immediate_refresh()
-            # Debug logging removed to prevent logbook flooding with frequent real-time updates
+            await self.async_request_refresh()
         except Exception as e:
             _LOGGER.debug(f"Error handling real-time update: {e}")
-
-    async def _immediate_refresh(self):
-        """Perform immediate data refresh bypassing ALL coordinator throttling for real-time updates."""
-        try:
-            # Direct data update without any throttling delays
-            new_data = await self._async_update_data()
-            if new_data:
-                # Update data immediately
-                self.data = new_data
-
-                # Force immediate entity state updates bypassing Home Assistant throttling
-                # This ensures instant responsiveness matching the app experience
-                for update_callback in self._listeners:
-                    try:
-                        # Call each entity's update callback immediately
-                        if asyncio.iscoroutinefunction(update_callback):
-                            asyncio.create_task(update_callback())
-                        else:
-                            update_callback()
-                    except Exception as e:
-                        _LOGGER.debug(f"Error in immediate entity callback: {e}")
-
-                # Also trigger the normal update mechanism as backup
-                self.async_update_listeners()
-                # Debug logging removed to prevent logbook flooding with frequent updates
-        except Exception as e:
-            _LOGGER.debug(f"Error in immediate refresh: {e}")
 
     async def _start_websocket_listener(self):
         """Start the websocket listener task for real-time updates."""

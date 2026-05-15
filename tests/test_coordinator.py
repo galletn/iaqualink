@@ -485,3 +485,119 @@ def test_pending_stop_reset_no_op_when_timestamp_missing() -> None:
 # the detector relies on is unchanged). The `_pending_stop_reset_at`
 # timestamp is invisible to that detector — it's a private contract between
 # `stop_cleaning` and `_apply_pending_stop_reset`.
+
+
+# ----------------------------------------------------------------------------
+# Story H10 — delete _immediate_refresh; use async_request_refresh
+# ----------------------------------------------------------------------------
+#
+# Pre-H10 the websocket realtime-update callback routed through a custom
+# `_immediate_refresh` that:
+#   - bypassed the coordinator's update lock by calling `_async_update_data()`
+#     directly,
+#   - manually iterated HA-private `self._listeners` (a reach-through into
+#     the DataUpdateCoordinator base class's internal listener registry),
+#   - then *also* called `async_update_listeners()` — the public equivalent
+#     — two lines below, so the manual loop was redundant.
+#
+# H10 deletes the custom method in favour of `async_request_refresh()`, HA's
+# documented API for the same job. The behavioural change is positive: the
+# default ~0.3 s debouncer collapses rapid websocket-event bursts into a
+# single refresh, which the old manual loop did not.
+
+
+def test_immediate_refresh_method_removed() -> None:
+    """AC #1: `_immediate_refresh` is deleted from the coordinator class.
+
+    Asserted at the class level rather than via instance to avoid spinning
+    up a real ``AqualinkDataUpdateCoordinator``; the method either exists
+    on the class (regression) or it doesn't (post-H10 state).
+    """
+    from custom_components.iaqualink_robots.coordinator import (
+        AqualinkDataUpdateCoordinator,
+    )
+
+    assert not hasattr(AqualinkDataUpdateCoordinator, "_immediate_refresh"), (
+        "`_immediate_refresh` should be removed in H10; "
+        "real-time updates now go through `async_request_refresh()` (HA's "
+        "public API) which honours the coordinator lock and uses the default "
+        "debouncer to collapse rapid event bursts."
+    )
+
+
+def test_no_self_listeners_attribute_access_in_package() -> None:
+    """AC #3: no `self._listeners` reach-through anywhere in the package.
+
+    `_listeners` is the HA `DataUpdateCoordinator` base class's internal
+    listener registry — private API that may change shape on any HA minor
+    release. The public way to notify listeners is `async_update_listeners()`.
+
+    Uses AST traversal so docstrings or block comments that *mention* the
+    name (e.g. the historical note in `_handle_realtime_update`) are
+    correctly ignored — only actual ``self._listeners`` attribute access
+    counts as a reach-through.
+    """
+    import ast
+    from pathlib import Path
+
+    pkg = Path(__file__).parent.parent / "custom_components" / "iaqualink_robots"
+    offenders: list[str] = []
+    for path in sorted(pkg.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "_listeners"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "self"
+            ):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, (
+        "`self._listeners` reach-through detected. Use the public "
+        "`async_update_listeners()` API (called automatically by "
+        "`async_request_refresh()`) instead:\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+async def test_handle_realtime_update_routes_through_async_request_refresh(
+    coordinator_factory,
+) -> None:
+    """AC #2 + AC #4: the realtime callback now calls
+    ``async_request_refresh`` instead of the deleted ``_immediate_refresh``.
+
+    Patches the coordinator's `async_request_refresh` to a tracker mock so
+    the test doesn't actually drive the full update loop; the behavioural
+    contract under test is "the realtime trigger fires a refresh request",
+    not "the refresh succeeds".
+    """
+    from unittest.mock import AsyncMock
+
+    coord, _client = coordinator_factory(
+        last_data={"activity": "cleaning"},
+        fetch_status_return={"activity": "idle"},
+    )
+    coord.async_request_refresh = AsyncMock()
+
+    await coord._handle_realtime_update()
+
+    coord.async_request_refresh.assert_awaited_once()
+
+
+async def test_handle_realtime_update_swallows_refresh_failure(
+    coordinator_factory,
+) -> None:
+    """The pre-H10 method wrapped its body in try/except so a refresh
+    failure didn't propagate up the websocket listener task and cause it
+    to die. H10 keeps that contract — `async_request_refresh` failures
+    must be logged + swallowed, not raised.
+    """
+    from unittest.mock import AsyncMock
+
+    coord, _client = coordinator_factory(last_data={"activity": "idle"})
+    coord.async_request_refresh = AsyncMock(side_effect=RuntimeError("simulated"))
+
+    # Must not raise.
+    await coord._handle_realtime_update()
+
+    coord.async_request_refresh.assert_awaited_once()

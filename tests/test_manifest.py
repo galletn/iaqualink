@@ -8,6 +8,7 @@ before those story PRs land.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -27,12 +28,38 @@ def test_manifest_has_required_fields(manifest_data: dict) -> None:
     assert not missing, f"manifest.json is missing required keys: {missing}"
 
 
+# SemVer 2.0 grammar excluding build metadata (the ``+<build>`` suffix). HACS
+# reads the pre-release flag from the GitHub release, but the manifest itself
+# follows SemVer so HA's device-card "version" display surfaces a sensible
+# ``X.Y.Z`` or ``X.Y.Z-beta.N`` string. Build metadata is omitted from the
+# grammar because no current release uses it — extend the regex if that
+# changes.
+_SEMVER_RE = re.compile(
+    r"^"
+    r"(?P<major>0|[1-9]\d*)\."
+    r"(?P<minor>0|[1-9]\d*)\."
+    r"(?P<patch>0|[1-9]\d*)"
+    r"(?:-(?P<pre>"
+    r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*"
+    r"))?"
+    r"$"
+)
+
+
 def test_manifest_version_is_semver(manifest_data: dict) -> None:
-    """Version string must parse as `X.Y.Z`."""
-    parts = manifest_data["version"].split(".")
-    assert len(parts) == 3, f"version must be X.Y.Z, got {manifest_data['version']!r}"
-    for part in parts:
-        assert part.isdigit(), f"version part {part!r} is not numeric"
+    """Version string must parse as SemVer 2.0: ``X.Y.Z[-pre[.id…]]``.
+
+    Pre-release suffixes (e.g. ``3.0.0-beta.1``) are accepted: the project
+    cuts pre-release builds for beta testing (HACS's "Show beta versions"
+    toggle gates them off the default channel). Plain ``X.Y.Z`` continues
+    to pass; the test catches malformed strings like ``"3.0"``, ``"3.0.0.1"``,
+    or trailing dashes from copy-paste accidents.
+    """
+    version = manifest_data["version"]
+    assert _SEMVER_RE.match(version), (
+        f"version must be SemVer 2.0 (X.Y.Z[-pre]), got {version!r}"
+    )
 
 
 @pytest.mark.xfail(

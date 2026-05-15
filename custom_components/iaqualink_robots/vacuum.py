@@ -70,19 +70,25 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     # Use the device serial number as part of the unique ID
     serial_number = entry.data.get("serial_number", client.robot_id)
-    device_name = entry.data.get("name", entry.title)
 
-    vacuum = IAquaLinkRobotVacuum(coordinator, client, device_name, serial_number, hass)
+    vacuum = IAquaLinkRobotVacuum(coordinator, client, serial_number, hass)
     async_add_entities([vacuum], True)
 
 
 class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], StateVacuumEntity):
     """Represents an iaqualink_robots vacuum."""
 
-    def __init__(self, coordinator: AqualinkDataUpdateCoordinator, client, device_name: str, serial_number: str, hass):
+    # P11: HA 2024+ entity-naming. The vacuum entity is the primary entity for
+    # the device — `_attr_name = None` with `_attr_has_entity_name = True` makes
+    # HA render the friendly name as just the device-registry name (the user's
+    # typed entry title) instead of "<device> <legacy-name-property>". Sensors
+    # and buttons compose as "<device> <translated-suffix>". Closes #79.
+    _attr_has_entity_name = True
+    _attr_name = None
+
+    def __init__(self, coordinator: AqualinkDataUpdateCoordinator, client, serial_number: str, hass):
         """Initialize the vacuum."""
         super().__init__(coordinator)
-        self._name = device_name
         self._serial_number = serial_number
         self._attributes: Dict[str, Any] = {}
         self._activity = VacuumActivity.IDLE
@@ -92,9 +98,6 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
         self._fan_speed_list: List[str] = ["floor_only", "floor_and_walls"]
         self._fan_speed = self._fan_speed_list[0]
         self._status: Optional[str] = None
-
-        # Set translation key for fan speed options
-        self._attr_translation_key = "fan_speed"
 
     def _handle_coordinator_update(self):
         """Handle updated data from the coordinator."""
@@ -258,11 +261,6 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
         display_list = [english_fallback.get(speed, speed) for speed in self._fan_speed_list]
         _LOGGER.debug(f"Vacuum fan_speed_list: {self._fan_speed_list} -> {display_list}")
         return display_list
-
-    @property
-    def name(self) -> str:
-        """Return the name of the vacuum."""
-        return self._name
 
     @property
     def should_poll(self) -> bool:

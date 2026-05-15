@@ -228,12 +228,14 @@ def test_all_three_entity_platforms_share_device_identifiers() -> None:
     sensor.coordinator = coord
     sensor.client = client
 
-    # IAquaLinkRobotVacuum.__init__ takes (coordinator, client, device_name, serial_number, hass).
+    # IAquaLinkRobotVacuum.__init__ takes (coordinator, client, serial_number, hass)
+    # post-P11 (the legacy `device_name` parameter is gone — entity name now
+    # composes from the device-registry name via `_attr_name = None` +
+    # `_attr_has_entity_name = True`).
     vacuum = IAquaLinkRobotVacuum.__new__(IAquaLinkRobotVacuum)
     vacuum.coordinator = coord  # type: ignore[attr-defined]
     vacuum._client = client
     vacuum._serial_number = "SHARED-SERIAL-001"
-    vacuum._name = "Backyard Robot"
 
     button_ids = button.device_info["identifiers"]  # type: ignore[index]
     sensor_ids = sensor.device_info["identifiers"]

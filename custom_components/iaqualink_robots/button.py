@@ -42,6 +42,17 @@ async def async_setup_entry(
 class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
     """Button entity for remote control commands."""
 
+    # P11: HA 2024+ entity-naming. With these two class attributes plus
+    # `_attr_translation_key` set in __init__, HA looks up the localized
+    # button name at `entity.button.<translation_key>.name` from the
+    # translations files and composes the friendly name as
+    # `<device-name> <localized-button-name>`. All 9 locales already carry
+    # native translations under `entity.button.*` (they were dead before
+    # P11 because the translation_key assignment was commented out and a
+    # hardcoded English `name` property took precedence). Closes #79 for
+    # the button half of the user complaint.
+    _attr_has_entity_name = True
+
     def __init__(self, coordinator: AqualinkDataUpdateCoordinator, client, command: str, translation_key: str, icon: str):
         """Initialize the button."""
         super().__init__(coordinator)
@@ -56,39 +67,14 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         self._attr_unique_id = f"{client.serial}_{command}"
         self._attr_should_poll = False
 
-        # Set proper button names - store the name to prevent override
-        self._button_name = self._get_button_name(translation_key)
-
-        # Don't set translation_key if we want custom names to persist
-        # self._attr_translation_key = translation_key
+        # P11: route the friendly name through HA's translation system instead
+        # of the legacy hardcoded-English `name` property.
+        self._attr_translation_key = translation_key
 
     @property
     def device_info(self):
         """Defer to the shared device-registry hook so all platforms group together."""
         return build_device_info(self.coordinator)
-
-    @property
-    def name(self) -> str:
-        """Return the name of the button."""
-        return self._button_name
-
-    @property
-    def has_entity_name(self) -> bool:
-        """Return True if entity has a name."""
-        return True
-
-    def _get_button_name(self, translation_key: str) -> str:
-        """Get the proper button name based on translation key."""
-        name_map = {
-            "remote_forward": "Remote Forward",
-            "remote_backward": "Remote Backward",
-            "remote_rotate_left": "Remote Rotate Left",
-            "remote_rotate_right": "Remote Rotate Right",
-            "remote_stop": "Remote Stop",
-            "add_fifteen_minutes": "Add 15 Minutes",
-            "reduce_fifteen_minutes": "Reduce 15 Minutes"
-        }
-        return name_map.get(translation_key, translation_key.replace("_", " ").title())
 
     @property
     def available(self):

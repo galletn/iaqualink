@@ -51,7 +51,10 @@ def _make_vacuum(device_type: str | None = None):
     # the super().__init__ call. The fan-speed-list logic doesn't depend on it.
     vacuum = IAquaLinkRobotVacuum.__new__(IAquaLinkRobotVacuum)
     # Minimal field set required for _handle_coordinator_update / properties.
-    vacuum._name = "Test"
+    # P11: dropped the legacy `_name` attribute and the no-op
+    # `_attr_translation_key = "fan_speed"` — the vacuum entity now uses
+    # `_attr_has_entity_name = True` + `_attr_name = None` (class attrs)
+    # so the friendly name composes from the device-registry name.
     vacuum._serial_number = "TEST123"
     vacuum._attributes = {}
     vacuum._client = client
@@ -59,7 +62,6 @@ def _make_vacuum(device_type: str | None = None):
     vacuum._fan_speed_list = ["floor_only", "floor_and_walls"]
     vacuum._fan_speed = "floor_only"
     vacuum._status = None
-    vacuum._attr_translation_key = "fan_speed"
     # CoordinatorEntity attributes accessed by _handle_coordinator_update.
     vacuum.coordinator = coordinator
     vacuum.async_write_ha_state = MagicMock()

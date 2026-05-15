@@ -11,7 +11,7 @@ from homeassistant.components.vacuum import (
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import AqualinkDataUpdateCoordinator
-from .const import VERSION, DOMAIN
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 ROBOT_FEATURES = {
@@ -217,14 +217,8 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
     @property
     def device_info(self) -> Dict[str, Any]:
         """Return device information about this entity."""
-        data = self.coordinator.data or {}
-        return {
-            "identifiers": {(DOMAIN, self._serial_number)},
-            "name": self._name,
-            "manufacturer": "iaqualink",
-            "model": data.get("model", "Unknown"),
-            "sw_version": data.get("sw_version", VERSION),
-        }
+        from .device import build_device_info
+        return build_device_info(self.coordinator)
 
     @property
     def activity(self) -> VacuumActivity:

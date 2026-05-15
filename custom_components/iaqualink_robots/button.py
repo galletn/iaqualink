@@ -61,13 +61,11 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         # Don't set translation_key if we want custom names to persist
         # self._attr_translation_key = translation_key
 
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, client.robot_id)},
-            "name": client.robot_name,
-            "manufacturer": "Zodiac",
-            "model": getattr(client, '_model', 'Unknown'),
-            "sw_version": "1.0",
-        }
+    @property
+    def device_info(self):
+        """Defer to the shared device-registry hook so all platforms group together."""
+        from .device import build_device_info
+        return build_device_info(self.coordinator)
 
     @property
     def name(self) -> str:

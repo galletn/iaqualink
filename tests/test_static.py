@@ -49,7 +49,7 @@ _CLIENT_PRIVATE_READ = re.compile(
         (?:[A-Za-z_]\w*\.)*             # optional dotted prefix (e.g. ``self.``)
         _?client                        # literal ``client`` or ``_client``
         \._                             # dot + underscore (private attr)
-        (serial|device_type)\b          # captured attr name
+        (serial|device_type|model)\b    # captured attr name (model added in P9)
     """,
     re.VERBOSE,
 )
@@ -62,7 +62,7 @@ _CLIENT_PRIVATE_READ = re.compile(
 _CLIENT_GETATTR_PRIVATE = re.compile(
     r"""getattr\(\s*
         (?:[A-Za-z_]\w*\.)*_?client\s*,\s*
-        ["']_(serial|device_type)["']
+        ["']_(serial|device_type|model)["']
     """,
     re.VERBOSE,
 )
@@ -125,7 +125,9 @@ def test_no_external_reach_through_to_client_private_serial_or_device_type() -> 
     assert not hits, (
         "Private reach-through detected. Replace ``client._serial`` / "
         "``client._device_type`` reads with the public ``client.serial`` / "
-        "``client.device_type`` properties (story M15):\n"
+        "``client.device_type`` properties (story M15); replace ``client._model`` "
+        "reads with ``coordinator.data.get('model')`` (story P9, where "
+        "``device.build_device_info`` centralises the live-model lookup):\n"
         + "\n".join(f"  {p.name}:{n}: {line}" for p, n, line in hits)
     )
 

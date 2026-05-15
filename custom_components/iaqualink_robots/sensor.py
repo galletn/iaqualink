@@ -220,18 +220,5 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self):
-        # Safely get model from coordinator data
-        model = "Unknown"
-        if self.coordinator.data:
-            model = self.coordinator.data.get("model", "Unknown")
-
-        return {
-            "identifiers": {(DOMAIN, self.client.robot_id)},
-            "name": (
-                self.coordinator.title
-                if self.coordinator.title is not None
-                else self.client.robot_id
-            ),
-            "manufacturer": "Zodiac",
-            "model": model,
-        }
+        from .device import build_device_info
+        return build_device_info(self.coordinator)

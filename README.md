@@ -1,5 +1,11 @@
 # iAqualink Robots Integration for Home Assistant
 
+![GitHub Repo stars](https://img.shields.io/github/stars/galletn/iaqualink?style=for-the-badge&color=%2318bcf2)
+![Github Repo issues](https://img.shields.io/github/issues/galletn/iaqualink?style=for-the-badge&color=%2318bcf2)
+![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge)
+![GitHub Release Date](https://img.shields.io/github/release-date/galletn/iaqualink?style=for-the-badge&label=Latest%20Release&color=%2318bcf2)
+![GitHub Release Version](https://img.shields.io/github/v/release/galletn/iaqualink?style=for-the-badge&color=%2318bcf2)
+
 A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners**, providing **full control**, **real-time monitoring**, and **multi-language support**.
 
 ## 🌟 Features
@@ -9,9 +15,9 @@ A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners
 * **Full Robot Control**: Start, stop, return to base, remote directional movement
 * **Real-time Monitoring**: Battery, cleaning status, error states, temperature
 * **Fan Speed Control**: Multiple cleaning modes (Floor only, Walls only, etc.)
-* **Comprehensive Sensors**: 17+ sensor types for detailed device info
+* **Comprehensive Sensors**: 20+ sensor types for detailed device info
 
-### Multi-Language Support *(v2.4.2+)*
+### Multi-Language Support
 
 * 🇺🇸 English (Default)
 * 🇫🇷 Français

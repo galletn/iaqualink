@@ -140,20 +140,38 @@ def test_sensor_has_no_legacy_name_property() -> None:
 # ---------------------------------------------------------------------------
 
 
+_BUTTON_TRANSLATION_KEYS = (
+    "remote_forward",
+    "remote_backward",
+    "remote_rotate_left",
+    "remote_rotate_right",
+    "remote_stop",
+    "add_fifteen_minutes",
+    "reduce_fifteen_minutes",
+)
+
+
 def test_every_locale_has_button_translations() -> None:
-    """Every locale's `entity.button.remote_forward.name` is a non-empty string."""
+    """Every locale has a non-empty `entity.button.<key>.name` for all 7 buttons.
+
+    P11 wired the button translation_key through HA's lookup chain; this
+    parity test guards against any future P7 / translation-cleanup work that
+    might drop a per-locale key. Originally only `remote_forward` was
+    checked — the P11 review widened the guard to all 7 buttons so a
+    silent regression on (e.g.) `remote_stop` in Dutch can't slip through.
+    """
     import json
 
     trans_dir = _COMP / "translations"
-    for f in sorted(trans_dir.glob("*.json")):
+    locale_files = sorted(trans_dir.glob("[a-z][a-z].json"))
+    assert locale_files, "no locale files found — translation dir layout regression"
+
+    for f in locale_files:
         data = json.loads(f.read_text(encoding="utf-8"))
-        name = (
-            data.get("entity", {})
-            .get("button", {})
-            .get("remote_forward", {})
-            .get("name")
-        )
-        assert isinstance(name, str) and name.strip(), (
-            f"{f.name}: missing or empty entity.button.remote_forward.name "
-            f"— translation regression"
-        )
+        button_section = data.get("entity", {}).get("button", {})
+        for key in _BUTTON_TRANSLATION_KEYS:
+            name = button_section.get(key, {}).get("name")
+            assert isinstance(name, str) and name.strip(), (
+                f"{f.name}: missing or empty entity.button.{key}.name "
+                f"— translation regression"
+            )

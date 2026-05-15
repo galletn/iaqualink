@@ -224,38 +224,53 @@ def test_calculate_times_remaining_works_with_aware_inputs() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dst_boundary_remaining_time_continuous() -> None:
+def test_dst_boundary_remaining_time_continuous(monkeypatch) -> None:
     """No 1-hour discontinuity in remaining-time math across a DST transition.
 
-    Construct a cycle that brackets a (Northern-hemisphere spring) DST instant
-    expressed in any local timezone — since both sides of `_calculate_times`
-    speak aware-UTC, no transition exists; the math is smooth.
-    """
-    client = _build_client()
-    # Start one hour before a known DST date. UTC is unaffected.
-    start = datetime.datetime(2026, 3, 8, 1, 30, 0, tzinfo=UTC)
-    duration = 120  # 2 hours of cycle, brackets the 02:00 local transition
+    Constructs a cycle starting just before a Northern-hemisphere spring-forward
+    instant and monkeypatches ``dt_util.utcnow`` to return three samples
+    bracketing the 01:59:59 / 02:00:00 local boundary. Since `_calculate_times`
+    runs on aware-UTC throughout, no DST transition exists internally and the
+    `time_remaining` delta between successive samples should be exactly 1
+    minute, not ~60 (which would indicate a naive-local DST jump leaked in).
 
-    # Sample at three points 1 minute apart bracketing the local DST instant.
+    H8 review follow-up — the pre-patch shape didn't actually patch utcnow,
+    so the three samples used real wall-clock and trivially differed by ~1
+    minute regardless of whether DST math was broken. This test now
+    structurally exercises the DST boundary.
+    """
+    from custom_components.iaqualink_robots import coordinator as coord_mod
+
+    client = _build_client()
+    # In Europe/Paris on 2026-03-29, 02:00 local jumps to 03:00. That's
+    # 01:00 UTC. Build a cycle that starts at 00:30 UTC and runs 2 hours,
+    # so it brackets the local DST instant. Three "now" samples around
+    # the 01:00 UTC boundary: 00:59:30, 01:00:00, 01:00:30 UTC.
+    start = datetime.datetime(2026, 3, 29, 0, 30, 0, tzinfo=UTC)
+    duration = 120  # 2-hour cycle
+    sample_nows = [
+        datetime.datetime(2026, 3, 29, 0, 59, 30, tzinfo=UTC),
+        datetime.datetime(2026, 3, 29, 1, 0, 0, tzinfo=UTC),
+        datetime.datetime(2026, 3, 29, 1, 0, 30, tzinfo=UTC),
+    ]
+
     samples = []
-    for offset in (29, 30, 31):
+    for fake_now in sample_nows:
+        monkeypatch.setattr(coord_mod.dt_util, "utcnow", lambda fn=fake_now: fn)
         result: dict = {"activity": "cleaning"}
-        # Pretend `now` is start + offset minutes.
-        now = start + datetime.timedelta(minutes=offset)
-        # Patch utcnow used inside _calculate_times by monkey-injecting a
-        # subtraction-friendly value via the start being far enough in the
-        # past that "now" arithmetic on real wall-clock still leaves a
-        # large-enough delta. Since this test is structural (UTC has no DST),
-        # we don't need the exact `now`; we just verify that running
-        # _calculate_times three times gives monotonically-decreasing
-        # remaining-time deltas with no 60-minute jump anywhere.
-        client._calculate_times(now - datetime.timedelta(minutes=offset),
-                                duration, result, robot_data=None)
+        client._calculate_times(start, duration, result, robot_data=None)
         samples.append(result.get("time_remaining", 0))
 
-    # Each successive call should be at most ~1 minute less than the prior;
-    # if a DST jump leaked in, one delta would be ~59-61 minutes.
+    # With aware-UTC math, the three samples are 0.5s apart in real time
+    # — when rounded to integer minutes, time_remaining should differ by at
+    # most 1 between consecutive samples. A 60-minute jump anywhere would
+    # signal a DST regression.
     for prev, curr in zip(samples, samples[1:]):
-        assert abs(prev - curr) <= 2, (
+        assert abs(prev - curr) <= 1, (
             f"remaining-time discontinuity at DST boundary: {samples}"
         )
+    # Sanity: at least one of the three samples must be > 0 (cycle is
+    # active across all three sample points).
+    assert any(s > 0 for s in samples), (
+        f"all samples 0 — _calculate_times not exercising the cleaning branch: {samples}"
+    )

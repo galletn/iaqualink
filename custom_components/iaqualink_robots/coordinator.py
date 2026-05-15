@@ -1309,7 +1309,11 @@ class AqualinkClient:
             elif self._device_type == "cyclonext":
                 self._update_cyclonext_robot_data(data, result)
         else:
-            result["last_online"] = "unknown"
+            # H8 review follow-up: emit None instead of "unknown" string.
+            # `last_online` sensor declares device_class=TIMESTAMP and HA's
+            # frontend expects a datetime or None; a string state breaks the
+            # entity (shows "unavailable" or logs a SensorStateClass error).
+            result["last_online"] = None
             # Don't call device-specific update methods when we don't have valid data
             # Set default values for missing data
             result["activity"] = "unknown"
@@ -1404,21 +1408,35 @@ class AqualinkClient:
 
         # Convert timestamp to datetime. H8: aware-UTC datetime objects stored
         # directly (no .isoformat()); sensor entity uses device_class=TIMESTAMP.
+        # H8 review follow-up: emit None on never-cleaned (cycleStartTime=0)
+        # and on parse failure so HA renders "Unknown" instead of "1970-01-01"
+        # or "cycle started right now" pinned to the failure moment.
         try:
             timestamp = robot_data['cycleStartTime']
-            cycle_start_time = dt_util.utc_from_timestamp(timestamp)
-            result["cycle_start_time"] = cycle_start_time
+            if timestamp > 0:
+                cycle_start_time = dt_util.utc_from_timestamp(timestamp)
+                result["cycle_start_time"] = cycle_start_time
 
-            cycle_duration = self._resolve_cycle_duration(
-                robot_data['durations'], result["cycle"]
-            )
-            result["cycle_duration"] = cycle_duration
+                cycle_duration = self._resolve_cycle_duration(
+                    robot_data['durations'], result["cycle"]
+                )
+                result["cycle_duration"] = cycle_duration
 
-            # Calculate end time and remaining time with stepper adjustments
-            self._calculate_times(cycle_start_time, cycle_duration, result, robot_data)
+                # Calculate end time and remaining time with stepper adjustments
+                self._calculate_times(cycle_start_time, cycle_duration, result, robot_data)
+            else:
+                # Never-cleaned robot — emit None instead of a 1970 epoch render.
+                result["cycle_start_time"] = None
+                result["cycle_end_time"] = None
+                result["estimated_end_time"] = None
+                result["cycle_duration"] = 0
+                result["time_remaining"] = 0
+                result["time_remaining_human"] = self._format_time_human(0, 0, 0)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for VR robot: {e}")
-            result["cycle_start_time"] = dt_util.utcnow()
+            result["cycle_start_time"] = None
+            result["cycle_end_time"] = None
+            result["estimated_end_time"] = None
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
             result["time_remaining_human"] = self._format_time_human(0, 0, 0)
@@ -1508,34 +1526,46 @@ class AqualinkClient:
 
         # Convert timestamp to datetime for cycle start time with safe access.
         # H8: aware-UTC datetime objects emitted directly (no .isoformat()).
+        # H8 review follow-up: emit None on never-cleaned + parse failure.
         try:
             timestamp = main_data['cycleStartTime']
-            cycle_start_time = dt_util.utc_from_timestamp(timestamp)
-            result["cycle_start_time"] = cycle_start_time
+            if timestamp > 0:
+                cycle_start_time = dt_util.utc_from_timestamp(timestamp)
+                result["cycle_start_time"] = cycle_start_time
 
-            # Get the appropriate cycle duration based on the current cycle type
-            cycle_type = last_cycle_data['endCycleType']
-            cycle_duration = None
-            if cycle_type == 0:  # Floor only
-                cycle_duration = cycles_data['floorTim']['duration']
-            elif cycle_type == 1:  # Floor and walls
-                cycle_duration = cycles_data['floorWallsTim']['duration']
-            elif cycle_type == 2:  # Smart
-                cycle_duration = cycles_data['smartTim']['duration']
-            elif cycle_type == 3:  # Waterline
-                cycle_duration = cycles_data['waterlineTim']['duration']
+                # Get the appropriate cycle duration based on the current cycle type
+                cycle_type = last_cycle_data['endCycleType']
+                cycle_duration = None
+                if cycle_type == 0:  # Floor only
+                    cycle_duration = cycles_data['floorTim']['duration']
+                elif cycle_type == 1:  # Floor and walls
+                    cycle_duration = cycles_data['floorWallsTim']['duration']
+                elif cycle_type == 2:  # Smart
+                    cycle_duration = cycles_data['smartTim']['duration']
+                elif cycle_type == 3:  # Waterline
+                    cycle_duration = cycles_data['waterlineTim']['duration']
 
-            if cycle_duration is not None:
-                result["cycle_duration"] = cycle_duration
-                # Calculate end time and remaining time
-                self._calculate_times(cycle_start_time, cycle_duration, result)
+                if cycle_duration is not None:
+                    result["cycle_duration"] = cycle_duration
+                    # Calculate end time and remaining time
+                    self._calculate_times(cycle_start_time, cycle_duration, result)
+                else:
+                    result["cycle_duration"] = 0
+                    result["time_remaining"] = 0
+                    result["time_remaining_human"] = self._format_time_human(0, 0, 0)
             else:
+                # Never-cleaned robot.
+                result["cycle_start_time"] = None
+                result["cycle_end_time"] = None
+                result["estimated_end_time"] = None
                 result["cycle_duration"] = 0
                 result["time_remaining"] = 0
                 result["time_remaining_human"] = self._format_time_human(0, 0, 0)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for cyclobat robot: {e}")
-            result["cycle_start_time"] = dt_util.utcnow()
+            result["cycle_start_time"] = None
+            result["cycle_end_time"] = None
+            result["estimated_end_time"] = None
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
             result["time_remaining_human"] = self._format_time_human(0, 0, 0)
@@ -1604,23 +1634,36 @@ class AqualinkClient:
 
         # Convert timestamp to datetime with safe access.
         # H8: aware-UTC datetime objects emitted directly (no .isoformat()).
+        # H8 review follow-up: emit None on never-cleaned + parse failure.
         try:
             timestamp = robot_data['cycleStartTime']
-            cycle_start_time = dt_util.utc_from_timestamp(timestamp)
-            result["cycle_start_time"] = cycle_start_time
+            if timestamp > 0:
+                cycle_start_time = dt_util.utc_from_timestamp(timestamp)
+                result["cycle_start_time"] = cycle_start_time
 
-            result["cycle"] = robot_data['prCyc']
+                result["cycle"] = robot_data['prCyc']
 
-            cycle_duration = self._resolve_cycle_duration(
-                robot_data['durations'], result["cycle"]
-            )
-            result["cycle_duration"] = cycle_duration
+                cycle_duration = self._resolve_cycle_duration(
+                    robot_data['durations'], result["cycle"]
+                )
+                result["cycle_duration"] = cycle_duration
 
-            # Calculate end time and remaining time
-            self._calculate_times(cycle_start_time, cycle_duration, result)
+                # Calculate end time and remaining time
+                self._calculate_times(cycle_start_time, cycle_duration, result)
+            else:
+                # Never-cleaned robot.
+                result["cycle_start_time"] = None
+                result["cycle_end_time"] = None
+                result["estimated_end_time"] = None
+                result["cycle"] = 0
+                result["cycle_duration"] = 0
+                result["time_remaining"] = 0
+                result["time_remaining_human"] = self._format_time_human(0, 0, 0)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for vortrax robot: {e}")
-            result["cycle_start_time"] = dt_util.utcnow()
+            result["cycle_start_time"] = None
+            result["cycle_end_time"] = None
+            result["estimated_end_time"] = None
             result["cycle"] = 0
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
@@ -1672,23 +1715,36 @@ class AqualinkClient:
 
         # Convert timestamp to datetime with safe access.
         # H8: aware-UTC datetime objects emitted directly (no .isoformat()).
+        # H8 review follow-up: emit None on never-cleaned + parse failure.
         try:
             timestamp = robot_data['cycleStartTime']
-            cycle_start_time = dt_util.utc_from_timestamp(timestamp)
-            result["cycle_start_time"] = cycle_start_time
+            if timestamp > 0:
+                cycle_start_time = dt_util.utc_from_timestamp(timestamp)
+                result["cycle_start_time"] = cycle_start_time
 
-            result["cycle"] = robot_data['cycle']
+                result["cycle"] = robot_data['cycle']
 
-            cycle_duration = self._resolve_cycle_duration(
-                robot_data['durations'], result["cycle"]
-            )
-            result["cycle_duration"] = cycle_duration
+                cycle_duration = self._resolve_cycle_duration(
+                    robot_data['durations'], result["cycle"]
+                )
+                result["cycle_duration"] = cycle_duration
 
-            # Calculate end time and remaining time
-            self._calculate_times(cycle_start_time, cycle_duration, result)
+                # Calculate end time and remaining time
+                self._calculate_times(cycle_start_time, cycle_duration, result)
+            else:
+                # Never-cleaned robot.
+                result["cycle_start_time"] = None
+                result["cycle_end_time"] = None
+                result["estimated_end_time"] = None
+                result["cycle"] = 0
+                result["cycle_duration"] = 0
+                result["time_remaining"] = 0
+                result["time_remaining_human"] = self._format_time_human(0, 0, 0)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for cyclonext robot: {e}")
-            result["cycle_start_time"] = dt_util.utcnow()
+            result["cycle_start_time"] = None
+            result["cycle_end_time"] = None
+            result["estimated_end_time"] = None
             result["cycle"] = 0
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
@@ -1795,10 +1851,15 @@ class AqualinkClient:
         H8: rejects naive datetimes at the boundary so a future regression
         anywhere upstream surfaces here rather than silently producing
         wrong-timezone arithmetic far away from the bug site.
+
+        H8 review follow-up: raise `TypeError` rather than `assert` — `assert`
+        is stripped under `python -O` / `PYTHONOPTIMIZE=1`, which defeats the
+        fail-fast goal in optimized builds.
         """
-        assert dt.tzinfo is not None, (
-            "add_minutes_to_datetime requires a tz-aware datetime (H8)"
-        )
+        if dt.tzinfo is None:
+            raise TypeError(
+                "add_minutes_to_datetime requires a tz-aware datetime (H8)"
+            )
         return dt + datetime.timedelta(minutes=minutes)
 
     async def send_login(self, data, headers):
@@ -2240,13 +2301,15 @@ class AqualinkClient:
                 }
 
         # Create result with reset time values always, regardless of robot type.
-        # H8: aware-UTC datetimes stored directly (no .isoformat()).
-        now = dt_util.utcnow()
+        # H8 review follow-up: emit None for the two TIMESTAMP-classed sensors
+        # so they render "Unknown" on stop, rather than the previous H8 shape
+        # which set them to `utcnow()` and produced a misleading "cycle started
+        # right now" display when the cycle had just ended.
         reset_values = {
-            "estimated_end_time": now,
+            "estimated_end_time": None,
             "time_remaining": 0,
             "time_remaining_human": self._format_time_human(0, 0, 0),
-            "cycle_start_time": now,
+            "cycle_start_time": None,
             "activity": "idle"  # Also set activity to idle to ensure proper state
         }
 

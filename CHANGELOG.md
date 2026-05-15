@@ -16,6 +16,10 @@ bug fix that stops VR robots from auto-restarting after a natural cycle.
 **Pre-release** — HACS users on the default channel will not see this version;
 toggle "Show beta versions" in the integration's HACS panel to install it.
 
+**Minimum Home Assistant raised to `2026.3.0`** via `hacs.json`. Users on older
+HA cores will see this version greyed out in HACS and need to either upgrade
+HA or stay on 2.5.1. See the entry under **Changed** for rationale.
+
 ### Added
 
 - **Config flow now rejects duplicate robots.** Adding the same robot twice aborts with `already_configured` instead of silently spawning a second coordinator (story C2).
@@ -55,6 +59,7 @@ toggle "Show beta versions" in the integration's HACS panel to install it.
 - **Defensive hardening bundle (story M19).** Ten small patches land together to tighten gaps surfaced in the C2, M12, and M17 code reviews. Highlights: config flow now rejects non-string `serial_number` values (int / list / dict) from the cloud API before they reach `async_set_unique_id`, complementing the existing whitespace-serial guard from C2; `async_setup_entry` lazily strips a stray `api_key` field that may persist after a backup-restore from before the M17 migration; and `async_migrate_entry` now returns `False` on failure and leaves the entry at its previous version so HA retries the migration on next setup rather than silently advancing past a half-applied state.
 - **`_authenticate()` is now serialised under an `asyncio.Lock` (story H9b).** Two coordinator update cycles overlapping near token expiry can no longer both fire parallel Cognito refresh requests racing on `self._id_token` / `self._token_expires_at`. The second caller acquires the lock after the first refresh completes, sees a valid token via the double-check guard, and returns without re-authenticating. Picks up the concurrent-refresh race absorbed from the H9a review.
 - **JWT-exp fallback warning is now rate-limited (story H9b).** A persistently-malformed Cognito token shape would previously fire `_LOGGER.warning("JWT exp claim missing or unparseable; falling back to 1h hardcoded expiry")` on every hourly refresh, flooding the operator log. The warning now fires once per process; subsequent fallbacks log at DEBUG so the diagnostic signal is still available without spam. Picks up the third absorbed H9a review item.
+- **HACS minimum Home Assistant version raised from `2025.1.0` to `2026.3.0` in `hacs.json` (salvage from PR #96 by @FejbyK).** No current functional dependency on a post-2025.1 API; the bump signals active maintenance against a current HA core and aligns the floor with the HA versions actually being tested against in CI. **User impact:** users on HA cores older than `2026.3.0` will see this version greyed out / unavailable in the HACS UI and need to either upgrade their HA install or stay on 2.5.1. Bundled with the same commit (`8084ee4`): GitHub Actions `checkout@v3 → @v6`, README status badges, deletion of the legacy `info.md` HACS description (superseded by README), and staged-but-not-yet-active `custom_components/iaqualink_robots/brand/` PNG assets for a future submission to `home-assistant/brands`. The directory + domain rename in PR #96 was deliberately **not** salvaged — it needs an `async_migrate_entry` migration shim to avoid orphaning every user's existing entities, and is tracked as story C7 for separate work.
 
 ### Migration / manual cleanup notes
 

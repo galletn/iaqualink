@@ -376,7 +376,8 @@ class AqualinkClient:
         """Set Home Assistant instance for translations."""
         self._hass = hass
 
-    def _resolve_cycle_duration(self, durations, cycle) -> int:
+    @staticmethod
+    def _resolve_cycle_duration(durations, cycle) -> int:
         """Look up the cycle duration for cycle code ``cycle`` (story C5).
 
         Pre-C5, the three callers each did
@@ -393,8 +394,21 @@ class AqualinkClient:
         the ``durations`` sub-dict are not currently documented and the
         team review explicitly downgraded "switch to named keys" out of
         scope until we have a verified API sample.
+
+        Marked ``@staticmethod`` because the lookup is pure-function-on-
+        arguments and reads no instance state -- documents the invariant
+        explicitly and protects against a future regression that adds a
+        ``self.`` access only the production path would exercise.
+        ``bool`` is filtered out via the ``not isinstance(cycle, bool)``
+        clause: in Python, ``bool`` subclasses ``int``, so ``True`` would
+        otherwise pass the ``isinstance(cycle, int)`` guard and silently
+        return ``durations.values()[1]``.
         """
-        if not isinstance(cycle, int) or not (0 <= cycle < len(durations)):
+        if (
+            not isinstance(cycle, int)
+            or isinstance(cycle, bool)
+            or not (0 <= cycle < len(durations))
+        ):
             _LOGGER.debug(
                 "Unexpected cycle code %r for durations=%r; falling back to 0",
                 cycle, durations,

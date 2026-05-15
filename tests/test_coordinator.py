@@ -245,6 +245,21 @@ def test_resolve_cycle_duration_non_int_cycle_returns_zero() -> None:
     assert client._resolve_cycle_duration(durations, None) == 0
 
 
+def test_resolve_cycle_duration_bool_cycle_rejected_despite_int_subclassing() -> None:
+    """``bool`` is a subclass of ``int`` in Python -- but a bool cycle is rejected.
+
+    Without the explicit ``not isinstance(cycle, bool)`` clause, ``True``
+    would pass ``isinstance(cycle, int)`` and resolve to
+    ``durations.values()[1]`` (since ``True == 1``); ``False`` would
+    resolve to index 0. Neither is a valid cycle code; treat as the
+    "unexpected" path so the DEBUG breadcrumb fires.
+    """
+    client = _build_client_for_resolve()
+    durations = {"a": 30, "b": 60, "c": 90, "d": 120}
+    assert client._resolve_cycle_duration(durations, True) == 0
+    assert client._resolve_cycle_duration(durations, False) == 0
+
+
 def test_resolve_cycle_duration_empty_durations_returns_zero() -> None:
     """An empty or missing durations dict falls back cleanly."""
     client = _build_client_for_resolve()

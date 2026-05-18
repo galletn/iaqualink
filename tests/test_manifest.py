@@ -62,12 +62,17 @@ def test_manifest_version_is_semver(manifest_data: dict) -> None:
     )
 
 
-@pytest.mark.xfail(
-    reason="Story M16: aiohttp pin should be removed; HA core bundles aiohttp.",
-    strict=True,
-)
 def test_manifest_does_not_pin_aiohttp(manifest_data: dict) -> None:
-    """Custom integrations must not pin aiohttp — HA core owns it."""
+    """Custom integrations must not pin aiohttp — HA core owns it.
+
+    Story M16: pre-M16 the manifest's ``requirements`` array contained
+    ``"aiohttp>=3.9.0"``. HA bundles aiohttp; pinning it from a custom
+    integration risks conflicting with HA core's version constraints and
+    surfaces as a hassfest warning on some HA cores. M16 dropped the pin
+    and this test was previously marked ``xfail(strict=True)`` to fail-
+    forward on the regression; post-M16 the xfail is removed and the
+    test asserts the contract directly.
+    """
     reqs = manifest_data.get("requirements", [])
     aiohttp_pins = [r for r in reqs if r.startswith("aiohttp")]
     assert not aiohttp_pins, f"manifest pins aiohttp: {aiohttp_pins}"

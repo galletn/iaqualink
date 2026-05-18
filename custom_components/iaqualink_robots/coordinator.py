@@ -433,23 +433,24 @@ class AqualinkClient:
         return list(durations.values())[cycle]
 
     def _format_time_human(self, hours: int, minutes: int, seconds: int) -> str:
-        """Format time in human readable format with translations."""
-        if not self._hass:
-            # Fallback to English if no hass instance
-            return f"{hours} Hour(s) {minutes} Minute(s) {seconds} Second(s)"
+        """Format an ``HH/MM/SS`` triple as a human-readable string.
 
-        try:
-            # Try to get translated time format strings
-            hours_text = self._hass.localize("component.iaqualinkRobots.entity.vacuum.time_format.hours") or "Hour(s)"
-            minutes_text = self._hass.localize(
-                "component.iaqualinkRobots.entity.vacuum.time_format.minutes") or "Minute(s)"
-            seconds_text = self._hass.localize(
-                "component.iaqualinkRobots.entity.vacuum.time_format.seconds") or "Second(s)"
+        Story C3: the previous body wrapped the format string in a
+        ``self._hass.localize(...)`` lookup with an ``(KeyError, AttributeError)``
+        fallback. ``hass.localize`` is a frontend JavaScript API; it does not
+        exist on the Python ``HomeAssistant`` object, so every call raised
+        ``AttributeError`` and silently fell through to the English string —
+        the localised branch never executed. Three calls × 0% hit-rate = dead
+        code, removed wholesale.
 
-            return f"{hours} {hours_text} {minutes} {minutes_text} {seconds} {seconds_text}"
-        except (KeyError, AttributeError):
-            # Fallback to English if translation fails
-            return f"{hours} Hour(s) {minutes} Minute(s) {seconds} Second(s)"
+        Localised time-unit suffixes ("Hour(s)" → "Heure(s)" / "Uur(en)") are
+        intentionally **not** wired here. The display-language fix belongs in
+        ``translations/*.json`` paired with HA's ``translation_key`` mechanism
+        on the relevant entity, not in the coordinator's data layer
+        (cross-references: story M11 returning raw state keys, story P7
+        translation completeness).
+        """
+        return f"{hours} Hour(s) {minutes} Minute(s) {seconds} Second(s)"
 
     async def fetch_status(self, quick_setup=False) -> dict:
         """Authenticate, discover device, and parse status.

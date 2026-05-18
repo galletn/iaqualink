@@ -840,3 +840,54 @@ async def test_short_outage_returns_last_data_not_update_failed(
     # Not yet a long outage.
     assert coord.is_long_outage is False
     assert coord.is_serving_stale_data is True
+
+
+# ----------------------------------------------------------------------------
+# Story C3 — remove phantom hass.localize call
+# ----------------------------------------------------------------------------
+#
+# `hass.localize` is a frontend JavaScript API; it does not exist on the
+# Python `HomeAssistant` object. The pre-C3 `_format_time_human` wrapped its
+# return value in three `self._hass.localize(...)` calls inside a try/except
+# `(KeyError, AttributeError)` block — every call raised `AttributeError`,
+# was silently swallowed, and fell through to the English string. Net effect:
+# the "localised" branch never executed once. C3 deleted the whole block in
+# favour of the English fallback that was already serving every call.
+#
+# The localised time-unit display ("Hour(s)" → "Heure(s)" / "Uur(en)") is
+# intentionally still missing post-C3 — the correct mechanism is HA's
+# `translation_key` paired with `translations/*.json`, not a custom localize
+# wrapper in the coordinator. See stories M11 and P7 for the proper fix.
+
+
+def test_no_phantom_localize_calls_in_package() -> None:
+    """Any `.localize(` call in the package is dead by definition (the API
+    doesn't exist on the Python `hass` object) — C3 deleted the last three
+    instances. Lock that in with an AST walk so a future copy-paste of the
+    pattern from frontend examples doesn't silently reintroduce dead code.
+
+    Uses AST traversal so the explanatory docstring in `_format_time_human`
+    (which mentions `self._hass.localize(...)` for historical context) is
+    correctly ignored — only actual call expressions count.
+    """
+    import ast
+    from pathlib import Path
+
+    pkg = Path(__file__).parent.parent / "custom_components" / "iaqualink_robots"
+    offenders: list[str] = []
+    for path in sorted(pkg.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "localize"
+            ):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert not offenders, (
+        "`.localize(` call detected. `hass.localize` is a frontend JS API; "
+        "it does not exist on the Python `HomeAssistant` object. Every "
+        "such call raises `AttributeError` and is dead code (story C3). "
+        "Use HA's `translation_key` + `translations/*.json` mechanism if "
+        "you need a localised entity display:\n  " + "\n  ".join(offenders)
+    )

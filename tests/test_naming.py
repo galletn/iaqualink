@@ -24,7 +24,11 @@ from pathlib import Path
 
 from custom_components.iaqualink_robots.button import AqualinkRemoteButton
 from custom_components.iaqualink_robots.sensor import AqualinkSensor
-from custom_components.iaqualink_robots.vacuum import IAquaLinkRobotVacuum
+
+# Note: IAquaLinkRobotVacuum is intentionally NOT imported — the P11 review
+# follow-up moved the 3 vacuum tests to AST-based inspection because HA's
+# Entity base class wraps `_attr_*` as property descriptors at class-init
+# time, making class-level access return the descriptor not the value.
 
 
 # ---------------------------------------------------------------------------
@@ -32,14 +36,65 @@ from custom_components.iaqualink_robots.vacuum import IAquaLinkRobotVacuum
 # ---------------------------------------------------------------------------
 
 
+def _class_body_attr_value(source_path: Path, class_name: str, attr_name: str):
+    """Walk the class body in ``source_path`` and return the assigned constant
+    for ``ClassName.attr_name = <value>`` declarations.
+
+    Returns the literal value (bool / None / str / int) or ``_NOT_FOUND``
+    if the attribute is not assigned in the class body. Skips assignments
+    inside method bodies (those are instance-level).
+
+    HA's recent ``Entity`` base class wraps several ``_attr_*`` attributes
+    as property descriptors at class-init time. A direct
+    ``Class._attr_has_entity_name`` access returns the parent's descriptor,
+    not the subclass's class-body value — which makes ``assert ... is True``
+    fail even though the assignment IS in the subclass body and works at
+    runtime. AST parsing inspects the source directly, bypassing the
+    descriptor.
+    """
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            for body_node in node.body:
+                if not isinstance(body_node, ast.Assign):
+                    continue
+                for target in body_node.targets:
+                    if isinstance(target, ast.Name) and target.id == attr_name:
+                        if isinstance(body_node.value, ast.Constant):
+                            return body_node.value.value
+                        # Fallthrough: assignment exists but value isn't a
+                        # simple constant; report the AST node type so the
+                        # test failure message is informative.
+                        return f"<non-constant: {ast.dump(body_node.value)}>"
+    return _NOT_FOUND
+
+
+_NOT_FOUND = object()  # distinct sentinel; using None would conflict with `_attr_name = None`
+
+
 def test_button_class_sets_has_entity_name_true() -> None:
-    """AqualinkRemoteButton declares `_attr_has_entity_name = True` (class attr)."""
-    assert AqualinkRemoteButton._attr_has_entity_name is True
+    """AqualinkRemoteButton declares `_attr_has_entity_name = True` (class-body assignment).
+
+    HA wraps the inherited ``_attr_has_entity_name`` as a property
+    descriptor at class-init time, so a class-level access via
+    ``AqualinkRemoteButton._attr_has_entity_name`` returns the parent's
+    descriptor (not our subclass value). Inspecting the AST is the
+    descriptor-resistant way to assert the contract.
+    """
+    val = _class_body_attr_value(_COMP / "button.py", "AqualinkRemoteButton", "_attr_has_entity_name")
+    assert val is True, (
+        "P11: AqualinkRemoteButton class body must declare "
+        f"`_attr_has_entity_name = True`; got {val!r}"
+    )
 
 
 def test_vacuum_class_sets_has_entity_name_true() -> None:
-    """IAquaLinkRobotVacuum declares `_attr_has_entity_name = True` (class attr)."""
-    assert IAquaLinkRobotVacuum._attr_has_entity_name is True
+    """IAquaLinkRobotVacuum declares `_attr_has_entity_name = True` (class-body assignment)."""
+    val = _class_body_attr_value(_COMP / "vacuum.py", "IAquaLinkRobotVacuum", "_attr_has_entity_name")
+    assert val is True, (
+        "P11: IAquaLinkRobotVacuum class body must declare "
+        f"`_attr_has_entity_name = True`; got {val!r}"
+    )
 
 
 def test_sensor_instance_sets_has_entity_name_true() -> None:
@@ -55,8 +110,23 @@ def test_sensor_instance_sets_has_entity_name_true() -> None:
 
 
 def test_vacuum_attr_name_is_none() -> None:
-    """The vacuum is the primary entity for the device — name = device name only."""
-    assert IAquaLinkRobotVacuum._attr_name is None
+    """The vacuum is the primary entity for the device — name = device name only.
+
+    AST check rather than direct class attribute lookup because HA's Entity
+    base class wraps ``_attr_name`` as a property descriptor at class-init
+    time (recent versions). The class-body source IS the contract.
+    """
+    val = _class_body_attr_value(_COMP / "vacuum.py", "IAquaLinkRobotVacuum", "_attr_name")
+    # `_NOT_FOUND` is a sentinel; `None` is the explicit class-body value
+    # we DO want. Distinguish "attribute not declared" from "declared as None".
+    assert val is not _NOT_FOUND, (
+        "P11: IAquaLinkRobotVacuum class body must declare `_attr_name = None` "
+        "so HA renders the friendly name as just the device-registry name."
+    )
+    assert val is None, (
+        f"P11: IAquaLinkRobotVacuum._attr_name must be None (got {val!r}). "
+        "Non-None values would append a translation-key suffix to the device name."
+    )
 
 
 # ---------------------------------------------------------------------------

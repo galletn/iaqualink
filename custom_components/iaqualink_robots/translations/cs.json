@@ -159,73 +159,31 @@
   "services": {
     "remote_forward": {
       "name": "Dálkové vpřed",
-      "description": "Odešle příkaz vpřed robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysavače k ovládání"
-        }
-      }
+      "description": "Odešle příkaz vpřed robotovi pro dálkové ovládání (pouze roboti VR a VortraX)"
     },
     "remote_backward": {
       "name": "Dálkové vzad",
-      "description": "Odešle příkaz vzad robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysavače k ovládání"
-        }
-      }
+      "description": "Odešle příkaz vzad robotovi pro dálkové ovládání (pouze roboti VR a VortraX)"
     },
     "remote_rotate_left": {
       "name": "Dálkové otočení doleva",
-      "description": "Odešle příkaz k otočení doleva robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysavače k ovládání"
-        }
-      }
+      "description": "Odešle příkaz k otočení doleva robotovi pro dálkové ovládání (pouze roboti VR a VortraX)"
     },
     "remote_rotate_right": {
       "name": "Dálkové otočení doprava",
-      "description": "Odešle příkaz k otočení doprava robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysavače k ovládání"
-        }
-      }
+      "description": "Odešle příkaz k otočení doprava robotovi pro dálkové ovládání (pouze roboti VR a VortraX)"
     },
     "remote_stop": {
       "name": "Dálkové zastavení",
-      "description": "Odešle příkaz k zastavení robotovi pro dálkové ovládání (pouze roboti VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysavače k ovládání"
-        }
-      }
+      "description": "Odešle příkaz k zastavení robotovi pro dálkové ovládání (pouze roboti VR a VortraX)"
     },
     "add_fifteen_minutes": {
       "name": "Přidat 15 minut",
-      "description": "Přidá 15 minut k času čištění (pouze roboti VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysavače k ovládání"
-        }
-      }
+      "description": "Přidá 15 minut k času čištění (pouze roboti VR a VortraX)"
     },
     "reduce_fifteen_minutes": {
       "name": "Odebrat 15 minut",
-      "description": "Odebere 15 minut z času čištění (pouze roboti VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysavače k ovládání"
-        }
-      }
+      "description": "Odebere 15 minut z času čištění (pouze roboti VR a VortraX)"
     }
   }
 }

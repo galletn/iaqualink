@@ -180,73 +180,31 @@
   "services": {
     "remote_forward": {
       "name": "Afstandsbediening Vooruit",
-      "description": "Stuur vooruit commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
-      "fields": {
-        "entity_id": {
-          "name": "Entiteit",
-          "description": "Stofzuiger entiteit om te besturen"
-        }
-      }
+      "description": "Stuur vooruit commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)"
     },
     "remote_backward": {
       "name": "Afstandsbediening Achteruit",
-      "description": "Stuur achteruit commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
-      "fields": {
-        "entity_id": {
-          "name": "Entiteit",
-          "description": "Stofzuiger entiteit om te besturen"
-        }
-      }
+      "description": "Stuur achteruit commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)"
     },
     "remote_rotate_left": {
       "name": "Afstandsbediening Draai Links",
-      "description": "Stuur draai links commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
-      "fields": {
-        "entity_id": {
-          "name": "Entiteit",
-          "description": "Stofzuiger entiteit om te besturen"
-        }
-      }
+      "description": "Stuur draai links commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)"
     },
     "remote_rotate_right": {
       "name": "Afstandsbediening Draai Rechts",
-      "description": "Stuur draai rechts commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
-      "fields": {
-        "entity_id": {
-          "name": "Entiteit",
-          "description": "Stofzuiger entiteit om te besturen"
-        }
-      }
+      "description": "Stuur draai rechts commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)"
     },
     "remote_stop": {
       "name": "Afstandsbediening Stop",
-      "description": "Stuur stop commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)",
-      "fields": {
-        "entity_id": {
-          "name": "Entiteit",
-          "description": "Stofzuiger entiteit om te besturen"
-        }
-      }
+      "description": "Stuur stop commando naar de robot voor afstandsbediening (alleen VR en VortraX robots)"
     },
     "add_fifteen_minutes": {
       "name": "15 Minuten Toevoegen",
-      "description": "15 minuten toevoegen aan de schoonmaaktijd (alleen VR en VortraX robots)",
-      "fields": {
-        "entity_id": {
-          "name": "Entiteit",
-          "description": "Stofzuiger entiteit om te besturen"
-        }
-      }
+      "description": "15 minuten toevoegen aan de schoonmaaktijd (alleen VR en VortraX robots)"
     },
     "reduce_fifteen_minutes": {
       "name": "15 Minuten Verminderen",
-      "description": "15 minuten verminderen van de schoonmaaktijd (alleen VR en VortraX robots)",
-      "fields": {
-        "entity_id": {
-          "name": "Entiteit",
-          "description": "Stofzuiger entiteit om te besturen"
-        }
-      }
+      "description": "15 minuten verminderen van de schoonmaaktijd (alleen VR en VortraX robots)"
     }
   }
 }

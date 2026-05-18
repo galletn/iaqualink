@@ -1,78 +1,56 @@
-# Remote control services for VR and VortraX robots
-# These services are also available as button entities for easier UI access
+# Service definitions for the iAqualink Robots integration.
+#
+# Story C1b: each service uses the HA 2024+ `target.entity` block to declare
+# which entities it can act on. The pre-C1b shape included a `fields:
+# entity_id: required: true` block that duplicated the target (HA's service
+# dispatcher already routes based on `target:`); the dev-tools service
+# picker rendered both, requiring the user to fill in entity_id twice. The
+# redundant `fields` block is gone post-C1b.
+#
+# Names + descriptions resolve via translation key:
+#   strings.json::services.<key>.name / .description (canonical English),
+#   translations/en.json mirrors the canonical text,
+#   translations/*.json carry locale overrides (English-fallback today,
+#   native translations welcome via PR; see story P7).
+
 remote_forward:
   target:
     entity:
       domain: vacuum
-  fields:
-    entity_id:
-      required: true
-      selector:
-        entity:
-          domain: vacuum
+      integration: iaqualink_robots
 
 remote_backward:
   target:
     entity:
       domain: vacuum
-  fields:
-    entity_id:
-      required: true
-      selector:
-        entity:
-          domain: vacuum
+      integration: iaqualink_robots
 
 remote_rotate_left:
   target:
     entity:
       domain: vacuum
-  fields:
-    entity_id:
-      required: true
-      selector:
-        entity:
-          domain: vacuum
+      integration: iaqualink_robots
 
 remote_rotate_right:
   target:
     entity:
       domain: vacuum
-  fields:
-    entity_id:
-      required: true
-      selector:
-        entity:
-          domain: vacuum
+      integration: iaqualink_robots
 
 remote_stop:
   target:
     entity:
       domain: vacuum
-  fields:
-    entity_id:
-      required: true
-      selector:
-        entity:
-          domain: vacuum
+      integration: iaqualink_robots
 
 add_fifteen_minutes:
   target:
     entity:
       domain: vacuum
-  fields:
-    entity_id:
-      required: true
-      selector:
-        entity:
-          domain: vacuum
+      integration: iaqualink_robots
 
 reduce_fifteen_minutes:
   target:
     entity:
       domain: vacuum
-  fields:
-    entity_id:
-      required: true
-      selector:
-        entity:
-          domain: vacuum
+      integration: iaqualink_robots

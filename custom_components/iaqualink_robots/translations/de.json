@@ -159,73 +159,31 @@
   "services": {
     "remote_forward": {
       "name": "Fernbedienung Vorwärts",
-      "description": "Vorwärts-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
-      "fields": {
-        "entity_id": {
-          "name": "Entität",
-          "description": "Saugroboter-Entität zur Steuerung"
-        }
-      }
+      "description": "Vorwärts-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)"
     },
     "remote_backward": {
       "name": "Fernbedienung Rückwärts",
-      "description": "Rückwärts-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
-      "fields": {
-        "entity_id": {
-          "name": "Entität",
-          "description": "Saugroboter-Entität zur Steuerung"
-        }
-      }
+      "description": "Rückwärts-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)"
     },
     "remote_rotate_left": {
       "name": "Fernbedienung Links drehen",
-      "description": "Links-drehen-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
-      "fields": {
-        "entity_id": {
-          "name": "Entität",
-          "description": "Saugroboter-Entität zur Steuerung"
-        }
-      }
+      "description": "Links-drehen-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)"
     },
     "remote_rotate_right": {
       "name": "Fernbedienung Rechts drehen",
-      "description": "Rechts-drehen-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
-      "fields": {
-        "entity_id": {
-          "name": "Entität",
-          "description": "Saugroboter-Entität zur Steuerung"
-        }
-      }
+      "description": "Rechts-drehen-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)"
     },
     "remote_stop": {
       "name": "Fernbedienung Stop",
-      "description": "Stop-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)",
-      "fields": {
-        "entity_id": {
-          "name": "Entität",
-          "description": "Saugroboter-Entität zur Steuerung"
-        }
-      }
+      "description": "Stop-Befehl an den Roboter für Fernsteuerung senden (nur VR und VortraX Roboter)"
     },
     "add_fifteen_minutes": {
       "name": "15 Minuten hinzufügen",
-      "description": "15 Minuten zur Reinigungszeit hinzufügen (nur VR und VortraX Roboter)",
-      "fields": {
-        "entity_id": {
-          "name": "Entität",
-          "description": "Saugroboter-Entität zur Steuerung"
-        }
-      }
+      "description": "15 Minuten zur Reinigungszeit hinzufügen (nur VR und VortraX Roboter)"
     },
     "reduce_fifteen_minutes": {
       "name": "15 Minuten reduzieren",
-      "description": "15 Minuten von der Reinigungszeit reduzieren (nur VR und VortraX Roboter)",
-      "fields": {
-        "entity_id": {
-          "name": "Entität",
-          "description": "Saugroboter-Entität zur Steuerung"
-        }
-      }
+      "description": "15 Minuten von der Reinigungszeit reduzieren (nur VR und VortraX Roboter)"
     }
   }
 }

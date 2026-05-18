@@ -159,73 +159,31 @@
   "services": {
     "remote_forward": {
       "name": "Controle Remoto Avançar",
-      "description": "Enviar comando de avanço para o robô para controle remoto (apenas robôs VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entidade",
-          "description": "Entidade do aspirador para controlar"
-        }
-      }
+      "description": "Enviar comando de avanço para o robô para controle remoto (apenas robôs VR e VortraX)"
     },
     "remote_backward": {
       "name": "Controle Remoto Recuar",
-      "description": "Enviar comando de recuo para o robô para controle remoto (apenas robôs VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entidade",
-          "description": "Entidade do aspirador para controlar"
-        }
-      }
+      "description": "Enviar comando de recuo para o robô para controle remoto (apenas robôs VR e VortraX)"
     },
     "remote_rotate_left": {
       "name": "Controle Remoto Girar Esquerda",
-      "description": "Enviar comando de girar à esquerda para o robô para controle remoto (apenas robôs VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entidade",
-          "description": "Entidade do aspirador para controlar"
-        }
-      }
+      "description": "Enviar comando de girar à esquerda para o robô para controle remoto (apenas robôs VR e VortraX)"
     },
     "remote_rotate_right": {
       "name": "Controle Remoto Girar Direita",
-      "description": "Enviar comando de girar à direita para o robô para controle remoto (apenas robôs VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entidade",
-          "description": "Entidade do aspirador para controlar"
-        }
-      }
+      "description": "Enviar comando de girar à direita para o robô para controle remoto (apenas robôs VR e VortraX)"
     },
     "remote_stop": {
       "name": "Controle Remoto Parar",
-      "description": "Enviar comando de parada para o robô para controle remoto (apenas robôs VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entidade",
-          "description": "Entidade do aspirador para controlar"
-        }
-      }
+      "description": "Enviar comando de parada para o robô para controle remoto (apenas robôs VR e VortraX)"
     },
     "add_fifteen_minutes": {
       "name": "Adicionar 15 Minutos",
-      "description": "Adicionar 15 minutos ao tempo de limpeza (apenas robôs VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entidade",
-          "description": "Entidade do aspirador para controlar"
-        }
-      }
+      "description": "Adicionar 15 minutos ao tempo de limpeza (apenas robôs VR e VortraX)"
     },
     "reduce_fifteen_minutes": {
       "name": "Reduzir 15 Minutos",
-      "description": "Reduzir 15 minutos do tempo de limpeza (apenas robôs VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entidade",
-          "description": "Entidade do aspirador para controlar"
-        }
-      }
+      "description": "Reduzir 15 minutos do tempo de limpeza (apenas robôs VR e VortraX)"
     }
   }
 }

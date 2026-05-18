@@ -159,73 +159,31 @@
   "services": {
     "remote_forward": {
       "name": "Diaľkové dopredu",
-      "description": "Odošle príkaz dopredu robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysávača na ovládanie"
-        }
-      }
+      "description": "Odošle príkaz dopredu robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)"
     },
     "remote_backward": {
       "name": "Diaľkové dozadu",
-      "description": "Odošle príkaz dozadu robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysávača na ovládanie"
-        }
-      }
+      "description": "Odošle príkaz dozadu robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)"
     },
     "remote_rotate_left": {
       "name": "Diaľkové otočenie doľava",
-      "description": "Odošle príkaz otočenia doľava robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysávača na ovládanie"
-        }
-      }
+      "description": "Odošle príkaz otočenia doľava robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)"
     },
     "remote_rotate_right": {
       "name": "Diaľkové otočenie doprava",
-      "description": "Odošle príkaz otočenia doprava robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysávača na ovládanie"
-        }
-      }
+      "description": "Odošle príkaz otočenia doprava robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)"
     },
     "remote_stop": {
       "name": "Diaľkové zastavenie",
-      "description": "Odošle príkaz zastavenia robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysávača na ovládanie"
-        }
-      }
+      "description": "Odošle príkaz zastavenia robotovi na diaľkové ovládanie (len pre roboty VR a VortraX)"
     },
     "add_fifteen_minutes": {
       "name": "Pridať 15 minút",
-      "description": "Pridá 15 minút k času čistenia (len pre roboty VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysávača na ovládanie"
-        }
-      }
+      "description": "Pridá 15 minút k času čistenia (len pre roboty VR a VortraX)"
     },
     "reduce_fifteen_minutes": {
       "name": "Odobrať 15 minút",
-      "description": "Odoberie 15 minút z času čistenia (len pre roboty VR a VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entity",
-          "description": "Entita vysávača na ovládanie"
-        }
-      }
+      "description": "Odoberie 15 minút z času čistenia (len pre roboty VR a VortraX)"
     }
   }
 }

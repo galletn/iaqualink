@@ -159,73 +159,31 @@
   "services": {
     "remote_forward": {
       "name": "Telecomando Avanti",
-      "description": "Invia comando di avanzamento al robot per il controllo remoto (solo robot VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entità",
-          "description": "Entità aspiratori da controllare"
-        }
-      }
+      "description": "Invia comando di avanzamento al robot per il controllo remoto (solo robot VR e VortraX)"
     },
     "remote_backward": {
       "name": "Telecomando Indietro",
-      "description": "Invia comando di arretramento al robot per il controllo remoto (solo robot VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entità",
-          "description": "Entità aspiratori da controllare"
-        }
-      }
+      "description": "Invia comando di arretramento al robot per il controllo remoto (solo robot VR e VortraX)"
     },
     "remote_rotate_left": {
       "name": "Telecomando Ruota Sinistra",
-      "description": "Invia comando di rotazione a sinistra al robot per il controllo remoto (solo robot VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entità",
-          "description": "Entità aspiratori da controllare"
-        }
-      }
+      "description": "Invia comando di rotazione a sinistra al robot per il controllo remoto (solo robot VR e VortraX)"
     },
     "remote_rotate_right": {
       "name": "Telecomando Ruota Destra",
-      "description": "Invia comando di rotazione a destra al robot per il controllo remoto (solo robot VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entità",
-          "description": "Entità aspiratori da controllare"
-        }
-      }
+      "description": "Invia comando di rotazione a destra al robot per il controllo remoto (solo robot VR e VortraX)"
     },
     "remote_stop": {
       "name": "Telecomando Stop",
-      "description": "Invia comando di arresto agli aspiratori per il controllo remoto (solo robot VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entità",
-          "description": "Entità aspiratori da controllare"
-        }
-      }
+      "description": "Invia comando di arresto agli aspiratori per il controllo remoto (solo robot VR e VortraX)"
     },
     "add_fifteen_minutes": {
       "name": "Aggiungi 15 Minuti",
-      "description": "Aggiungi 15 minuti al tempo di pulizia degli aspiratori (solo robot VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entità",
-          "description": "Entità aspiratori da controllare"
-        }
-      }
+      "description": "Aggiungi 15 minuti al tempo di pulizia degli aspiratori (solo robot VR e VortraX)"
     },
     "reduce_fifteen_minutes": {
       "name": "Riduci 15 Minuti",
-      "description": "Riduci 15 minuti dal tempo di pulizia degli aspiratori (solo robot VR e VortraX)",
-      "fields": {
-        "entity_id": {
-          "name": "Entità",
-          "description": "Entità aspiratori da controllare"
-        }
-      }
+      "description": "Riduci 15 minuti dal tempo di pulizia degli aspiratori (solo robot VR e VortraX)"
     }
   }
 }

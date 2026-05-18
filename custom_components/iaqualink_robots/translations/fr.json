@@ -159,73 +159,31 @@
   "services": {
     "remote_forward": {
       "name": "Télécommande Avant",
-      "description": "Envoyer une commande d'avancement au robot pour le contrôle à distance (robots VR et VortraX uniquement)",
-      "fields": {
-        "entity_id": {
-          "name": "Entité",
-          "description": "Entité d'aspirateur à contrôler"
-        }
-      }
+      "description": "Envoyer une commande d'avancement au robot pour le contrôle à distance (robots VR et VortraX uniquement)"
     },
     "remote_backward": {
       "name": "Télécommande Arrière",
-      "description": "Envoyer une commande de recul au robot pour le contrôle à distance (robots VR et VortraX uniquement)",
-      "fields": {
-        "entity_id": {
-          "name": "Entité",
-          "description": "Entité d'aspirateur à contrôler"
-        }
-      }
+      "description": "Envoyer une commande de recul au robot pour le contrôle à distance (robots VR et VortraX uniquement)"
     },
     "remote_rotate_left": {
       "name": "Télécommande Rotation Gauche",
-      "description": "Envoyer une commande de rotation gauche au robot pour le contrôle à distance (robots VR et VortraX uniquement)",
-      "fields": {
-        "entity_id": {
-          "name": "Entité",
-          "description": "Entité d'aspirateur à contrôler"
-        }
-      }
+      "description": "Envoyer une commande de rotation gauche au robot pour le contrôle à distance (robots VR et VortraX uniquement)"
     },
     "remote_rotate_right": {
       "name": "Télécommande Rotation Droite",
-      "description": "Envoyer une commande de rotation droite au robot pour le contrôle à distance (robots VR et VortraX uniquement)",
-      "fields": {
-        "entity_id": {
-          "name": "Entité",
-          "description": "Entité d'aspirateur à contrôler"
-        }
-      }
+      "description": "Envoyer une commande de rotation droite au robot pour le contrôle à distance (robots VR et VortraX uniquement)"
     },
     "remote_stop": {
       "name": "Télécommande Arrêt",
-      "description": "Envoyer une commande d'arrêt au robot pour le contrôle à distance (robots VR et VortraX uniquement)",
-      "fields": {
-        "entity_id": {
-          "name": "Entité",
-          "description": "Entité d'aspirateur à contrôler"
-        }
-      }
+      "description": "Envoyer une commande d'arrêt au robot pour le contrôle à distance (robots VR et VortraX uniquement)"
     },
     "add_fifteen_minutes": {
       "name": "Ajouter 15 Minutes",
-      "description": "Ajouter 15 minutes au temps de nettoyage (robots VR et VortraX uniquement)",
-      "fields": {
-        "entity_id": {
-          "name": "Entité",
-          "description": "Entité d'aspirateur à contrôler"
-        }
-      }
+      "description": "Ajouter 15 minutes au temps de nettoyage (robots VR et VortraX uniquement)"
     },
     "reduce_fifteen_minutes": {
       "name": "Réduire 15 Minutes",
-      "description": "Réduire 15 minutes du temps de nettoyage (robots VR et VortraX uniquement)",
-      "fields": {
-        "entity_id": {
-          "name": "Entité",
-          "description": "Entité d'aspirateur à contrôler"
-        }
-      }
+      "description": "Réduire 15 minutes du temps de nettoyage (robots VR et VortraX uniquement)"
     }
   }
 }

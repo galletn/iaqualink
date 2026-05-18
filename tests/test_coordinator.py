@@ -1145,3 +1145,654 @@ def test_no_fire_and_forget_callback_create_task_in_command_methods() -> None:
         "`async_request_refresh` collapses near-duplicate refreshes into one "
         "`_async_update_data` call. Sites:\n  " + "\n  ".join(offenders)
     )
+
+
+# ----------------------------------------------------------------------------
+# Story C4-ws — WS-listener refresh fan-out elimination via push pattern
+# ----------------------------------------------------------------------------
+#
+# Pre-C4-ws the websocket listener fired up to two `asyncio.create_task`
+# `_coordinator_callback` invocations per inbound message (one for stepper
+# updates, one for other state changes). Both were unawaited and both routed
+# into the debounced `async_request_refresh`, which then turned around and
+# called `fetch_status` (HTTP roundtrip) to re-fetch state we'd just been
+# told via the WS push. A chatty cloud session produced overlapping refresh
+# fan-outs and burned API call budget for no information gain.
+#
+# C4-ws rewrote the listener to:
+#
+#   * AC #1: filter at intake — heartbeats / ACKs / foreign-service /
+#     empty-robot messages are dropped before any callback.
+#   * AC #3: dedup via `_state_signature` — repeated StateReported messages
+#     with no change in the fields we care about are no-ops.
+#   * AC #2 + AC #4: single awaited push via `_realtime_push_callback`,
+#     which the coordinator implements as `async_set_updated_data` on the
+#     deep-merged baseline + delta envelope. No HTTP roundtrip, no
+#     debouncer, target <200 ms cloud → entity latency.
+#
+# The cached baseline (`_last_ws_envelope`) is seeded on the first successful
+# `_ws_subscribe`. Until then, state-bearing messages fall back to the
+# refresh callback so a partial envelope can't slip through the parser and
+# silently overwrite cached fields with defaults.
+
+
+def _build_client_for_ws() -> object:
+    """Build an `AqualinkClient` with just enough state for the listener tests.
+
+    Bypasses `__init__` (aiohttp + asyncio.Lock side effects) and stamps the
+    handful of attributes the new C4-ws code paths read: device_type, the
+    cached baseline envelope, the dedup signature, and stepper-cache state.
+    The listener helpers (`_parse_ws_state_message`, `_deep_merge_dict`,
+    `_state_signature`) are staticmethods on the class — they need no
+    instance fields.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client = AqualinkClient.__new__(AqualinkClient)
+    client._serial = "TEST-SERIAL"
+    client._device_type = "vr"
+    client._last_ws_envelope = None
+    client._last_applied_state_signature = None
+    client._cached_stepper_value = None
+    client._cached_stepper_time = None
+    client._coordinator_callback = None
+    client._realtime_push_callback = None
+    return client
+
+
+class _FakeWS:
+    """Async-iterable stand-in for an aiohttp WS connection (story C4-ws tests).
+
+    Python looks up ``__aiter__`` on the type, not the instance, so a bare
+    ``MagicMock`` can't satisfy ``async for message in self._ws_connection``.
+    This helper implements the iteration protocol directly while leaving
+    ``send_json`` / ``closed`` patchable for individual tests.
+    """
+
+    def __init__(self, messages):
+        self.closed = False
+        self._messages = list(messages)
+        self.sent: list = []
+
+    async def send_json(self, data):
+        self.sent.append(data)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._messages:
+            raise StopAsyncIteration
+        return self._messages.pop(0)
+
+
+def _make_text_msg(payload_json):
+    """Build a fake aiohttp TEXT message whose ``.json()`` returns ``payload_json``."""
+    import aiohttp
+    from unittest.mock import MagicMock
+
+    msg = MagicMock()
+    msg.type = aiohttp.WSMsgType.TEXT
+    msg.json = MagicMock(return_value=payload_json)
+    return msg
+
+
+def _make_close_msg():
+    """Build a fake aiohttp CLOSED frame that terminates the listener loop."""
+    import aiohttp
+    from unittest.mock import MagicMock
+
+    close = MagicMock()
+    close.type = aiohttp.WSMsgType.CLOSED
+    return close
+
+
+# AC #1 — intake filter -------------------------------------------------------
+
+
+def test_parse_ws_state_message_returns_none_for_heartbeat() -> None:
+    """A heartbeat / keepalive frame has no `service` or `event` field.
+    `_parse_ws_state_message` must return None so the listener short-circuits
+    before any callback fires (AC #1).
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    assert AqualinkClient._parse_ws_state_message({}) is None
+    assert AqualinkClient._parse_ws_state_message({"event": "Heartbeat"}) is None
+
+
+def test_parse_ws_state_message_returns_none_for_foreign_service() -> None:
+    """A message from a different service (e.g. Authorization ACK) is
+    irrelevant. Must return None (AC #1).
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    msg = {
+        "service": "Authorization",
+        "event": "StateReported",
+        "payload": {"state": {"reported": {"equipment": {"robot": {"state": 1}}}}},
+    }
+    assert AqualinkClient._parse_ws_state_message(msg) is None
+
+
+def test_parse_ws_state_message_returns_none_when_robot_block_empty() -> None:
+    """StateReported with no `equipment.robot` content is a status-only
+    envelope (we already have it via polling). No-op (AC #1).
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    msg = {
+        "service": "StateStreamer",
+        "event": "StateReported",
+        "payload": {"state": {"reported": {"equipment": {"robot": {}}}}},
+    }
+    assert AqualinkClient._parse_ws_state_message(msg) is None
+
+
+def test_parse_ws_state_message_returns_reported_for_real_state_change() -> None:
+    """A canonical StateReported with equipment.robot content returns the
+    `reported` dict so the listener can merge it onto the cached baseline.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    msg = {
+        "service": "StateStreamer",
+        "event": "StateReported",
+        "payload": {
+            "state": {
+                "reported": {
+                    "aws": {"status": "connected", "timestamp": 1700000000000},
+                    "equipment": {"robot": {"state": 1, "errorState": 0}},
+                }
+            }
+        },
+    }
+    reported = AqualinkClient._parse_ws_state_message(msg)
+    assert reported is not None
+    assert reported["equipment"]["robot"]["state"] == 1
+    assert reported["aws"]["status"] == "connected"
+
+
+# Deep-merge semantics --------------------------------------------------------
+
+
+def test_deep_merge_dict_overlays_overlay_onto_base() -> None:
+    """Overlay nested keys merge into base; non-overlaid keys preserved.
+
+    Locks the merge semantics the listener's AC #2 path relies on: a delta
+    that touches only `state` must NOT wipe `cycleStartTime`, `durations`,
+    or other cached fields. Used by `_websocket_listener` to maintain the
+    cached baseline envelope across incremental pushes.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    base = {
+        "a": {"b": 1, "c": 2, "nested": {"x": 10, "y": 20}},
+        "preserved": "yes",
+    }
+    overlay = {"a": {"b": 99, "nested": {"y": 200}}}
+    merged = AqualinkClient._deep_merge_dict(base, overlay)
+    assert merged == {
+        "a": {"b": 99, "c": 2, "nested": {"x": 10, "y": 200}},
+        "preserved": "yes",
+    }
+    # Base is unmutated (defensive copy, not in-place merge).
+    assert base["a"]["b"] == 1
+    assert base["a"]["nested"]["y"] == 20
+
+
+def test_deep_merge_dict_replaces_scalars_and_lists() -> None:
+    """List values are replaced wholesale (AWS IoT shadow semantics), not
+    concatenated. Scalars in overlay overwrite scalars in base.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    base = {"list": [1, 2, 3], "scalar": "old"}
+    overlay = {"list": [9], "scalar": "new"}
+    merged = AqualinkClient._deep_merge_dict(base, overlay)
+    assert merged == {"list": [9], "scalar": "new"}
+
+
+# AC #3 — dedup signature -----------------------------------------------------
+
+
+def test_state_signature_stable_for_unchanged_robot_data() -> None:
+    """Identical robot_data → identical signature → listener skips the push.
+
+    Anchors AC #3 ("60 s of unchanged chatter → 0 _async_update_data calls"):
+    if the cloud emits redundant StateReported events, the signature catches
+    them before we burn a coordinator update on no-op data.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    robot = {"state": 1, "errorState": 0, "prCyc": 2, "cycleStartTime": 1700000000, "stepper": 5}
+    assert AqualinkClient._state_signature(robot) == AqualinkClient._state_signature(robot)
+
+
+def test_state_signature_changes_when_state_changes() -> None:
+    """Any of the user-visible fields shifting must change the signature."""
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    a = {"state": 1, "errorState": 0, "prCyc": 2, "cycleStartTime": 0, "stepper": 0}
+    b = {**a, "state": 3}
+    assert AqualinkClient._state_signature(a) != AqualinkClient._state_signature(b)
+
+
+def test_state_signature_includes_cyclobat_nested_fields() -> None:
+    """Cyclobat carries activity inside `main.state` and battery state inside
+    `battery.userChargePerc`. The signature must catch deltas there too,
+    otherwise the dedup would silently drop battery/cleaning updates for
+    the cyclobat family.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    a = {"main": {"state": 1, "cycleStartTime": 0}, "battery": {"userChargePerc": "80"}}
+    b = {"main": {"state": 1, "cycleStartTime": 0}, "battery": {"userChargePerc": "60"}}
+    assert AqualinkClient._state_signature(a) != AqualinkClient._state_signature(b)
+
+
+# AC #2 + AC #4 — apply_realtime_envelope -------------------------------------
+
+
+async def test_apply_realtime_envelope_pushes_via_async_set_updated_data(
+    coordinator_factory,
+) -> None:
+    """A merged shadow envelope is parsed via the per-device-type code path
+    and pushed via `async_set_updated_data` — no refresh roundtrip (AC #2,
+    AC #4). Locks the contract that the push path does NOT call
+    `async_request_refresh` or `fetch_status`.
+    """
+    from unittest.mock import MagicMock
+
+    coord, client = coordinator_factory(
+        device_type="vr",
+        last_data={"activity": "idle", "model": "RA 6900 iQ"},
+    )
+    # Real VR parser is needed — un-mock the bound method by giving the
+    # client a real one from the class. ``_build_mock_client`` uses
+    # MagicMock so the per-device-type parsers are MagicMock by default;
+    # rebind to the real function.
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client._serial = "TEST"
+    client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
+    client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
+    client._pending_stop_reset = None
+    client._format_time_human = AqualinkClient._format_time_human.__get__(client)
+    client._resolve_cycle_duration = AqualinkClient._resolve_cycle_duration.__get__(client)
+    client._calculate_times = AqualinkClient._calculate_times.__get__(client)
+    client._include_seconds_remaining = True
+    client._stepper_adj_time = 15
+    client._activity = None
+    client._fan_speed = None
+    client._hass = None
+    coord.async_set_updated_data = MagicMock()
+
+    envelope = {
+        "payload": {
+            "robot": {
+                "state": {
+                    "reported": {
+                        "aws": {"status": "connected", "timestamp": 1700000000000},
+                        "equipment": {
+                            "robot": {
+                                "state": 1,  # cleaning
+                                "errorState": 0,
+                                "prCyc": 1,  # floor_only
+                                "cycleStartTime": 0,
+                                "stepper": 0,
+                                "stepperAdjTime": 15,
+                                "totalHours": 100,
+                                "canister": 0.5,
+                                "durations": {"a": 30, "b": 60, "c": 90, "d": 120},
+                                "sensors": {"sns_1": {"val": 25}},
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+    await coord._apply_realtime_envelope(envelope)
+
+    coord.async_set_updated_data.assert_called_once()
+    pushed = coord.async_set_updated_data.call_args[0][0]
+    assert pushed["activity"] == "cleaning"
+    assert pushed["fan_speed"] == "floor_only"
+    assert pushed["serial_number"] == "TEST"
+    assert pushed["model"] == "RA 6900 iQ"  # preserved from _last_data
+
+
+async def test_apply_realtime_envelope_does_not_call_async_request_refresh(
+    coordinator_factory,
+) -> None:
+    """The push path must NOT route through `async_request_refresh` — that
+    would defeat AC #2 (no roundtrip) and AC #4 (no debouncer delay).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    coord, client = coordinator_factory(device_type="vr", last_data={"activity": "idle"})
+
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client._serial = "TEST"
+    client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
+    client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
+    client._pending_stop_reset = None
+    client._format_time_human = AqualinkClient._format_time_human.__get__(client)
+    client._resolve_cycle_duration = AqualinkClient._resolve_cycle_duration.__get__(client)
+    client._calculate_times = AqualinkClient._calculate_times.__get__(client)
+    client._include_seconds_remaining = True
+    client._stepper_adj_time = 15
+    client._activity = None
+    client._fan_speed = None
+    client._hass = None
+    coord.async_request_refresh = AsyncMock()
+    coord.async_set_updated_data = MagicMock()
+    client.fetch_status.reset_mock()
+
+    envelope = {
+        "payload": {
+            "robot": {
+                "state": {
+                    "reported": {
+                        "equipment": {
+                            "robot": {
+                                "state": 1,
+                                "errorState": 0,
+                                "prCyc": 1,
+                                "cycleStartTime": 0,
+                                "stepper": 0,
+                                "stepperAdjTime": 15,
+                                "totalHours": 0,
+                                "canister": 0,
+                                "durations": {"a": 0, "b": 0, "c": 0, "d": 0},
+                                "sensors": {"sns_1": {"val": 0}},
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    await coord._apply_realtime_envelope(envelope)
+
+    coord.async_request_refresh.assert_not_awaited()
+    client.fetch_status.assert_not_awaited()
+    coord.async_set_updated_data.assert_called_once()
+
+
+async def test_apply_realtime_envelope_clears_desired_state_on_natural_completion(
+    coordinator_factory,
+) -> None:
+    """The natural-cycle-completion detector (PR #94) must fire on the push
+    path too — cleaning → idle without a manual stop calls clear_desired_state.
+
+    The bug this guards against: pre-C4-ws this transition was only checked
+    on the polled path. After C4-ws, the WS push beats the next poll to
+    seeing the transition, so without the same detector on the push path
+    the cloud would silently auto-restart a finished cycle for the ~3 s
+    until the polled path notices.
+    """
+    from unittest.mock import MagicMock
+
+    coord, client = coordinator_factory(
+        device_type="vr",
+        last_data={"activity": "cleaning", "model": "RA"},
+    )
+
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client._serial = "TEST"
+    client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
+    client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
+    client._pending_stop_reset = None
+    client._format_time_human = AqualinkClient._format_time_human.__get__(client)
+    client._resolve_cycle_duration = AqualinkClient._resolve_cycle_duration.__get__(client)
+    client._calculate_times = AqualinkClient._calculate_times.__get__(client)
+    client._include_seconds_remaining = True
+    client._stepper_adj_time = 15
+    client._activity = None
+    client._fan_speed = None
+    client._hass = None
+    coord.async_set_updated_data = MagicMock()
+
+    # Envelope reports idle (state=0 maps to idle in VR parser).
+    envelope = {
+        "payload": {
+            "robot": {
+                "state": {
+                    "reported": {
+                        "equipment": {
+                            "robot": {
+                                "state": 0,
+                                "errorState": 0,
+                                "prCyc": 1,
+                                "cycleStartTime": 0,
+                                "stepper": 0,
+                                "stepperAdjTime": 15,
+                                "totalHours": 0,
+                                "canister": 0,
+                                "durations": {"a": 0, "b": 0, "c": 0, "d": 0},
+                                "sensors": {"sns_1": {"val": 0}},
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    await coord._apply_realtime_envelope(envelope)
+
+    client.clear_desired_state.assert_awaited_once()
+
+
+# AC #1 + AC #2 + AC #4 — _websocket_listener integration ---------------------
+
+
+async def test_websocket_listener_skips_callback_for_heartbeat() -> None:
+    """AC #1: a heartbeat message does NOT invoke any callback.
+
+    Stubs the WS connection with a one-shot iterable that yields a
+    heartbeat-shaped TEXT message, then closes. Both the push callback and
+    the refresh callback must remain un-awaited.
+    """
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_ws()
+    client._id = "user"
+    client._coordinator_callback = AsyncMock()
+    client._realtime_push_callback = AsyncMock()
+    client._ws_connection = _FakeWS([
+        _make_text_msg({"event": "Heartbeat"}),
+        _make_close_msg(),
+    ])
+    client._ensure_websocket_connection = AsyncMock()
+
+    await client._websocket_listener()
+
+    client._coordinator_callback.assert_not_awaited()
+    client._realtime_push_callback.assert_not_awaited()
+
+
+async def test_websocket_listener_pushes_on_state_change_after_baseline_cached() -> None:
+    """AC #2 + AC #4: with a baseline envelope cached, a state-bearing message
+    fires the push callback exactly once with the merged envelope, and does
+    NOT fire the refresh callback. The merged envelope must carry the
+    delta's new ``state`` value AND preserve the cached ``prCyc``.
+    """
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_ws()
+    client._id = "user"
+    client._coordinator_callback = AsyncMock()
+    client._realtime_push_callback = AsyncMock()
+    # Seed a baseline (would have been set by ``_update_other_robots`` post-_ws_subscribe).
+    client._last_ws_envelope = {
+        "payload": {
+            "robot": {
+                "state": {
+                    "reported": {
+                        "equipment": {"robot": {"state": 0, "errorState": 0, "prCyc": 1}}
+                    }
+                }
+            }
+        }
+    }
+
+    client._ws_connection = _FakeWS([
+        _make_text_msg({
+            "service": "StateStreamer",
+            "event": "StateReported",
+            "payload": {"state": {"reported": {"equipment": {"robot": {"state": 1}}}}},
+        }),
+        _make_close_msg(),
+    ])
+    client._ensure_websocket_connection = AsyncMock()
+
+    await client._websocket_listener()
+
+    client._realtime_push_callback.assert_awaited_once()
+    pushed_envelope = client._realtime_push_callback.await_args[0][0]
+    merged_robot = pushed_envelope["payload"]["robot"]["state"]["reported"]["equipment"]["robot"]
+    assert merged_robot["state"] == 1  # delta applied
+    assert merged_robot["prCyc"] == 1  # preserved from baseline (deep-merge contract)
+    client._coordinator_callback.assert_not_awaited()  # No refresh fan-out.
+
+
+async def test_websocket_listener_skips_push_on_duplicate_state_message() -> None:
+    """AC #3: identical state messages back-to-back trigger the push exactly
+    once. The dedup via `_state_signature` catches the second, so a chatty
+    cloud session doesn't fire a refresh per redundant StateReported.
+    """
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_ws()
+    client._id = "user"
+    client._coordinator_callback = AsyncMock()
+    client._realtime_push_callback = AsyncMock()
+    client._last_ws_envelope = {
+        "payload": {
+            "robot": {
+                "state": {
+                    "reported": {
+                        "equipment": {"robot": {"state": 0, "errorState": 0, "prCyc": 1}}
+                    }
+                }
+            }
+        }
+    }
+
+    payload = {
+        "service": "StateStreamer",
+        "event": "StateReported",
+        "payload": {"state": {"reported": {"equipment": {"robot": {"state": 1}}}}},
+    }
+    client._ws_connection = _FakeWS([
+        _make_text_msg(payload),
+        _make_text_msg(payload),
+        _make_close_msg(),
+    ])
+    client._ensure_websocket_connection = AsyncMock()
+
+    await client._websocket_listener()
+
+    assert client._realtime_push_callback.await_count == 1
+
+
+async def test_websocket_listener_falls_back_to_refresh_without_baseline_envelope() -> None:
+    """First-push fallback: with `_last_ws_envelope = None` (no baseline yet),
+    a state message routes to the refresh callback (so the next ws_subscribe
+    seeds the baseline) and NOT to the push callback. Pin-down for the race
+    window between listener startup and the first ``_update_other_robots``.
+    """
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_ws()
+    client._id = "user"
+    client._coordinator_callback = AsyncMock()
+    client._realtime_push_callback = AsyncMock()
+    client._last_ws_envelope = None  # explicit: no baseline yet.
+
+    client._ws_connection = _FakeWS([
+        _make_text_msg({
+            "service": "StateStreamer",
+            "event": "StateReported",
+            "payload": {"state": {"reported": {"equipment": {"robot": {"state": 1}}}}},
+        }),
+        _make_close_msg(),
+    ])
+    client._ensure_websocket_connection = AsyncMock()
+
+    await client._websocket_listener()
+
+    client._coordinator_callback.assert_awaited_once()
+    client._realtime_push_callback.assert_not_awaited()
+
+
+# AST guard — regression test for the fire-and-forget pattern -----------------
+
+
+def test_websocket_listener_no_fire_and_forget_create_task() -> None:
+    """C4-ws regression guard: AST walk of `_websocket_listener` asserts no
+    `asyncio.create_task(self._coordinator_callback(...))` invocations remain.
+
+    Symmetric to the C4-cmd guard at `test_no_fire_and_forget_callback_create_task_in_command_methods`.
+    A future refactor that re-introduces the fire-and-forget pattern in the
+    listener (the pre-C4-ws "immediate execution without waiting" idiom)
+    will fail this test, surfacing the refresh-storm regression before merge.
+    """
+    import ast
+    from pathlib import Path
+
+    coordinator_path = (
+        Path(__file__).parent.parent
+        / "custom_components"
+        / "iaqualink_robots"
+        / "coordinator.py"
+    )
+    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+
+    offenders: list[str] = []
+    for class_node in ast.walk(tree):
+        if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":
+            continue
+        for method in class_node.body:
+            if not isinstance(method, ast.AsyncFunctionDef):
+                continue
+            if method.name != "_websocket_listener":
+                continue
+            for node in ast.walk(method):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if not (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "create_task"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "asyncio"
+                ):
+                    continue
+                if not node.args:
+                    continue
+                arg = node.args[0]
+                if not isinstance(arg, ast.Call):
+                    continue
+                inner = arg.func
+                if (
+                    isinstance(inner, ast.Attribute)
+                    and isinstance(inner.value, ast.Name)
+                    and inner.value.id == "self"
+                    and inner.attr in {"_coordinator_callback", "_realtime_push_callback"}
+                ):
+                    offenders.append(f"_websocket_listener:line {node.lineno}")
+    assert not offenders, (
+        "Fire-and-forget callback `asyncio.create_task` detected in "
+        "`_websocket_listener`. C4-ws replaced the two `create_task` "
+        "blocks with a single awaited `_realtime_push_callback` so the "
+        "coordinator's `async_set_updated_data` push displaces the "
+        "refresh fan-out. Sites:\n  " + "\n  ".join(offenders)
+    )

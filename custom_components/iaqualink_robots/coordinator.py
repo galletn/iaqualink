@@ -171,6 +171,25 @@ class AqualinkClient:
         self._ws_session = None
         self._last_ws_activity = None
         self._coordinator_callback = None  # Callback to notify coordinator of real-time updates
+        # C4-ws: push-callback wired by the coordinator. The WS listener uses
+        # this to apply a merged shadow envelope directly via
+        # ``coordinator.async_set_updated_data`` — no HTTP refresh roundtrip.
+        # Kept separate from ``_coordinator_callback`` (which the 6 command
+        # methods still use post-C4-cmd) so the two callsites stay decoupled.
+        self._realtime_push_callback = None
+        # C4-ws: cached deep copy of the last full ``_ws_subscribe`` response.
+        # The WS listener deep-merges inbound shadow deltas into this baseline
+        # so the existing per-device-type parsers (which expect a complete
+        # envelope) keep working unchanged on the push path. ``None`` until the
+        # first successful ``_ws_subscribe`` — the listener falls back to
+        # ``_coordinator_callback`` (refresh) for that first race window.
+        self._last_ws_envelope = None
+        # C4-ws: tuple of (state, errorState, prCyc, cycleStartTime, stepper,
+        # cyclobat-main-state, cyclobat-battery-charge) extracted from the
+        # last-applied envelope. Used to dedup repeated StateReported pushes
+        # that don't change anything we care about (AC #3 — zero
+        # ``_async_update_data`` invocations during 60 s of unchanged chatter).
+        self._last_applied_state_signature = None
         # Websocket connection failure tracking (not device offline status)
         # Device being 'offline' via working websocket is normal, not a failure
         self._ws_consecutive_failures = 0
@@ -842,8 +861,38 @@ class AqualinkClient:
         self._last_ws_activity = None
 
     async def _websocket_listener(self):
-        """Listen for real-time websocket updates and notify coordinator of changes."""
+        """Listen for real-time websocket updates and apply them via the coordinator push hook.
+
+        Story C4-ws rewrote this method:
+
+        - **AC #1 (intake filter):** ``_parse_ws_state_message`` rejects
+          heartbeats, shadow ACKs, foreign-service messages, and StateReported
+          envelopes with empty ``equipment.robot``. Those messages no longer
+          trigger any coordinator work at all.
+        - **AC #3 (dedup):** the merged envelope's "significant fields" tuple
+          (``_state_signature``) is compared to the last-applied signature;
+          repeated StateReported messages that don't change anything we care
+          about are dropped before the push.
+        - **AC #2 + AC #4 (direct push):** on a real state change, the inbound
+          ``reported`` delta is deep-merged into the cached baseline envelope
+          and dispatched once via ``await self._realtime_push_callback(...)``
+          — which the coordinator implements as ``async_set_updated_data``
+          (no fetch_status, no debouncer, no HTTP roundtrip).
+
+        The pre-C4-ws code fired up to two ``asyncio.create_task`` callbacks
+        per message (one for stepper, one for state) — both unawaited, both
+        funnelling into ``async_request_refresh``. A chatty cloud session
+        therefore produced multiple overlapping refresh fan-outs per inbound
+        StateReported plus a duplicated dispatch when a single message
+        touched both stepper and state simultaneously. That entire pattern
+        is replaced by a single awaited push per *delta*.
+
+        Fallback: until ``_last_ws_envelope`` is seeded (first listener cycle
+        before the initial poll), state-bearing messages route to the
+        refresh callback so the next ``_ws_subscribe`` can seed the baseline.
+        """
         message_count = 0
+        applied_count = 0
 
         try:
             # Ensure websocket connection is established
@@ -871,50 +920,93 @@ class AqualinkClient:
                 if message.type == aiohttp.WSMsgType.TEXT:
                     message_count += 1
                     try:
-                        data = message.json()
+                        message_json = message.json()
+                    except Exception as parse_err:
+                        _LOGGER.debug(f"Could not JSON-decode websocket message: {parse_err}")
+                        continue
 
-                        # Check if this is a state update message
-                        if (data.get("service") == "StateStreamer" and
-                                data.get("event") == "StateReported"):
+                    # AC #1: intake filter. ``None`` covers heartbeats, ACKs,
+                    # foreign-service messages, and StateReported envelopes with
+                    # no ``equipment.robot`` content. Nothing more happens for
+                    # those — no callback, no refresh, no fan-out.
+                    inbound_reported = self._parse_ws_state_message(message_json)
+                    if inbound_reported is None:
+                        continue
 
-                            payload = data.get("payload", {})
-                            state = payload.get("state", {})
+                    try:
+                        # First-push fallback: no cached baseline yet → route
+                        # to the refresh callback so the next ``_ws_subscribe``
+                        # seeds ``_last_ws_envelope``. Avoids parsing a partial
+                        # envelope that would silently overwrite cached fields
+                        # with parser defaults.
+                        if self._last_ws_envelope is None:
+                            _LOGGER.debug(
+                                "WS state arrived before baseline envelope cached; falling back to refresh"
+                            )
+                            if self._coordinator_callback is not None:
+                                await self._coordinator_callback()
+                            continue
 
-                            # Check for stepper updates (timing changes)
-                            reported_state = state.get("reported", {})
-                            equipment = reported_state.get("equipment", {})
-                            robot_data = equipment.get("robot", {})
+                        # Deep-merge the inbound delta onto the cached baseline.
+                        # ``_deep_merge_dict`` is pure and returns a fresh dict
+                        # so the in-memory baseline isn't mutated under us if
+                        # the callback yields mid-merge.
+                        cached_reported = (
+                            self._last_ws_envelope
+                            .get("payload", {})
+                            .get("robot", {})
+                            .get("state", {})
+                            .get("reported", {})
+                        )
+                        merged_reported = self._deep_merge_dict(
+                            cached_reported, inbound_reported
+                        )
 
-                            if "stepper" in robot_data:
-                                new_stepper = robot_data["stepper"]
-                                _LOGGER.debug(f"🎯 Real-time stepper update: {new_stepper}")
+                        # AC #3: dedup. Build a signature of the user-visible
+                        # state and bail if it's identical to what we last
+                        # pushed. Defends against the cloud emitting repeated
+                        # StateReported events with no functional change.
+                        merged_robot = (
+                            merged_reported.get("equipment", {}).get("robot", {})
+                        )
+                        new_signature = self._state_signature(merged_robot)
+                        if new_signature == self._last_applied_state_signature:
+                            continue
 
-                                # Cache the new stepper value for button commands
-                                self._cached_stepper_value = new_stepper
-                                self._cached_stepper_time = time.time()
+                        # Refresh the baseline so the next inbound delta sees
+                        # this push as part of the merge target.
+                        self._last_ws_envelope["payload"]["robot"]["state"]["reported"] = (
+                            merged_reported
+                        )
+                        self._last_applied_state_signature = new_signature
 
-                                # Immediate entity update for ultra-fast responsiveness
-                                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
-                                    try:
-                                        # Use asyncio.create_task for immediate execution without waiting
-                                        asyncio.create_task(self._coordinator_callback())
-                                    except Exception as e:
-                                        _LOGGER.debug(f"Error calling coordinator callback: {e}")
+                        # Cache the stepper for button commands (preserves the
+                        # pre-C4-ws behaviour that ``button.py`` depends on).
+                        if "stepper" in merged_robot:
+                            self._cached_stepper_value = merged_robot["stepper"]
+                            self._cached_stepper_time = time.time()
 
-                            # Check for other robot state changes
-                            if any(key in robot_data for key in ['state', 'rmt_ctrl', 'errorState', 'cycleStartTime']):
-                                _LOGGER.debug("🔄 Real-time robot state update received")
-
-                                # Immediate entity update for ultra-fast responsiveness
-                                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
-                                    try:
-                                        # Use asyncio.create_task for immediate execution without waiting
-                                        asyncio.create_task(self._coordinator_callback())
-                                    except Exception as e:
-                                        _LOGGER.debug(f"Error calling coordinator callback: {e}")
-
-                    except Exception as e:
-                        _LOGGER.debug(f"Error processing websocket message: {e}")
+                        # AC #2 + AC #4: single awaited push. The coordinator
+                        # implements this as ``async_set_updated_data`` — no
+                        # HTTP roundtrip, no debouncer.
+                        if self._realtime_push_callback is not None:
+                            await self._realtime_push_callback(self._last_ws_envelope)
+                            applied_count += 1
+                        elif self._coordinator_callback is not None:
+                            # Defensive fallback if push wasn't wired (shouldn't
+                            # happen post-C4-ws, but keep behaviour intact).
+                            await self._coordinator_callback()
+                    except asyncio.CancelledError:
+                        raise
+                    except ConfigEntryAuthFailed:
+                        # Surface auth failures to HA so reauth fires; do not
+                        # swallow them in the broad-except below. Mirror of the
+                        # H10 review fix.
+                        raise
+                    except Exception as apply_err:  # noqa: BLE001 - per-message isolation
+                        _LOGGER.debug(
+                            f"Error applying realtime websocket message: {apply_err}"
+                        )
 
                 elif message.type == aiohttp.WSMsgType.ERROR:
                     _LOGGER.warning("Websocket error in listener")
@@ -929,15 +1021,121 @@ class AqualinkClient:
         except Exception as e:
             _LOGGER.warning(f"Websocket listener error: {e}")
         finally:
-            _LOGGER.debug(f"Websocket listener stopped after {message_count} messages")
+            _LOGGER.debug(
+                f"Websocket listener stopped after {message_count} messages "
+                f"({applied_count} applied)"
+            )
 
     def set_coordinator_callback(self, callback):
         """Set the callback function to notify coordinator of real-time updates."""
         self._coordinator_callback = callback
 
+    def set_realtime_push_callback(self, callback):
+        """Set the push callback used by the WS listener (story C4-ws).
+
+        The push callback is invoked with a deep-merged shadow envelope
+        (the same shape ``_ws_subscribe`` returns). The coordinator implements
+        the merge target — running the per-device-type parser on the envelope
+        and calling ``async_set_updated_data`` — so the WS listener side stays
+        a pure dispatcher.
+
+        Distinct from ``set_coordinator_callback`` (the legacy callback that
+        post-C4-cmd is only invoked by the 6 command methods) so the two
+        callsites can evolve independently.
+        """
+        self._realtime_push_callback = callback
+
     def set_coordinator_reference(self, coordinator):
         """Set reference to coordinator for adaptive polling control."""
         self._coordinator_ref = coordinator
+
+    @staticmethod
+    def _deep_merge_dict(base: dict, overlay: dict) -> dict:
+        """Return a new dict with ``overlay`` overlaid onto ``base`` (story C4-ws).
+
+        Recursive on nested dicts. Scalars and lists are replaced wholesale
+        (no list concatenation) — matches the AWS IoT shadow document
+        semantics where a delta's array overwrites the previous array.
+
+        Used by the WS listener to apply incremental ``StateReported`` deltas
+        on top of the cached baseline envelope so the existing per-device-type
+        parsers receive a complete, well-shaped dict regardless of whether
+        the cloud pushed a full state or just the changed sub-tree.
+
+        Does NOT mutate either input — returns a fresh dict so the cached
+        baseline isn't side-channelled into divergent states by callers
+        retaining references to it.
+        """
+        if not isinstance(base, dict) or not isinstance(overlay, dict):
+            return overlay if isinstance(overlay, dict) or overlay is not None else base
+        result = dict(base)
+        for key, overlay_value in overlay.items():
+            base_value = result.get(key)
+            if isinstance(base_value, dict) and isinstance(overlay_value, dict):
+                result[key] = AqualinkClient._deep_merge_dict(base_value, overlay_value)
+            else:
+                result[key] = overlay_value
+        return result
+
+    @staticmethod
+    def _parse_ws_state_message(message_json: dict) -> dict | None:
+        """Extract the ``reported`` shadow document from an inbound WS message.
+
+        Returns the ``payload.state.reported`` dict for messages we care about
+        (StateStreamer service + StateReported event + non-empty
+        ``equipment.robot``) and ``None`` for everything else: heartbeats,
+        shadow ACKs, foreign-service messages, malformed payloads.
+
+        Pure function: no I/O, no instance state. Lifted out of the listener
+        body so the AC #1 filter is independently testable.
+        """
+        if not isinstance(message_json, dict):
+            return None
+        if message_json.get("service") != "StateStreamer":
+            return None
+        if message_json.get("event") != "StateReported":
+            return None
+        payload = message_json.get("payload") or {}
+        state = payload.get("state") or {}
+        reported = state.get("reported")
+        if not isinstance(reported, dict):
+            return None
+        equipment = reported.get("equipment") or {}
+        robot = equipment.get("robot") or {}
+        if not isinstance(robot, dict) or not robot:
+            # No equipment.robot content → nothing to apply. Heartbeats and
+            # status-only messages land here.
+            return None
+        return reported
+
+    @staticmethod
+    def _state_signature(robot_data: dict) -> tuple:
+        """Build a comparable signature of the ``equipment.robot`` fields that drive entity state (story C4-ws).
+
+        The dedup check at AC #3 ("60 s of unchanged WS chatter → 0
+        ``_async_update_data`` invocations") relies on this signature being
+        stable when the user-visible state hasn't moved. Includes top-level
+        VR/vortrax/cyclonext keys *and* cyclobat's nested ``main`` /
+        ``battery`` keys so all 4 push-capable device families dedup cleanly.
+
+        Pure: no instance state. ``None`` keys are placed in the tuple so a
+        field's appearance/disappearance still counts as a change.
+        """
+        if not isinstance(robot_data, dict):
+            return ()
+        main = robot_data.get("main") if isinstance(robot_data.get("main"), dict) else {}
+        battery = robot_data.get("battery") if isinstance(robot_data.get("battery"), dict) else {}
+        return (
+            robot_data.get("state"),
+            robot_data.get("errorState"),
+            robot_data.get("prCyc"),
+            robot_data.get("cycleStartTime"),
+            robot_data.get("stepper"),
+            main.get("state"),
+            main.get("cycleStartTime"),
+            battery.get("userChargePerc"),
+            battery.get("userChargeState"),
+        )
 
     async def _ws_subscribe(self):
         """Subscribe via websocket to get live updates."""
@@ -1286,6 +1484,20 @@ class AqualinkClient:
                 }
             # Reset failure count on successful websocket operation
             self._ws_consecutive_failures = 0
+            # C4-ws: cache the full envelope so the WS listener has a baseline
+            # to merge inbound shadow deltas into. Deep-copy via json round-trip
+            # to insulate the cache from later in-place mutations of ``data``
+            # (the per-device-type parsers below read it but shouldn't mutate;
+            # this is belt-and-braces). ``isinstance(data, dict)`` guards
+            # against a defensive caller returning a non-dict on edge paths.
+            if isinstance(data, dict) and "payload" in data:
+                try:
+                    self._last_ws_envelope = json.loads(json.dumps(data))
+                except (TypeError, ValueError) as cache_err:  # non-serialisable contents
+                    _LOGGER.debug(
+                        "Could not snapshot _last_ws_envelope (non-JSON-serialisable contents): %s",
+                        cache_err,
+                    )
         except asyncio.CancelledError:
             # If cancelled during setup, return minimal data to allow integration to continue
             _LOGGER.debug("Robot update cancelled - returning minimal data")
@@ -3123,6 +3335,11 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
 
         # Set up callback for real-time updates
         self.client.set_coordinator_callback(self._handle_realtime_update)
+        # C4-ws: push callback used by the WS listener. Bypasses the refresh
+        # roundtrip and applies merged shadow envelopes via
+        # ``async_set_updated_data`` for <200 ms-class latency on real state
+        # changes (story AC #4).
+        self.client.set_realtime_push_callback(self._apply_realtime_envelope)
         self.client.set_coordinator_reference(self)
 
         # Persistent websocket connection provides improved reliability and performance
@@ -3248,6 +3465,117 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             raise
         except Exception as e:
             _LOGGER.debug(f"Error handling real-time update: {e}")
+
+    async def _apply_realtime_envelope(self, envelope: dict) -> None:
+        """Apply a merged shadow envelope to coordinator state without polling (story C4-ws).
+
+        Invoked by ``AqualinkClient._websocket_listener`` with the deep-merge of
+        the cached baseline (last successful ``_ws_subscribe`` response) and the
+        inbound StateReported delta. The envelope therefore has the same shape
+        the per-device-type parsers (``_update_vr_robot_data`` etc.) already
+        expect, so we re-use the parser unchanged on the push path — no
+        ``fetch_status`` HTTP roundtrip, no debouncer delay, target ~<200 ms
+        latency from cloud → entity (AC #4).
+
+        Re-uses the post-fetch orchestration from ``_async_update_data`` (natural
+        cleaning→idle clearing, ``_apply_pending_stop_reset``, failure-counter
+        reset, adaptive polling update, ``_last_data`` snapshot) so the two
+        update paths (polled & pushed) keep `self.data` semantically identical.
+
+        Propagates ``ConfigEntryAuthFailed`` (HA reauth) and ``CancelledError``
+        (HA shutdown). All other exceptions are logged + swallowed so a single
+        malformed inbound message doesn't kill the WS listener task.
+        """
+        try:
+            client = self.client
+            result: dict = {
+                "serial_number": client._serial,
+                "device_type": client.device_type,
+            }
+            # Preserve model & last_online from prior data — model is fetched on
+            # its own cadence (not in every shadow update); last_online is only
+            # updated if the envelope carries an aws.timestamp.
+            if self._last_data:
+                if "model" in self._last_data:
+                    result["model"] = self._last_data["model"]
+                if "last_online" in self._last_data:
+                    result["last_online"] = self._last_data["last_online"]
+
+            # Bump last_online from the envelope's aws.timestamp when present.
+            try:
+                ts_ms = envelope["payload"]["robot"]["state"]["reported"]["aws"]["timestamp"]
+                result["last_online"] = dt_util.utc_from_timestamp(ts_ms / 1000)
+            except (KeyError, TypeError):
+                pass  # Keep the preserved value from _last_data.
+
+            # Dispatch to the existing per-device-type parser. The envelope was
+            # built from the cached baseline merged with the inbound delta, so
+            # the parsers see a full canonical shape and behave identically to
+            # the polled path.
+            device_type = client.device_type
+            if device_type == "vr":
+                client._update_vr_robot_data(envelope, result)
+            elif device_type == "vortrax":
+                client._update_vortrax_robot_data(envelope, result)
+            elif device_type == "cyclobat":
+                client._update_cyclobat_robot_data(envelope, result)
+            elif device_type == "cyclonext":
+                client._update_cyclonext_robot_data(envelope, result)
+            else:
+                # i2d has no shadow stream; if we somehow got here, bail without
+                # mutating state so the polled HTTP path stays canonical.
+                _LOGGER.debug(
+                    "Skipping realtime envelope apply for device_type=%r (no shadow stream)",
+                    device_type,
+                )
+                return
+
+            # Honour a queued manual-stop reset (H6) on the push path too.
+            client._apply_pending_stop_reset(result)
+
+            # Natural-completion detector (PR #94 fix): if the user-visible
+            # activity transitioned cleaning → idle without a manual stop in
+            # flight, clear desired state so the cloud doesn't auto-restart.
+            # Mirror of the polled path in ``_async_update_data``.
+            if (
+                self._last_data.get("activity") == "cleaning"
+                and result.get("activity") == "idle"
+                and not client._pending_stop_reset
+            ):
+                _LOGGER.info(
+                    "Robot finished cleaning naturally (realtime push) - clearing desired state to prevent auto-restart"
+                )
+                try:
+                    await client.clear_desired_state()
+                except Exception as e:
+                    _LOGGER.warning(
+                        f"Failed to clear desired state after natural completion (push path): {e}"
+                    )
+
+            # Successful push counts as a successful update — reset outage state
+            # so ``is_long_outage`` / ``is_serving_stale_data`` flip back to
+            # healthy without waiting for the next polled cycle (story H7).
+            self._consecutive_failures = 0
+            self._first_failure_at = None
+            client._reset_websocket_failures()
+
+            # Adaptive polling: a state-bearing push is fresh evidence the
+            # robot is active or recently commanded, so feed the same signal
+            # the polled path feeds.
+            self._update_polling_interval(result)
+
+            # Snapshot for the next push (the cleaning→idle detector reads it
+            # on the *next* invocation).
+            self._last_data = result.copy()
+
+            # Push to entities without going through the refresh path.
+            self.async_set_updated_data(result)
+        except (asyncio.CancelledError, ConfigEntryAuthFailed):
+            # CancelledError: HA shutdown — let the listener task unwind.
+            # ConfigEntryAuthFailed: surface to HA so reauth fires (H10 precedent).
+            raise
+        except Exception as e:  # noqa: BLE001 - listener task isolation
+            _LOGGER.debug(f"Error applying realtime envelope: {e}")
 
     async def _start_websocket_listener(self):
         """Start the websocket listener task for real-time updates."""

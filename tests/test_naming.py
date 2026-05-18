@@ -36,13 +36,27 @@ from custom_components.iaqualink_robots.sensor import AqualinkSensor
 # ---------------------------------------------------------------------------
 
 
+# Distinct sentinel for "attribute not declared in the class body". Using
+# `None` instead would conflict with the legitimate `_attr_name = None`
+# class-body assignment that some entities use. Module-level so both
+# AST-inspection helpers below share the same identity.
+_NOT_FOUND = object()
+
+
 def _class_body_attr_value(source_path: Path, class_name: str, attr_name: str):
     """Walk the class body in ``source_path`` and return the assigned constant
     for ``ClassName.attr_name = <value>`` declarations.
 
-    Returns the literal value (bool / None / str / int) or ``_NOT_FOUND``
-    if the attribute is not assigned in the class body. Skips assignments
-    inside method bodies (those are instance-level).
+    Returns the literal value (bool / None / str / int), ``_NOT_FOUND``
+    if the attribute is not assigned in the class body, or a string
+    diagnostic if the value is a non-constant expression. Skips
+    assignments inside method bodies (those are instance-level).
+
+    Handles BOTH ``ast.Assign`` (plain `_attr_x = True`) and
+    ``ast.AnnAssign`` (annotated `_attr_x: bool = True`) — the latter is
+    common with `mypy --strict` and would silently slip through a
+    plain-Assign-only scan, producing a misleading "attribute not declared"
+    failure message even when the contract IS met (review follow-up).
 
     HA's recent ``Entity`` base class wraps several ``_attr_*`` attributes
     as property descriptors at class-init time. A direct
@@ -56,20 +70,25 @@ def _class_body_attr_value(source_path: Path, class_name: str, attr_name: str):
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == class_name:
             for body_node in node.body:
-                if not isinstance(body_node, ast.Assign):
-                    continue
-                for target in body_node.targets:
+                # Plain assignment: `_attr_x = True`
+                if isinstance(body_node, ast.Assign):
+                    for target in body_node.targets:
+                        if isinstance(target, ast.Name) and target.id == attr_name:
+                            if isinstance(body_node.value, ast.Constant):
+                                return body_node.value.value
+                            return f"<non-constant: {ast.dump(body_node.value)}>"
+                # Annotated assignment: `_attr_x: bool = True`
+                elif isinstance(body_node, ast.AnnAssign):
+                    target = body_node.target
                     if isinstance(target, ast.Name) and target.id == attr_name:
+                        if body_node.value is None:
+                            # `_attr_x: bool` with no value — type hint only,
+                            # not an assignment. Skip.
+                            continue
                         if isinstance(body_node.value, ast.Constant):
                             return body_node.value.value
-                        # Fallthrough: assignment exists but value isn't a
-                        # simple constant; report the AST node type so the
-                        # test failure message is informative.
                         return f"<non-constant: {ast.dump(body_node.value)}>"
     return _NOT_FOUND
-
-
-_NOT_FOUND = object()  # distinct sentinel; using None would conflict with `_attr_name = None`
 
 
 def test_button_class_sets_has_entity_name_true() -> None:

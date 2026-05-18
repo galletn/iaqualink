@@ -1412,7 +1412,11 @@ async def test_apply_realtime_envelope_pushes_via_async_set_updated_data(
     # rebind to the real function.
     from custom_components.iaqualink_robots.coordinator import AqualinkClient
 
-    client._serial = "TEST"
+    # M15: production code reads `client.serial` (public property) — mock must
+    # set the public name, not `_serial`, or the parser builds a result dict
+    # whose `serial_number` field is a MagicMock auto-attribute. The two tests
+    # that don't assert on serial_number tolerated this silently pre-fix.
+    client.serial = "TEST"
     client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
     client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
     client._pending_stop_reset = None
@@ -1474,7 +1478,11 @@ async def test_apply_realtime_envelope_does_not_call_async_request_refresh(
 
     from custom_components.iaqualink_robots.coordinator import AqualinkClient
 
-    client._serial = "TEST"
+    # M15: production code reads `client.serial` (public property) — mock must
+    # set the public name, not `_serial`, or the parser builds a result dict
+    # whose `serial_number` field is a MagicMock auto-attribute. The two tests
+    # that don't assert on serial_number tolerated this silently pre-fix.
+    client.serial = "TEST"
     client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
     client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
     client._pending_stop_reset = None
@@ -1543,7 +1551,11 @@ async def test_apply_realtime_envelope_clears_desired_state_on_natural_completio
 
     from custom_components.iaqualink_robots.coordinator import AqualinkClient
 
-    client._serial = "TEST"
+    # M15: production code reads `client.serial` (public property) — mock must
+    # set the public name, not `_serial`, or the parser builds a result dict
+    # whose `serial_number` field is a MagicMock auto-attribute. The two tests
+    # that don't assert on serial_number tolerated this silently pre-fix.
+    client.serial = "TEST"
     client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
     client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
     client._pending_stop_reset = None

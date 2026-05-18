@@ -543,7 +543,7 @@ def test_no_self_listeners_attribute_access_in_package() -> None:
 
     pkg = Path(__file__).parent.parent / "custom_components" / "iaqualink_robots"
     offenders: list[str] = []
-    for path in sorted(pkg.glob("*.py")):
+    for path in sorted(pkg.rglob("*.py")):  # rglob walks subpackages too
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if (
@@ -892,7 +892,7 @@ def test_no_phantom_localize_calls_in_package() -> None:
 
     pkg = Path(__file__).parent.parent / "custom_components" / "iaqualink_robots"
     offenders: list[str] = []
-    for path in sorted(pkg.glob("*.py")):
+    for path in sorted(pkg.rglob("*.py")):  # rglob walks subpackages too
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if (

@@ -135,22 +135,39 @@ def test_partial_redact_none_returns_empty_string() -> None:
 
 
 def test_partial_redact_short_value_collapses_to_double_asterisk() -> None:
-    """Values <= 6 chars expose too high a fraction; collapse instead."""
-    for short in ("", "a", "abc", "abcdef"):
+    """Values <= 10 chars expose too high a fraction; collapse instead.
+
+    Post-CR threshold (review of P5+C3): raised from <=6 to <=10 because
+    a 7-char value previously yielded ``abc***efg`` — 86% disclosure,
+    defeating the partial-redaction purpose. i2d-family device serials
+    are 7-9 chars in some cases, so 10 is the minimum that keeps any
+    real-world short serial fully collapsed.
+    """
+    for short in ("", "a", "abc", "abcdef", "abcdefg", "abcdefgh", "abcdefghi", "abcdefghij"):
         assert _partial_redact(short) == "**", (
             f"len-{len(short)} value should collapse to '**', got {_partial_redact(short)!r}"
         )
 
 
 def test_partial_redact_long_value_shows_first_three_and_last_three() -> None:
-    """The 3-on / 3-off shape keeps enough entropy for triage."""
-    assert _partial_redact("R23X12345678") == "R23***678"
-    assert _partial_redact("abcdefg") == "abc***efg"  # exactly 7 chars
+    """The 3-on / 3-off shape keeps enough entropy for triage.
+
+    Examples use real-world iAqualink serial lengths (11-12 chars). The
+    pre-CR test asserted ``_partial_redact("abcdefg") == "abc***efg"``
+    locking in 86%-disclosure as desired; that assertion was REMOVED in
+    the CR follow-up because the threshold is now <=10.
+    """
+    assert _partial_redact("R23X12345678") == "R23***678"  # 12 chars
+    assert _partial_redact("abcdefghijk") == "abc***ijk"   # exactly 11 chars (boundary above threshold)
 
 
 def test_partial_redact_coerces_non_string_to_string() -> None:
-    """A bug elsewhere could hand us an int — we should not crash."""
-    assert _partial_redact(1234567890) == "123***890"
+    """A bug elsewhere could hand us an int — we should not crash.
+
+    Uses an 11+-char integer because the threshold is now <=10; shorter
+    numeric inputs would collapse to ``"**"`` rather than expose digits.
+    """
+    assert _partial_redact(12345678901) == "123***901"  # 11 chars stringified
 
 
 # ---------------------------------------------------------------------------

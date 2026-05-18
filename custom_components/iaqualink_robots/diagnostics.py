@@ -34,7 +34,7 @@ from .const import DOMAIN
 # their entry until ``async_setup_entry`` strips it on the next setup
 # (M19 AC#8). Redacting it from the diagnostic output protects the
 # transient window before that strip fires.
-TO_REDACT = {
+TO_REDACT = frozenset({
     "username",
     "password",
     "api_key",
@@ -44,7 +44,7 @@ TO_REDACT = {
     "first_name",
     "last_name",
     "email",
-}
+})
 
 
 async def async_get_config_entry_diagnostics(
@@ -128,12 +128,17 @@ def _partial_redact(value: Any) -> str:
     3-off shape keeps enough entropy for disambiguation without
     exposing the full identifier.
 
-    Values shorter than 7 chars collapse to ``"**"`` rather than leaking
-    a high fraction of the original.
+    Values **<= 10 chars** collapse to ``"**"`` rather than leaking a
+    high fraction of the original. Pre-review threshold was 6, but a
+    7-char value yielded ``abc***efg`` — 86% disclosure, defeating the
+    partial-redaction purpose. Some i2d-family device serials are 7–9
+    chars per the cloud docs, so 10 is the minimum that keeps any
+    real-world serial under ~60% disclosure. Long iAqualink serials
+    (typically 11–12 chars like ``R23X12345678``) are unaffected.
     """
     if value is None:
         return ""
     text = str(value)
-    if len(text) <= 6:
+    if len(text) <= 10:
         return "**"
     return f"{text[:3]}***{text[-3:]}"

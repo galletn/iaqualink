@@ -74,6 +74,30 @@ async def async_setup_entry(hass, entry, async_add_entities):
     vacuum = IAquaLinkRobotVacuum(coordinator, client, serial_number, hass)
     async_add_entities([vacuum], True)
 
+    # Story C1a: register the 7 services declared in `services.yaml`. Pre-C1a
+    # these were advertised in `services.yaml` but never wired to anything —
+    # automations calling `iaqualink_robots.remote_forward` (etc.) raised
+    # `ServiceNotFound`. Each call dispatches to the matching ``async_*``
+    # method on the vacuum entity (via the public
+    # ``platform.async_register_entity_service`` hook). The empty ``{}``
+    # schema means no service fields beyond the entity target.
+    #
+    # **User-facing behaviour change**: any pre-existing automation that
+    # called these service names now actually runs the action (instead of
+    # failing with ServiceNotFound). Documented in the CHANGELOG.
+    from homeassistant.helpers import entity_platform
+    platform = entity_platform.async_get_current_platform()
+    for service_name, method in (
+        ("remote_forward", "async_remote_forward"),
+        ("remote_backward", "async_remote_backward"),
+        ("remote_rotate_left", "async_remote_rotate_left"),
+        ("remote_rotate_right", "async_remote_rotate_right"),
+        ("remote_stop", "async_remote_stop"),
+        ("add_fifteen_minutes", "async_add_fifteen_minutes"),
+        ("reduce_fifteen_minutes", "async_reduce_fifteen_minutes"),
+    ):
+        platform.async_register_entity_service(service_name, {}, method)
+
 
 class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], StateVacuumEntity):
     """Represents an iaqualink_robots vacuum."""

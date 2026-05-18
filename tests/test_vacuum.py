@@ -257,3 +257,103 @@ async def test_set_fan_speed_accepts_internal_key(monkeypatch) -> None:
     # Silence asyncio's "coroutine was never awaited" complaint about the
     # delayed-refresh coroutine we intentionally discarded above.
     _ = asyncio  # keep import live for the monkeypatch targets
+
+
+# ----------------------------------------------------------------------------
+# Story C1a — register the 7 services declared in services.yaml
+# ----------------------------------------------------------------------------
+#
+# Pre-C1a the 7 services in `services.yaml` (`remote_forward`,
+# `remote_backward`, `remote_rotate_left`, `remote_rotate_right`,
+# `remote_stop`, `add_fifteen_minutes`, `reduce_fifteen_minutes`) were
+# declared but never registered. Any automation calling
+# `iaqualink_robots.remote_forward` raised `ServiceNotFound`. C1a wires
+# them via `entity_platform.async_register_entity_service` in
+# `vacuum.py::async_setup_entry`, dispatching each service call to the
+# matching `async_*` method on the vacuum entity.
+
+
+C1A_SERVICE_TO_METHOD = (
+    ("remote_forward", "async_remote_forward"),
+    ("remote_backward", "async_remote_backward"),
+    ("remote_rotate_left", "async_remote_rotate_left"),
+    ("remote_rotate_right", "async_remote_rotate_right"),
+    ("remote_stop", "async_remote_stop"),
+    ("add_fifteen_minutes", "async_add_fifteen_minutes"),
+    ("reduce_fifteen_minutes", "async_reduce_fifteen_minutes"),
+)
+
+
+def test_c1a_each_service_method_exists_on_vacuum_entity() -> None:
+    """For each of the 7 services, the corresponding ``async_*`` method
+    exists on ``IAquaLinkRobotVacuum``. C1a's
+    ``platform.async_register_entity_service`` calls register by string
+    method name; a typo here would only fail at setup time when the
+    integration loads in HA. This static check catches it at CI time.
+    """
+    from custom_components.iaqualink_robots.vacuum import IAquaLinkRobotVacuum
+    missing = [
+        method for _, method in C1A_SERVICE_TO_METHOD
+        if not hasattr(IAquaLinkRobotVacuum, method)
+    ]
+    assert not missing, (
+        "C1a: service-dispatch target method(s) missing on vacuum entity: "
+        f"{missing}. Either restore the method or update the (service, "
+        "method) tuple in vacuum.py::async_setup_entry."
+    )
+
+
+async def test_c1a_async_setup_entry_registers_all_seven_services(monkeypatch) -> None:
+    """``vacuum.py::async_setup_entry`` calls
+    ``platform.async_register_entity_service`` once per service in the C1a
+    tuple. Monkeypatches ``entity_platform.async_get_current_platform`` to
+    capture each call; asserts the full set is registered.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from homeassistant.helpers import entity_platform
+
+    from custom_components.iaqualink_robots import vacuum as vacuum_module
+    from custom_components.iaqualink_robots.const import DOMAIN
+
+    registered: list[tuple[str, str]] = []
+
+    class _PlatformStub:
+        def async_register_entity_service(self, service_name, schema, method):
+            registered.append((service_name, method))
+
+    monkeypatch.setattr(
+        entity_platform,
+        "async_get_current_platform",
+        lambda: _PlatformStub(),
+    )
+
+    # Minimal hass + entry stubs — async_setup_entry constructs a vacuum
+    # entity, calls async_add_entities, then registers services. We only
+    # care about the registration side-effects here.
+    hass = MagicMock()
+    coordinator = MagicMock()
+    coordinator.async_config_entry_first_refresh = AsyncMock()
+    client = MagicMock()
+    client.robot_id = "TEST_ROBOT"
+    hass.data = {
+        DOMAIN: {"test-entry-id": {"coordinator": coordinator, "client": client}},
+    }
+    entry = MagicMock()
+    entry.entry_id = "test-entry-id"
+    entry.data = {"serial_number": "R23X12345678"}
+
+    async_add_entities = MagicMock()
+
+    await vacuum_module.async_setup_entry(hass, entry, async_add_entities)
+
+    # Every C1a service must be registered exactly once with the correct
+    # target method name.
+    assert sorted(registered) == sorted(C1A_SERVICE_TO_METHOD), (
+        f"C1a: registered services do not match the expected tuple.\n"
+        f"  expected: {sorted(C1A_SERVICE_TO_METHOD)}\n"
+        f"  actual:   {sorted(registered)}"
+    )
+    # `async_add_entities` was also called — basic smoke check the setup
+    # didn't bail before reaching the registration block.
+    async_add_entities.assert_called_once()

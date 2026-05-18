@@ -29,7 +29,6 @@ release once we're confident no users remain on legacy-domain storage.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -52,11 +51,6 @@ NEW_DOMAIN = "iaqualink_robots"
 # under the ``issues`` section.
 _ISSUE_MIGRATION_PENDING_RESTART = "legacy_domain_migrated_restart_required"
 _ISSUE_MIGRATION_FAILED = "legacy_domain_migration_failed"
-
-
-async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
-    """No-op top-level setup. The migration logic lives in async_setup_entry."""
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

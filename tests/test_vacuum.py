@@ -415,6 +415,14 @@ def test_m14_attributes_decoupled_from_coordinator_data() -> None:
 
     # After update, the entity's attributes mirror the coordinator's data.
     assert vac._attributes == coord.data
+    # M14 review follow-up: pin the precise contract — `_attributes` is a
+    # COPY (different object), not a reference. Equality alone would still
+    # pass if a regression went back to `self._attributes = data`; the
+    # `is not` check catches that fast.
+    assert vac._attributes is not coord.data, (
+        "M14 broken: vacuum._attributes is the SAME object as coordinator.data — "
+        "the assignment regressed from a copy to a reference"
+    )
 
     # Mutate the entity's attributes. With the M14 shallow-copy fix, the
     # coordinator's data must NOT be affected. Pre-M14 this assertion

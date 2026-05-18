@@ -159,11 +159,18 @@ def test_is_token_expired_returns_true_when_token_unset() -> None:
 
 
 def test_add_minutes_to_datetime_rejects_naive_input() -> None:
-    """Naive datetimes fail fast at the helper boundary (H8 spec note)."""
+    """Naive datetimes fail fast at the helper boundary (H8 spec note).
+
+    Raises `TypeError`, not `AssertionError`: the H8 review follow-up
+    upgraded the boundary check from `assert dt.tzinfo is not None` to an
+    explicit `raise TypeError(...)` because `assert` is stripped under
+    `python -O` / `PYTHONOPTIMIZE=1`, which would have defeated the
+    fail-fast goal in optimized builds.
+    """
     client = _build_client()
     naive = datetime.datetime(2026, 5, 15, 12, 0, 0)  # no tzinfo
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(TypeError, match="tz-aware"):
         client.add_minutes_to_datetime(naive, 15)
 
 

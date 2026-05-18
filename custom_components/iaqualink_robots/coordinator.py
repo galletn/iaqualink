@@ -3527,7 +3527,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         try:
             client = self.client
             result: dict = {
-                "serial_number": client._serial,
+                "serial_number": client.serial,
                 "device_type": client.device_type,
             }
             # Preserve model & last_online from prior data — model is fetched on

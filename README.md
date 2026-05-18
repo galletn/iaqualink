@@ -114,7 +114,7 @@ Enable debug logging by adding to `configuration.yaml`:
 ```yaml
 logger:
   logs:
-    custom_components.iaqualinkRobots: debug
+    custom_components.iaqualink_robots: debug
 ```
 
 ## 🤝 Contributing

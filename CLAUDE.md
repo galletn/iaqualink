@@ -4,7 +4,7 @@ This file is for Claude Code sessions (and any other AI agents) picking up work 
 
 ## What this is
 
-Home Assistant custom integration for **iAqualink robotic pool cleaners** (Zodiac, Polaris, Aqua Products and rebrands). Domain: `iaqualinkRobots`. The main code lives in [`custom_components/iaqualink_robots/`](custom_components/iaqualink_robots/).
+Home Assistant custom integration for **iAqualink robotic pool cleaners** (Zodiac, Polaris, Aqua Products and rebrands). Domain: `iaqualink_robots` (snake_case post-story-C7, matching the directory name and HA's snake_case convention). Pre-C7 the manifest declared the camelCase `iaqualinkRobots` which still exists in some legacy config-entry storage on user installs that haven't been deleted + re-added (the upgrade-time migration story is documented in the C7 CHANGELOG entry). The main code lives in [`custom_components/iaqualink_robots/`](custom_components/iaqualink_robots/).
 
 The user-facing entry point is the config flow in [`config_flow.py`](custom_components/iaqualink_robots/config_flow.py); the heavy lifting (cloud auth, websocket, per-device parsing) is in [`coordinator.py`](custom_components/iaqualink_robots/coordinator.py).
 

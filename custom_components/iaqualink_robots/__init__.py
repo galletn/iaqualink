@@ -216,17 +216,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # so the coordinator picks up the new value without an HA restart.
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
 
-    # Story C7: if the user just completed the legacy-domain migration
-    # (i.e. they restarted HA after the legacy stub ran), there will be
-    # outstanding Repair issues asking them to restart. The entry has now
-    # loaded successfully under the new domain — dismiss both issues so the
-    # user doesn't see a "restart required" notification that no longer
-    # applies. ``async_delete_issue`` is a no-op when the issue doesn't
-    # exist, so this is safe to call unconditionally on every setup.
-    from homeassistant.helpers import issue_registry as ir
-    ir.async_delete_issue(hass, DOMAIN, "legacy_domain_migrated_restart_required")
-    ir.async_delete_issue(hass, DOMAIN, "legacy_domain_migration_failed")
-
     return True
 
 

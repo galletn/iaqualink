@@ -168,6 +168,16 @@ async def test_close_websocket_timeout_does_not_hang(coordinator, caplog) -> Non
 
     coordinator.client._close_websocket = AsyncMock(side_effect=slow_close)
 
+    # Capture the real wait_for BEFORE the patch so the test harness can use
+    # it for the outer guardrail timeout without being affected by the patch.
+    #
+    # NOTE: ``patch("...coordinator.asyncio.wait_for", new=...)`` is global —
+    # ``coordinator.asyncio`` IS the asyncio module (module identity), so the
+    # patch reaches every wait_for call across the process for the duration
+    # of the ``with`` block, including ``asyncio.wait_for`` written here in
+    # the test file. Pre-fix, the test's own outer 2 s guardrail was clamped
+    # to 0.05 s by the shim and fired TimeoutError before cleanup could
+    # finish. Using the captured ``real_wait_for`` here bypasses the patch.
     real_wait_for = asyncio.wait_for
 
     async def fast_wait_for(aw, timeout):  # type: ignore[no-untyped-def]
@@ -180,7 +190,9 @@ async def test_close_websocket_timeout_does_not_hang(coordinator, caplog) -> Non
         "custom_components.iaqualink_robots.coordinator.asyncio.wait_for",
         new=fast_wait_for,
     ), caplog.at_level("WARNING"):
-        await asyncio.wait_for(coordinator.cleanup(), timeout=2.0)
+        # Outer guardrail uses the captured real wait_for so it isn't
+        # clamped to 0.05 s by the patch above.
+        await real_wait_for(coordinator.cleanup(), timeout=2.0)
 
     assert any(
         "_close_websocket() did not return within 5s" in r.message

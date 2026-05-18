@@ -527,7 +527,14 @@ class AqualinkClient:
         if not self._pending_stop_reset or not self._pending_stop_reset_at:
             return data
 
-        age_seconds = (dt_util.utcnow() - self._pending_stop_reset_at).total_seconds()
+        # H6 review follow-up: clamp to 0.0 so a backward wall-clock jump
+        # (NTP correction, manual clock change) can't make a real outage
+        # look fresh and make the stale-age branch unreachable. Mirrors
+        # the same fix applied to `_outage_age_seconds` (story H7 review).
+        age_seconds = max(
+            (dt_util.utcnow() - self._pending_stop_reset_at).total_seconds(),
+            0.0,
+        )
         live_activity = data.get("activity")
 
         if age_seconds > PENDING_STOP_RESET_MAX_AGE_SECONDS:
@@ -3259,6 +3266,14 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         """
         try:
             await self.async_request_refresh()
+        except ConfigEntryAuthFailed:
+            # H10 review follow-up: do NOT swallow auth failures. The
+            # broad ``except Exception`` below would otherwise demote a
+            # legitimate credential rejection to a debug log, preventing
+            # HA from dispatching its reauth flow (delivered by H9b/P4).
+            # Re-raise so the websocket listener task fails the right way
+            # and HA's coordinator-level auth escalation kicks in.
+            raise
         except Exception as e:
             _LOGGER.debug(f"Error handling real-time update: {e}")
 

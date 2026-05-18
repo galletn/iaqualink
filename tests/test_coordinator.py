@@ -463,11 +463,12 @@ def test_pending_stop_reset_no_op_when_flag_pair_is_none() -> None:
 def test_pending_stop_reset_no_op_when_timestamp_missing() -> None:
     """Defensive: a half-set state (values without timestamp) bails cleanly.
 
-    The invariant is "both halves set or both `None`" — both
-    `stop_cleaning` paths (vr/cyclobat/cyclonext via `_set_other_*` and
-    i2d via `_set_i2d_*`) maintain it. If a future bug breaks it, the
-    helper treats the half-set state as no-op (rather than crashing on
-    `None - datetime` arithmetic).
+    The invariant is "both halves set or both `None`", maintained by the
+    single `stop_cleaning` site (the dispatch into vr/cyclobat/cyclonext/
+    vortrax/i2d device-type branches happens *inside* `stop_cleaning`, all
+    paths share the same pair-stamp). If a future bug breaks the invariant,
+    the helper treats the half-set state as no-op rather than crashing on
+    `None - datetime` arithmetic.
     """
     client = _build_client_for_pending_stop_reset()
     client._pending_stop_reset = dict(_PENDING_STOP_RESET_VALUES)

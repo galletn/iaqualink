@@ -1,4 +1,4 @@
-"""Button entities for iaqualinkRobots integration."""
+"""Button entities for iaqualink_robots integration."""
 import logging
 
 from homeassistant.components.button import ButtonEntity

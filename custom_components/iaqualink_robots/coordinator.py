@@ -1,4 +1,4 @@
-"""Coordinator and client for iaqualinkRobots integration."""
+"""Coordinator and client for iaqualink_robots integration."""
 import base64
 import json
 import datetime

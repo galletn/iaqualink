@@ -1,14 +1,13 @@
 {
-  "domain": "iaqualink_robots",
-  "name": "iAqualink Robots",
+  "domain": "iaqualinkRobots",
+  "name": "iAqualink Robots (legacy)",
   "codeowners": ["@galletn"],
-  "config_flow": true,
+  "config_flow": false,
   "dependencies": [],
   "documentation": "https://github.com/galletn/iaqualink/",
   "integration_type": "device",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/galletn/iaqualink/issues/",
-  "requirements": ["aiohttp>=3.9.0"],
-  "version": "3.0.0-beta.1"
+  "requirements": [],
+  "version": "3.0.0-beta.2"
 }
-

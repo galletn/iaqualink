@@ -67,5 +67,15 @@
         }
       }
     }
+  },
+  "issues": {
+    "legacy_domain_migrated_restart_required": {
+      "title": "iAqualink Robots: domain rename — restart Home Assistant",
+      "description": "The integration's internal domain has been renamed from `iaqualinkRobots` (camelCase) to `iaqualink_robots` (snake_case) to match the Home Assistant naming convention and resolve a long-standing hassfest warning. Your existing config entries, entities, devices, and history have been migrated automatically. Please **restart Home Assistant** to complete the migration and bring your robot back online under the new domain. After the restart your automations and dashboards should continue to work without changes. You can dismiss this notice once you've verified everything still works."
+    },
+    "legacy_domain_migration_failed": {
+      "title": "iAqualink Robots: domain migration failed for {entry_title}",
+      "description": "The automatic migration from the legacy `iaqualinkRobots` domain to `iaqualink_robots` could not complete for this entry. The integration's data is unchanged but the entry will not load under the new domain. Manual recovery: go to **Settings → Devices & Services → iAqualink Robots**, click the 3-dot menu on the affected entry, choose **Delete**, then click **+ Add Integration** and re-add with your iAqualink credentials. Entity history for the affected entry may be lost. If the problem persists, please open a bug report including the integration log lines for `C7 migration failed`."
+    }
   }
 }

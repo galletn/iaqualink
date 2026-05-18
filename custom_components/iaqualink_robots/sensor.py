@@ -1,4 +1,4 @@
-"""Sensor platform for iaqualinkRobots integration."""
+"""Sensor platform for iaqualink_robots integration."""
 
 import logging
 

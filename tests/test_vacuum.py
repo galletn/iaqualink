@@ -357,3 +357,73 @@ async def test_c1a_async_setup_entry_registers_all_seven_services(monkeypatch) -
     # `async_add_entities` was also called — basic smoke check the setup
     # didn't bail before reaching the registration block.
     async_add_entities.assert_called_once()
+
+
+# ----------------------------------------------------------------------------
+# Story M14 — vacuum entity attributes decoupled from coordinator data
+# ----------------------------------------------------------------------------
+#
+# Pre-M14 `_handle_coordinator_update` did `self._attributes = data` (a
+# reference). Any later mutation of `self._attributes` (e.g. through the
+# `restored` flag in `extra_state_attributes`) would mutate the shared
+# `coordinator.data` dict in place, corrupting state every other entity
+# (sensors, buttons) reads from. M14 makes the assignment a shallow
+# `dict(data)` copy.
+
+
+def test_m14_attributes_decoupled_from_coordinator_data() -> None:
+    """The vacuum's `_attributes` dict is a shallow copy of `coordinator.data`,
+    not a reference. Mutating `_attributes` post-update must NOT mutate
+    `coordinator.data`.
+
+    Constructs the vacuum via `__new__` to skip `__init__`'s wiring (we
+    only exercise `_handle_coordinator_update`'s assignment site).
+    """
+    from unittest.mock import MagicMock
+
+    from custom_components.iaqualink_robots.vacuum import IAquaLinkRobotVacuum
+
+    coord = MagicMock()
+    coord.data = {
+        "activity": "cleaning",
+        "fan_speed": "floor_only",
+        "status": "connected",
+        "model": "VRX iQ+",
+    }
+    # Pre-set client + coordinator on the vacuum without going through
+    # __init__ (which spins up the full HA wiring). _handle_coordinator_update
+    # reads self.coordinator.data; everything else in the body needs at
+    # least a placeholder for the attribute-update branch.
+    vac = IAquaLinkRobotVacuum.__new__(IAquaLinkRobotVacuum)
+    vac.coordinator = coord  # type: ignore[attr-defined]
+    vac._attributes = {}
+    vac._status = None
+    vac._activity = None
+    vac._fan_speed = None
+    vac._fan_speed_list = []
+    vac._supported_features = 0
+    vac._client = MagicMock()
+    vac._serial_number = "TEST"
+    vac._hass = MagicMock()
+    # Skip the entity-state push that _handle_coordinator_update would
+    # call at the end (it requires HA platform plumbing).
+    vac.async_write_ha_state = MagicMock()
+    # Skip the no_data / error_state early-return branch — set data has
+    # no error_state, so we proceed to the attribute-update branch.
+
+    vac._handle_coordinator_update()
+
+    # After update, the entity's attributes mirror the coordinator's data.
+    assert vac._attributes == coord.data
+
+    # Mutate the entity's attributes. With the M14 shallow-copy fix, the
+    # coordinator's data must NOT be affected. Pre-M14 this assertion
+    # would fail because `self._attributes is coord.data`.
+    vac._attributes["activity"] = "idle"
+    vac._attributes["new_key"] = "mutated"
+    assert coord.data["activity"] == "cleaning", (
+        "M14 broken: mutating vacuum._attributes leaked into coordinator.data"
+    )
+    assert "new_key" not in coord.data, (
+        "M14 broken: adding a key to vacuum._attributes leaked into coordinator.data"
+    )

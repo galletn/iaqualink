@@ -153,9 +153,18 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
 
             # Get status and activity directly from coordinator
             self._status = data.get("status")
-            # Only update attributes if data has changed to avoid unnecessary copying
+            # Only update attributes if data has changed (story M14).
+            # ``dict(data)`` is a shallow copy — defensive against accidental
+            # mutation of ``self._attributes`` (e.g. through
+            # ``extra_state_attributes``) leaking back into ``coordinator.data``
+            # and corrupting the shared state every other entity reads from.
+            # Pre-M14 the assignment was ``self._attributes = data`` (a
+            # reference), which the comment marketed as "performance" but was
+            # actually a latent aliasing bug. The shallow copy is cheap for
+            # the small dicts here (handful of scalar fields); the historic
+            # performance concern doesn't measurably exist.
             if self._attributes != data:
-                self._attributes = data  # Reference instead of copy for performance
+                self._attributes = dict(data)
 
             # Map activity from coordinator to VacuumActivity enum - only if not "unknown"
             activity = data.get("activity", "idle")

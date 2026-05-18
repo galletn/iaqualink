@@ -187,6 +187,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         debug_mode=debug_mode,
         include_seconds_remaining=include_seconds_remaining,
     )
+    # L19: hand the hass reference to the client BEFORE any cloud call so the
+    # early-auth path below (when `target_serial` is set) takes the shared
+    # `async_get_clientsession` branch in `AqualinkClient._cloud_session`,
+    # not the ephemeral fallback. The coordinator __init__ also calls
+    # `client.set_hass(hass)` — idempotent reassignment.
+    client.set_hass(hass)
 
     # If a specific serial is provided, use it for device discovery
     if target_serial:

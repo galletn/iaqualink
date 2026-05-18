@@ -9,8 +9,10 @@ import asyncio
 import re
 import time
 
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed  # type: ignore # noqa
+from homeassistant.helpers.aiohttp_client import async_get_clientsession  # type: ignore # noqa
 from homeassistant.exceptions import ConfigEntryAuthFailed  # type: ignore # noqa
 # Note: This import requires Home Assistant 2025.1 or later
 from homeassistant.components.vacuum import VacuumActivity  # type: ignore # noqa
@@ -389,6 +391,39 @@ class AqualinkClient:
     def set_hass(self, hass):
         """Set Home Assistant instance for translations."""
         self._hass = hass
+
+    @asynccontextmanager
+    async def _cloud_session(self):
+        """Yield an aiohttp session for iAqualink cloud REST calls (story L19).
+
+        When ``self._hass`` is set, yields HA's shared, pooled session via
+        ``async_get_clientsession`` so the 4 cloud sites (login, devices,
+        features, i2d command) reuse one connection pool across calls and
+        avoid a fresh TLS handshake per request. HA owns lifecycle, so the
+        session is NOT closed on context exit.
+
+        When ``self._hass`` is None (config-flow discovery via the
+        ``discover_devices`` classmethod, or unit tests that build a bare
+        ``AqualinkClient``), falls back to a one-shot ``aiohttp.ClientSession``
+        that closes on exit. Pooling has no value for a single-shot
+        discovery probe, and tests that monkeypatch ``aiohttp.ClientSession``
+        keep working unchanged.
+
+        Headers are NOT passed to the session here — callers MUST attach
+        them per-request (``session.get(url, headers=...)``). The shared
+        HA session is reused across many integrations, so setting default
+        headers on it would leak iAqualink auth tokens to other consumers.
+        Note: the websocket session at ``_ensure_websocket_connection`` is
+        intentionally owned by this client (not shared) — it holds the live
+        WS connection and is closed via ``_close_websocket``. The Vortrax
+        web scraper at ``_get_vortrax_model_from_web`` is also intentionally
+        isolated (third-party site — see comment there).
+        """
+        if self._hass is not None:
+            yield async_get_clientsession(self._hass)
+        else:
+            async with aiohttp.ClientSession() as session:
+                yield session
 
     @staticmethod
     def _resolve_cycle_duration(durations, cycle) -> int:
@@ -1147,6 +1182,14 @@ class AqualinkClient:
         ]
 
         timeout = aiohttp.ClientTimeout(total=5)  # 5 second timeout
+        # L19 AC#2/#3: intentionally NOT routed through `self._cloud_session()`.
+        # This scrapes zodiac-poolcare.com — a third-party site — and must not
+        # share HA's pooled session, which is reused across every integration
+        # in the installation. Sharing would leak HA's cookies/headers (and any
+        # iAqualink auth tokens that landed on the shared session via a
+        # mis-implemented future cloud call) to a third-party domain. The
+        # session is ephemeral by design: closes on context exit, nothing
+        # persisted, so `coordinator.cleanup()` (P10) has nothing to release.
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for url in urls:
                 try:
@@ -2122,8 +2165,12 @@ class AqualinkClient:
         never saw the reauth prompt.
         """
         try:
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.post(URL_LOGIN, data=data) as response:
+            # L19: shared HA pool via _cloud_session (falls back to ephemeral
+            # session when self._hass is None — config-flow discovery + tests).
+            # Headers go on the request, not the session, to avoid leaking
+            # auth into the shared pool.
+            async with self._cloud_session() as session:
+                async with session.post(URL_LOGIN, data=data, headers=headers) as response:
                     if response.status == 401:
                         if self._debug_mode:
                             _LOGGER.debug("Authentication failed: 401 Unauthorized.")
@@ -2160,8 +2207,9 @@ class AqualinkClient:
         """
         for attempt in range(2):
             try:
-                async with aiohttp.ClientSession(headers=headers) as session:
-                    async with session.get(URL_GET_DEVICES, params=params) as response:
+                # L19: shared HA pool via _cloud_session.
+                async with self._cloud_session() as session:
+                    async with session.get(URL_GET_DEVICES, params=params, headers=headers) as response:
                         if response.status == 401:
                             if attempt == 0:
                                 _LOGGER.debug("401 on get_devices — refreshing token and retrying once")
@@ -2187,13 +2235,17 @@ class AqualinkClient:
         """
         for attempt in range(2):
             try:
-                async with aiohttp.ClientSession(headers={"Authorization": self._id_token}) as session:
-                    async with session.get(url) as response:
+                # L19: shared HA pool. Auth header constructed per-request so
+                # the retry path picks up the rotated `self._id_token` cleanly
+                # (it was already happening before because the loop re-entered
+                # the `with ClientSession(...)` block — this preserves that).
+                async with self._cloud_session() as session:
+                    async with session.get(url, headers={"Authorization": self._id_token}) as response:
                         if response.status == 401:
                             if attempt == 0:
                                 _LOGGER.debug("401 on get_device_features — refreshing token and retrying once")
                                 await self._authenticate(force=True)
-                                continue  # next iteration re-reads self._id_token into a fresh session
+                                continue  # next iteration re-reads self._id_token into a fresh request header
                             raise AuthFailedError(
                                 f"401 Unauthorized on {url} after re-auth retry"
                             )
@@ -2277,10 +2329,14 @@ class AqualinkClient:
         """
         for attempt in range(2):
             try:
-                async with aiohttp.ClientSession(
-                    headers={"Authorization": self._id_token, "api_key": self._api_key}
-                ) as session:
-                    async with session.post(url, json=request) as response:
+                # L19: shared HA pool. Auth header constructed per-request so
+                # the retry picks up the rotated `self._id_token` cleanly.
+                async with self._cloud_session() as session:
+                    async with session.post(
+                        url,
+                        json=request,
+                        headers={"Authorization": self._id_token, "api_key": self._api_key},
+                    ) as response:
                         if response.status == 401:
                             if attempt == 0:
                                 _LOGGER.debug("401 on post_command_i2d — refreshing token and retrying once")

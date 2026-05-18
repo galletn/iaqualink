@@ -650,6 +650,7 @@ def test_is_long_outage_false_during_short_blip(coordinator_factory) -> None:
     coord, _client = coordinator_factory()
     coord._consecutive_failures = 5
     coord._first_failure_at = dt_util.utcnow() - dt.timedelta(seconds=60)
+    coord._last_data = {"activity": "cleaning"}  # H7 review follow-up: is_serving_stale_data requires real cached data
 
     assert coord.is_long_outage is False
     assert coord.is_serving_stale_data is True  # stale-data flag IS True
@@ -672,6 +673,7 @@ def test_is_long_outage_true_after_threshold_exceeded(coordinator_factory) -> No
     coord._first_failure_at = dt_util.utcnow() - dt.timedelta(
         seconds=LONG_OUTAGE_THRESHOLD_SECONDS + 5
     )
+    coord._last_data = {"activity": "cleaning"}  # H7 review follow-up: is_serving_stale_data requires real cached data
 
     assert coord.is_long_outage is True
     assert coord.is_serving_stale_data is True
@@ -703,16 +705,30 @@ def test_is_long_outage_at_boundary_just_below_threshold_remains_false(
 
 
 def test_is_serving_stale_data_tracks_consecutive_failures(coordinator_factory) -> None:
-    """`is_serving_stale_data` mirrors `_consecutive_failures > 0`. Flips
-    automatically on recovery — AC #6.
+    """`is_serving_stale_data` is True iff `_consecutive_failures > 0` AND
+    `_last_data` is non-empty (i.e. we have real cached data to serve).
+    Flips automatically on recovery — AC #6.
+
+    The `bool(_last_data)` guard is the H7 review follow-up; without it,
+    the flag would return True on the first-ever poll failure even though
+    the entity is showing synthetic offline-minimal data, not anything
+    being "restored".
     """
     coord, _client = coordinator_factory()
     assert coord.is_serving_stale_data is False
 
+    # Failure WITH prior real data → True (the real "restored" case).
     coord._consecutive_failures = 1
+    coord._last_data = {"activity": "cleaning"}
     assert coord.is_serving_stale_data is True
 
-    coord._consecutive_failures = 0  # recovery
+    # Failure WITHOUT prior real data → False (synthetic-offline case).
+    coord._last_data = {}
+    assert coord.is_serving_stale_data is False
+
+    # Recovery → False either way.
+    coord._consecutive_failures = 0
+    coord._last_data = {"activity": "cleaning"}
     assert coord.is_serving_stale_data is False
 
 

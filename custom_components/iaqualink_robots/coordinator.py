@@ -3182,10 +3182,18 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         Helper used by both ``is_long_outage`` and the broad-except log
         messages. Returning ``0.0`` rather than ``None`` keeps the
         log-formatter happy without a special case at every call site.
+
+        Clamps to ``0.0`` if the wall-clock has jumped backward since the
+        stamp was taken (NTP correction, manual user clock change, DST
+        transition in the host timezone — ``dt_util.utcnow()`` is aware-UTC
+        post-H8 so DST doesn't normally affect it, but the host clock can
+        still skew). Without the clamp, a backward jump would make a real
+        outage look fresh and never trip ``is_long_outage``.
         """
         if self._first_failure_at is None:
             return 0.0
-        return (dt_util.utcnow() - self._first_failure_at).total_seconds()
+        elapsed = (dt_util.utcnow() - self._first_failure_at).total_seconds()
+        return max(elapsed, 0.0)
 
     @property
     def is_long_outage(self) -> bool:
@@ -3212,8 +3220,17 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         (``{{ state_attr('vacuum.x', 'restored') }}``). Flips back to
         ``False`` automatically on the next successful poll (the success
         path clears ``_first_failure_at`` and ``_consecutive_failures``).
+
+        The ``bool(self._last_data)`` guard is the H7 review follow-up:
+        on the first-ever poll failure (no prior real data), the broad-
+        except path returns synthetic offline-minimal data (``status:
+        offline``, ``error_state: connection_failed``). Without the
+        guard, ``restored`` would be ``True`` even though nothing is being
+        "restored" — the user has just never had real data yet. The
+        guard makes the flag mean what it says: cached prior-real data
+        is being returned, not synthetic placeholder data.
         """
-        return self._consecutive_failures > 0
+        return self._consecutive_failures > 0 and bool(self._last_data)
 
     # Persistent websocket connection provides resilient command execution
     # Automatic retry logic and circuit breaker patterns prevent device unavailability
@@ -3420,7 +3437,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.error(
                     f"Update failed after {self._consecutive_failures} attempts "
                     f"({self._outage_age_seconds():.0f}s outage, "
-                    f"≥ {LONG_OUTAGE_THRESHOLD_SECONDS}s threshold): {err}"
+                    f"> {LONG_OUTAGE_THRESHOLD_SECONDS}s threshold): {err}"
                     f"\nDetails:\n{error_details}")
                 # Long-outage threshold exceeded — raise UpdateFailed so HA
                 # marks the entity unavailable. The `is_long_outage` gate on

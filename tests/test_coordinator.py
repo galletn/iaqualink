@@ -609,12 +609,12 @@ async def test_handle_realtime_update_swallows_refresh_failure(
 #
 # Pre-H7 entity `available` properties only checked `coordinator.data is not
 # None`. The coordinator served stale `_last_data` through the broad-except
-# path until `_consecutive_failures > _max_failures_before_unavailable`
-# (default 30), at which point it raised `UpdateFailed` and HA marked the
-# entity unavailable. With adaptive polling (1.5 s ↔ 10 s), 30 failures spans
-# anywhere from 45 s (active robot) to 5 min (idle robot) — short enough that
-# routine ISP blips would disable user automations bound to the `available`
-# state.
+# path until `_consecutive_failures > 30` (the now-removed
+# `_max_failures_before_unavailable` attribute), at which point it raised
+# `UpdateFailed` and HA marked the entity unavailable. With adaptive polling
+# (1.5 s ↔ 10 s), 30 failures spans anywhere from 45 s (active robot) to
+# 5 min (idle robot) — short enough that routine ISP blips would disable
+# user automations bound to the `available` state.
 #
 # H7 replaces the count-based gate with a wall-clock threshold:
 # `LONG_OUTAGE_THRESHOLD_SECONDS` (currently 30 min). The coordinator stamps

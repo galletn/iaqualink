@@ -299,6 +299,22 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
         ``IAquaLinkRobotVacuum.fan_speed``.
         """
         filtered_attributes = {k: v for k, v in self._attributes.items() if k != "fan_speed"}
+        # H7 review follow-up: defensive logging if the upstream cloud
+        # payload ever starts returning a ``restored`` key of its own. We
+        # always overwrite with our H7 flag (the entity-attribute contract
+        # is ours, not the cloud's), but a debug breadcrumb makes the
+        # collision visible the first time it happens so the next
+        # maintainer doesn't chase a phantom value drift. Logs ONCE per
+        # IAquaLinkRobotVacuum instance via a class-level set to avoid
+        # per-poll log churn.
+        if "restored" in filtered_attributes and not getattr(self, "_restored_collision_logged", False):
+            _LOGGER.warning(
+                "Cloud payload contains a 'restored' attribute (value=%r) "
+                "which collides with the H7 'restored' entity flag; "
+                "the H7 value will take precedence in extra_state_attributes",
+                filtered_attributes["restored"],
+            )
+            self._restored_collision_logged = True
         filtered_attributes["restored"] = self.coordinator.is_serving_stale_data
         return filtered_attributes
 

@@ -241,27 +241,6 @@ class AqualinkClient:
             _LOGGER.debug(f"No previous status available, using 'unknown' for {error_context}")
             return "unknown"
 
-    def _get_close_code_info(self, close_code):
-        """Get human-readable information about websocket close codes."""
-        close_codes = {
-            1000: "Normal Closure - Connection closed normally",
-            1001: "Going Away - Server going down or browser navigating away",
-            1002: "Protocol Error - Websocket protocol error",
-            1003: "Unsupported Data - Server received unsupported data type",
-            1005: "No Status - No status code was provided",
-            1006: "Abnormal Closure - Connection closed abnormally without close frame",
-            1007: "Invalid Data - Invalid UTF-8 or inconsistent data received",
-            1008: "Policy Violation - Message violates policy",
-            1009: "Message Too Big - Message too large to process",
-            1011: "Server Error - Unexpected server condition",
-            1012: "Service Restart - Service is restarting",
-            1013: "Try Again Later - Service is overloaded",
-            1014: "Bad Gateway - Server acting as gateway received invalid response",
-            1015: "TLS Handshake Failed - TLS handshake failure"
-        }
-
-        return close_codes.get(close_code, f"Unknown close code: {close_code}")
-
     def _should_use_websocket(self) -> bool:
         """Check if websocket operations should be attempted based on recent connection failure history.
 
@@ -979,12 +958,6 @@ class AqualinkClient:
                             merged_reported
                         )
                         self._last_applied_state_signature = new_signature
-
-                        # Cache the stepper for button commands (preserves the
-                        # pre-C4-ws behaviour that ``button.py`` depends on).
-                        if "stepper" in merged_robot:
-                            self._cached_stepper_value = merged_robot["stepper"]
-                            self._cached_stepper_time = time.time()
 
                         # AC #2 + AC #4: single awaited push. The coordinator
                         # implements this as ``async_set_updated_data`` — no
@@ -3331,7 +3304,6 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
 
         # Real-time websocket listener for instant updates
         self._websocket_listener_task = None
-        self._should_stop_listener = False
 
         # P10: track every fire-and-forget task scheduled by entities so
         # ``cleanup()`` can cancel them deterministically on unload. Tasks
@@ -3663,7 +3635,6 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             return  # Already running
 
         try:
-            self._should_stop_listener = False
             self._websocket_listener_task = asyncio.create_task(
                 self.client._websocket_listener()
             )
@@ -3681,8 +3652,6 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         ``wait_for`` issued its own follow-up cancel on timeout — the task
         will unwind on its own; we just stop blocking on it.
         """
-        self._should_stop_listener = True
-
         if self._websocket_listener_task and not self._websocket_listener_task.done():
             self._websocket_listener_task.cancel()
             try:

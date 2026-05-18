@@ -1193,8 +1193,6 @@ def _build_client_for_ws() -> object:
     client._device_type = "vr"
     client._last_ws_envelope = None
     client._last_applied_state_signature = None
-    client._cached_stepper_value = None
-    client._cached_stepper_time = None
     client._coordinator_callback = None
     client._realtime_push_callback = None
     return client

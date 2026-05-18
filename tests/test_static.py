@@ -149,6 +149,61 @@ def test_no_external_reach_through_to_coordinator_private_title() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Story L18 — dead-state guard
+# ---------------------------------------------------------------------------
+
+# Names removed in story L18. The package must never re-introduce these
+# attribute names — they accumulated as dead state across the lifetime of
+# the integration and confused future readers about whether they had real
+# behavioural meaning.
+#
+#   * ``_cached_stepper_value`` / ``_cached_stepper_time`` — written by the
+#     C4-ws push path under a comment claiming ``button.py`` depended on
+#     them, but ``button.py`` never read either. Pure dead writes.
+#   * ``_should_stop_listener`` — set to ``True`` on stop and ``False`` on
+#     start, but the websocket-listener loop never consulted it. Real
+#     cancellation goes through ``asyncio.Task.cancel()`` (hardened by P10).
+#   * ``_get_close_code_info`` — a websocket-close-code lookup helper with
+#     zero callers anywhere in the package.
+_L18_DEAD_NAMES = (
+    "_cached_stepper_value",
+    "_cached_stepper_time",
+    "_should_stop_listener",
+    "_get_close_code_info",
+)
+
+
+def test_no_dead_state() -> None:
+    """L18: dead attributes and methods must not reappear in the package.
+
+    Each name in ``_L18_DEAD_NAMES`` was confirmed by audit to have zero
+    readers / callers before deletion. If a future change reintroduces one,
+    it's almost certainly cargo-culted from old code — CI fails and the
+    author has to either repair the reader path or pick a different name.
+    """
+    offenders: list[tuple[str, int, str, str]] = []  # (filename, line_no, name, line)
+    for path in _ALL_PYTHON_FILES:
+        for line_no, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if line.lstrip().startswith("#"):
+                continue
+            for name in _L18_DEAD_NAMES:
+                if name in line:
+                    offenders.append((path.name, line_no, name, line.rstrip()))
+
+    assert not offenders, (
+        "Story L18 dead-state names reintroduced. Each name below was "
+        "removed for having zero readers/callers — if you need behaviour "
+        "the old name implied, build a real path that's actually exercised:\n"
+        + "\n".join(
+            f"  {fname}:{lno}: {name!r} -> {line}"
+            for fname, lno, name, line in offenders
+        )
+    )
+
+
 def test_aqualink_client_exposes_device_type_and_serial_as_properties() -> None:
     """``AqualinkClient.device_type`` and ``AqualinkClient.serial`` are ``@property`` descriptors.
 

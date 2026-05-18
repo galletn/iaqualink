@@ -939,15 +939,6 @@ class AqualinkClient:
         """Set reference to coordinator for adaptive polling control."""
         self._coordinator_ref = coordinator
 
-    async def _delayed_callback(self, delay_seconds):
-        """Trigger coordinator callback after a delay for catching delayed state changes."""
-        await asyncio.sleep(delay_seconds)
-        if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
-            try:
-                await self._coordinator_callback()
-            except Exception as e:
-                _LOGGER.debug(f"Error in delayed callback: {e}")
-
     async def _ws_subscribe(self):
         """Subscribe via websocket to get live updates."""
         req = {
@@ -2257,16 +2248,17 @@ class AqualinkClient:
                     except Exception:
                         pass
 
-                # Trigger multiple immediate updates for ultra-fast control feedback
+                # C4-cmd: one awaited refresh per command — replaces the
+                # historical 3-task burst (immediate + 0.5s + 1.0s delayed).
+                # The coordinator's debounced `async_request_refresh` (called
+                # inside `_handle_realtime_update`) collapses near-duplicate
+                # refreshes from button.py / vacuum.py into a single
+                # `_async_update_data` call.
                 if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
                     try:
-                        # Immediate callback
-                        asyncio.create_task(self._coordinator_callback())
-                        # Additional callbacks at intervals to catch delayed state changes
-                        asyncio.create_task(self._delayed_callback(0.5))
-                        asyncio.create_task(self._delayed_callback(1.0))
+                        await self._coordinator_callback()
                     except Exception as e:
-                        _LOGGER.debug(f"Error triggering immediate callback: {e}")
+                        _LOGGER.debug(f"Error triggering coordinator callback: {e}")
 
     async def clear_desired_state(self):
         """Clear the desired state to prevent auto-restart after natural cycle completion.
@@ -2394,16 +2386,12 @@ class AqualinkClient:
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
             _LOGGER.debug("Stop cleaning requested, reset time values: %s", reset_values)
 
-            # Trigger multiple immediate updates for ultra-fast control feedback
+            # C4-cmd: one awaited refresh (see start_cleaning for rationale).
             if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
                 try:
-                    # Immediate callback
-                    asyncio.create_task(self._coordinator_callback())
-                    # Additional callbacks to catch any delayed state changes
-                    asyncio.create_task(self._delayed_callback(0.5))
-                    asyncio.create_task(self._delayed_callback(1.0))
+                    await self._coordinator_callback()
                 except Exception as e:
-                    _LOGGER.debug(f"Error triggering immediate callback: {e}")
+                    _LOGGER.debug(f"Error triggering coordinator callback: {e}")
 
         return reset_values
 
@@ -2467,16 +2455,12 @@ class AqualinkClient:
             if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
-                # Trigger multiple immediate updates for ultra-fast control feedback
+                # C4-cmd: one awaited refresh (see start_cleaning for rationale).
                 if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
                     try:
-                        # Immediate callback
-                        asyncio.create_task(self._coordinator_callback())
-                        # Additional callbacks to catch any delayed state changes
-                        asyncio.create_task(self._delayed_callback(0.5))
-                        asyncio.create_task(self._delayed_callback(1.0))
+                        await self._coordinator_callback()
                     except Exception as e:
-                        _LOGGER.debug(f"Error triggering immediate callback: {e}")
+                        _LOGGER.debug(f"Error triggering coordinator callback: {e}")
 
     async def return_to_base(self):
         """Set the vacuum cleaner to return to the dock."""
@@ -2503,16 +2487,12 @@ class AqualinkClient:
             }
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
-            # Trigger multiple immediate updates for ultra-fast control feedback
+            # C4-cmd: one awaited refresh (see start_cleaning for rationale).
             if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
                 try:
-                    # Immediate callback
-                    asyncio.create_task(self._coordinator_callback())
-                    # Additional callbacks to catch any delayed state changes
-                    asyncio.create_task(self._delayed_callback(0.5))
-                    asyncio.create_task(self._delayed_callback(1.0))
+                    await self._coordinator_callback()
                 except Exception as e:
-                    _LOGGER.debug(f"Error triggering immediate callback: {e}")
+                    _LOGGER.debug(f"Error triggering coordinator callback: {e}")
 
     def _extract_fan_speed_from_response(self, response_data, requested_fan_speed):
         """Extract current fan speed from websocket response if available."""
@@ -2945,16 +2925,12 @@ class AqualinkClient:
             if self._debug_mode:
                 _LOGGER.debug("✅ Add 15 minutes command completed successfully")
 
-            # Trigger multiple immediate updates for ultra-fast button feedback
+            # C4-cmd: one awaited refresh (see start_cleaning for rationale).
             if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
                 try:
-                    # Immediate callback
-                    asyncio.create_task(self._coordinator_callback())
-                    # Additional callbacks to catch any delayed state changes
-                    asyncio.create_task(self._delayed_callback(0.5))
-                    asyncio.create_task(self._delayed_callback(1.0))
+                    await self._coordinator_callback()
                 except Exception as e:
-                    _LOGGER.debug(f"Error triggering immediate callback: {e}")
+                    _LOGGER.debug(f"Error triggering coordinator callback: {e}")
 
             # Return success result with notification info for coordinator to handle
             return {
@@ -3074,16 +3050,12 @@ class AqualinkClient:
             if self._debug_mode:
                 _LOGGER.debug("✅ Reduce 15 minutes command completed successfully")
 
-            # Trigger multiple immediate updates for ultra-fast button feedback
+            # C4-cmd: one awaited refresh (see start_cleaning for rationale).
             if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
                 try:
-                    # Immediate callback
-                    asyncio.create_task(self._coordinator_callback())
-                    # Additional callbacks to catch any delayed state changes
-                    asyncio.create_task(self._delayed_callback(0.5))
-                    asyncio.create_task(self._delayed_callback(1.0))
+                    await self._coordinator_callback()
                 except Exception as e:
-                    _LOGGER.debug(f"Error triggering immediate callback: {e}")
+                    _LOGGER.debug(f"Error triggering coordinator callback: {e}")
 
             # Return success result with notification info for coordinator to handle
             return {

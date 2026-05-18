@@ -908,3 +908,240 @@ def test_no_phantom_localize_calls_in_package() -> None:
         "Use HA's `translation_key` + `translations/*.json` mechanism if "
         "you need a localised entity display:\n  " + "\n  ".join(offenders)
     )
+
+
+# ----------------------------------------------------------------------------
+# Story C4-cmd — replace 3-task callback bursts with one awaited refresh
+# ----------------------------------------------------------------------------
+#
+# Pre-C4-cmd each of the 6 client command methods (start_cleaning,
+# stop_cleaning, pause_cleaning, return_to_base, add_fifteen_minutes,
+# reduce_fifteen_minutes) fired three fire-and-forget `asyncio.create_task`
+# callbacks immediately after sending the cloud request:
+#
+#     asyncio.create_task(self._coordinator_callback())     # t=0
+#     asyncio.create_task(self._delayed_callback(0.5))      # t=0.5s
+#     asyncio.create_task(self._delayed_callback(1.0))      # t=1.0s
+#
+# Combined with the vacuum entity and button entity's own
+# `async_request_refresh()` calls, a single press triggered 5+ overlapping
+# refreshes hitting the same websocket — the *structural* source of the
+# connection flap that the 80-line `_status_history` stabilizer was added to
+# mask (story R30 will remove the stabilizer once C4-cmd has soaked).
+#
+# C4-cmd replaces each triple with a single `await self._coordinator_callback()`.
+# The callback routes through the coordinator's `_handle_realtime_update`
+# (story H10), which calls the debounced `async_request_refresh` — so any
+# near-duplicate refresh from the caller (button.py / vacuum.py) collapses
+# into one actual `_async_update_data` call.
+
+
+def _build_client_for_command() -> object:
+    """Build an `AqualinkClient` with the minimal surface area each command
+    method touches.
+
+    Bypasses `__init__` (which reaches into aiohttp for header defaults and
+    instantiates an asyncio.Lock); the command methods we exercise only read
+    the device-type / serial / auth strings and call `set_cleaner_state`,
+    so a hand-stitched shell is sufficient. Mirrors the pattern in the
+    existing C5/H6 tests above.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client = AqualinkClient.__new__(AqualinkClient)
+    client._device_type = "vr"
+    client._serial = "TEST-SERIAL"
+    client._id = "user-id"
+    client._auth_token = "tok"
+    client._app_client_id = "acid"
+    client._debug_mode = False
+    # Cloud roundtrip stubbed; the command method's wait_for completes immediately.
+    client.set_cleaner_state = AsyncMock(return_value={"ok": True})
+    # post_command_i2d is the i2d path; not exercised for `device_type="vr"` tests
+    # but kept for completeness if a future test switches device_type.
+    client.post_command_i2d = AsyncMock(return_value={"ok": True})
+    # Adaptive-polling marker — start_cleaning calls _coordinator_ref._mark_recent_activity()
+    client._coordinator_ref = MagicMock()
+    # add_fifteen_minutes / reduce_fifteen_minutes call _should_use_websocket()
+    # and fetch_status() before the cloud roundtrip.
+    client._should_use_websocket = MagicMock(return_value=True)
+    client.fetch_status = AsyncMock(return_value={"stepper": 0})
+    return client
+
+
+async def test_start_cleaning_awaits_coordinator_callback_exactly_once() -> None:
+    """C4-cmd AC #1 + AC #2 (start_cleaning): the post-command refresh is
+    a single awaited call to `_coordinator_callback`, not 3 fire-and-forget
+    tasks (immediate + 0.5s + 1.0s delayed).
+    """
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_command()
+    callback = AsyncMock()
+    client._coordinator_callback = callback
+
+    await client.start_cleaning()
+
+    callback.assert_awaited_once()
+
+
+async def test_stop_cleaning_awaits_coordinator_callback_exactly_once() -> None:
+    """C4-cmd AC #1 + AC #2 (stop_cleaning)."""
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_command()
+    callback = AsyncMock()
+    client._coordinator_callback = callback
+
+    await client.stop_cleaning()
+
+    callback.assert_awaited_once()
+
+
+async def test_pause_cleaning_awaits_coordinator_callback_exactly_once() -> None:
+    """C4-cmd AC #1 + AC #2 (pause_cleaning)."""
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_command()
+    callback = AsyncMock()
+    client._coordinator_callback = callback
+
+    await client.pause_cleaning()
+
+    callback.assert_awaited_once()
+
+
+async def test_return_to_base_awaits_coordinator_callback_exactly_once() -> None:
+    """C4-cmd AC #1 + AC #2 (return_to_base)."""
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_command()
+    callback = AsyncMock()
+    client._coordinator_callback = callback
+
+    await client.return_to_base()
+
+    callback.assert_awaited_once()
+
+
+async def test_add_fifteen_minutes_awaits_coordinator_callback_exactly_once() -> None:
+    """C4-cmd AC #1 + AC #2 (add_fifteen_minutes)."""
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_command()
+    callback = AsyncMock()
+    client._coordinator_callback = callback
+
+    await client.add_fifteen_minutes()
+
+    callback.assert_awaited_once()
+
+
+async def test_reduce_fifteen_minutes_awaits_coordinator_callback_exactly_once() -> None:
+    """C4-cmd AC #1 + AC #2 (reduce_fifteen_minutes)."""
+    from unittest.mock import AsyncMock
+
+    client = _build_client_for_command()
+    callback = AsyncMock()
+    client._coordinator_callback = callback
+
+    await client.reduce_fifteen_minutes()
+
+    callback.assert_awaited_once()
+
+
+def test_delayed_callback_helper_removed() -> None:
+    """C4-cmd: the `_delayed_callback` helper on `AqualinkClient` becomes
+    orphaned after the 6 command sites stop spawning the 0.5s/1.0s tasks.
+
+    Asserted at the class level rather than via instance — the method either
+    exists on the class (regression: someone re-added the delayed-burst
+    pattern) or it doesn't (post-C4-cmd state). The story explicitly calls
+    out "Audit the `_delayed_refresh` helper — if it becomes orphaned after
+    this change, delete it."
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    assert not hasattr(AqualinkClient, "_delayed_callback"), (
+        "`_delayed_callback` should be removed in C4-cmd; the 6 client "
+        "command methods now await `_coordinator_callback()` directly "
+        "instead of spawning delayed `asyncio.create_task` bursts. If you "
+        "need a delayed follow-up refresh in one specific site, await "
+        "`asyncio.sleep(...)` + the callback inline; do not reintroduce a "
+        "shared fire-and-forget helper."
+    )
+
+
+def test_no_fire_and_forget_callback_create_task_in_command_methods() -> None:
+    """C4-cmd regression guard: AST walk of the 6 command methods asserts
+    no `asyncio.create_task(self._coordinator_callback(...))` or
+    `asyncio.create_task(self._delayed_callback(...))` calls remain.
+
+    AST-based so block comments or docstrings that *mention* the historical
+    pattern do not cause a false positive. Scoped to the 6 command methods
+    only — the websocket-listener storm at `_websocket_listener` is
+    out-of-scope (story C4-ws will address those sites).
+    """
+    import ast
+    from pathlib import Path
+
+    target_methods = {
+        "start_cleaning",
+        "stop_cleaning",
+        "pause_cleaning",
+        "return_to_base",
+        "add_fifteen_minutes",
+        "reduce_fifteen_minutes",
+    }
+    coordinator_path = (
+        Path(__file__).parent.parent
+        / "custom_components"
+        / "iaqualink_robots"
+        / "coordinator.py"
+    )
+    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+
+    offenders: list[str] = []
+    for class_node in ast.walk(tree):
+        if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":
+            continue
+        for method in class_node.body:
+            if not isinstance(method, ast.AsyncFunctionDef):
+                continue
+            if method.name not in target_methods:
+                continue
+            for node in ast.walk(method):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                # Match: asyncio.create_task(...)
+                if not (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "create_task"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "asyncio"
+                ):
+                    continue
+                # Inspect the argument: only flag self._coordinator_callback / self._delayed_callback
+                if not node.args:
+                    continue
+                arg = node.args[0]
+                if not isinstance(arg, ast.Call):
+                    continue
+                inner = arg.func
+                if (
+                    isinstance(inner, ast.Attribute)
+                    and isinstance(inner.value, ast.Name)
+                    and inner.value.id == "self"
+                    and inner.attr in {"_coordinator_callback", "_delayed_callback"}
+                ):
+                    offenders.append(f"{method.name}:line {node.lineno}")
+    assert not offenders, (
+        "Fire-and-forget callback `asyncio.create_task` detected in command "
+        "methods. C4-cmd replaced these with a single awaited "
+        "`self._coordinator_callback()` call so the coordinator's debounced "
+        "`async_request_refresh` collapses near-duplicate refreshes into one "
+        "`_async_update_data` call. Sites:\n  " + "\n  ".join(offenders)
+    )

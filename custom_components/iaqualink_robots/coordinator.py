@@ -3333,6 +3333,11 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         self._websocket_listener_task = None
         self._should_stop_listener = False
 
+        # P10: track every fire-and-forget task scheduled by entities so
+        # ``cleanup()`` can cancel them deterministically on unload. Tasks
+        # self-deregister via ``add_done_callback`` in ``_schedule_task``.
+        self._pending_tasks: "set[asyncio.Task]" = set()
+
         # Set up callback for real-time updates
         self.client.set_coordinator_callback(self._handle_realtime_update)
         # C4-ws: push callback used by the WS listener. Bypasses the refresh
@@ -3577,6 +3582,45 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as e:  # noqa: BLE001 - listener task isolation
             _LOGGER.debug(f"Error applying realtime envelope: {e}")
 
+    def _schedule_task(self, coro) -> "asyncio.Task":
+        """Schedule a fire-and-forget coroutine and track it for cleanup.
+
+        P10: callers that previously used ``asyncio.create_task(coro)`` should
+        go through this helper so ``cleanup()`` can cancel any in-flight task
+        on entry unload. Tasks self-deregister via ``add_done_callback`` once
+        they complete, so the set never accumulates finished tasks.
+        """
+        task = asyncio.create_task(coro)
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
+        return task
+
+    async def _cancel_pending_tasks(self) -> None:
+        """Cancel and await every task scheduled via ``_schedule_task``.
+
+        P10: each await is bounded by a 5 s wait_for so a runaway task can't
+        deadlock unload. ``CancelledError`` is the expected outcome;
+        ``TimeoutError`` is logged as a warning so the operator notices.
+        """
+        # Snapshot — tasks may self-deregister mid-iteration via the done
+        # callback registered in ``_schedule_task``.
+        tasks = list(self._pending_tasks)
+        for task in tasks:
+            if task.done():
+                continue
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=5.0)
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                _LOGGER.warning(
+                    "Pending task %r did not cancel within 5s; abandoning wait",
+                    task,
+                )
+            except Exception as e:  # noqa: BLE001 - cleanup must not raise
+                _LOGGER.debug("Pending task raised during cancellation: %s", e)
+
     async def _start_websocket_listener(self):
         """Start the websocket listener task for real-time updates."""
         if self._websocket_listener_task and not self._websocket_listener_task.done():
@@ -3592,15 +3636,26 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.warning(f"Failed to start websocket listener: {e}")
 
     async def _stop_websocket_listener(self):
-        """Stop the websocket listener task."""
+        """Stop the websocket listener task.
+
+        P10: bounded by a 5 s wait_for so a listener that ignores cancellation
+        (e.g. stuck in an aiohttp receive that swallows ``CancelledError``)
+        can't deadlock ``async_unload_entry``. A timeout is logged at WARNING
+        because it means the task is still alive when we return; the event
+        loop will reap it eventually.
+        """
         self._should_stop_listener = True
 
         if self._websocket_listener_task and not self._websocket_listener_task.done():
             self._websocket_listener_task.cancel()
             try:
-                await self._websocket_listener_task
+                await asyncio.wait_for(self._websocket_listener_task, timeout=5.0)
             except asyncio.CancelledError:
                 pass
+            except asyncio.TimeoutError:
+                _LOGGER.warning(
+                    "Websocket listener did not cancel within 5s; abandoning wait"
+                )
             _LOGGER.debug("Stopped websocket listener")
 
     def _update_polling_interval(self, data):
@@ -3963,13 +4018,30 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
 
     async def cleanup(self):
-        """Clean up resources when coordinator is being unloaded."""
-        _LOGGER.debug("Starting coordinator cleanup")
+        """Clean up resources when coordinator is being unloaded.
 
-        # Stop websocket listener task
+        P10: cancels the WS listener task (5 s ceiling), cancels every
+        coordinator-scheduled fire-and-forget task (5 s ceiling each), then
+        closes the client's persistent WS connection + owned aiohttp session.
+        Each phase is independent so a failure in one does not strand the
+        others.
+        """
+        pending_count = len(self._pending_tasks)
+        _LOGGER.debug(
+            "Starting coordinator cleanup (%d pending task(s) tracked)",
+            pending_count,
+        )
+
+        # Stop websocket listener task (bounded by 5 s wait_for inside).
         await self._stop_websocket_listener()
 
-        # Close persistent websocket connection in client
+        # Cancel any pending entity-scheduled tasks (e.g. delayed refreshes).
+        await self._cancel_pending_tasks()
+
+        # Close persistent websocket connection + owned session in client.
         await self.client._close_websocket()
 
-        _LOGGER.debug("Coordinator cleanup complete - websocket listener and connection closed")
+        _LOGGER.debug(
+            "Coordinator cleanup complete - listener stopped, %d pending task(s) cancelled, session closed",
+            pending_count,
+        )

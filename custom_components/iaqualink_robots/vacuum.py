@@ -431,8 +431,9 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
             await asyncio.sleep(1)
             await self.coordinator.async_request_refresh()
 
-            # For extra responsiveness, trigger another refresh after a short delay
-            asyncio.create_task(self._delayed_refresh())
+            # For extra responsiveness, trigger another refresh after a short delay.
+            # P10: routed through coordinator so cleanup() can cancel it on unload.
+            self.coordinator._schedule_task(self._delayed_refresh())
 
         except Exception as e:
             _LOGGER.error(f"Failed to set fan speed: {e}")

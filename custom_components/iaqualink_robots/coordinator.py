@@ -899,6 +899,17 @@ class AqualinkClient:
 
         self._last_ws_activity = None
 
+        # C4-ws review F3: invalidate the cached shadow baseline and the
+        # last-applied dedup signature on close. Without this, a
+        # reconnect would deep-merge new inbound deltas onto the
+        # pre-disconnect baseline (silently propagating stale fields the
+        # delta didn't touch) and could even dedup-drop the first real
+        # post-reconnect push if the cloud's first message happens to
+        # match the pre-disconnect signature. The next ``_ws_subscribe``
+        # after reconnect re-seeds both via the normal flow.
+        self._last_ws_envelope = None
+        self._last_applied_state_signature = None
+
     async def _websocket_listener(self):
         """Listen for real-time websocket updates and apply them via the coordinator push hook.
 
@@ -1051,6 +1062,17 @@ class AqualinkClient:
         except asyncio.CancelledError:
             _LOGGER.debug("Websocket listener cancelled")
             raise
+        except ConfigEntryAuthFailed:
+            # C4-ws review F1: auth failures from the per-message handler
+            # MUST propagate up to HA's coordinator so reauth dispatches.
+            # Pre-fix, the broad-except below caught the propagated value
+            # (ConfigEntryAuthFailed inherits from Exception) and demoted
+            # it to WARNING — the listener task died silently and the
+            # user never saw the reauth prompt until the next polled
+            # cycle's 401 hit. Same H10 precedent as the C4-cmd command
+            # sites: never swallow auth failures.
+            _LOGGER.debug("Websocket listener exiting on ConfigEntryAuthFailed")
+            raise
         except Exception as e:
             _LOGGER.warning(f"Websocket listener error: {e}")
         finally:
@@ -1134,7 +1156,16 @@ class AqualinkClient:
         if not isinstance(reported, dict):
             return None
         equipment = reported.get("equipment") or {}
-        robot = equipment.get("robot") or {}
+        # C4-ws review F2: cyclonext writes its state under ``robot.1``,
+        # not ``robot``. Pre-fix this filter rejected every cyclonext
+        # push at the empty-robot check and the entire device family
+        # silently fell back to polled-only updates (~3 s latency vs the
+        # ~<200 ms push path everyone else got). Fallback to ``robot.1``
+        # lets the parser see cyclonext deltas — the per-device-type
+        # apply path at ``_apply_realtime_envelope`` already dispatches
+        # to ``_update_cyclonext_robot_data`` which reads from the same
+        # key.
+        robot = equipment.get("robot") or equipment.get("robot.1") or {}
         if not isinstance(robot, dict) or not robot:
             # No equipment.robot content → nothing to apply. Heartbeats and
             # status-only messages land here.
@@ -1158,6 +1189,7 @@ class AqualinkClient:
             return ()
         main = robot_data.get("main") if isinstance(robot_data.get("main"), dict) else {}
         battery = robot_data.get("battery") if isinstance(robot_data.get("battery"), dict) else {}
+        errors = robot_data.get("errors") if isinstance(robot_data.get("errors"), dict) else {}
         return (
             robot_data.get("state"),
             robot_data.get("errorState"),
@@ -1168,6 +1200,19 @@ class AqualinkClient:
             main.get("cycleStartTime"),
             battery.get("userChargePerc"),
             battery.get("userChargeState"),
+            # C4-ws review F2: cyclonext-specific fields. Cyclonext writes
+            # its state under different keys (``mode`` instead of
+            # ``state``, ``cycle`` instead of ``prCyc``, ``errors.code``
+            # instead of ``errorState``). Without these the signature
+            # tuple was all-None for cyclonext, every consecutive push
+            # deduped against the previous all-None tuple, and only the
+            # FIRST push after baseline-cache ever fired — real
+            # subsequent state changes were silently dropped.
+            # ``_update_cyclonext_robot_data`` at L1985 confirms these
+            # are the fields the parser actually reads.
+            robot_data.get("mode"),
+            robot_data.get("cycle"),
+            errors.get("code"),
         )
 
     async def _ws_subscribe(self):

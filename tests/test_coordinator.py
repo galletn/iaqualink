@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -1550,6 +1551,110 @@ def test_state_signature_includes_cyclobat_nested_fields() -> None:
     assert AqualinkClient._state_signature(a) != AqualinkClient._state_signature(b)
 
 
+def test_state_signature_distinguishes_cyclonext_mode_changes() -> None:
+    """C4-ws review F2: cyclonext writes its state under `mode` (not `state`),
+    `cycle` (not `prCyc`), and `errors.code` (not `errorState`). Before
+    F2 the signature read only vr/vortrax/cyclobat keys; for cyclonext
+    deltas it returned all-None tuples, the first push fired, and every
+    subsequent push was deduped against the previous all-None — real
+    state changes silently disappeared.
+
+    This test pins that two distinct cyclonext deltas now produce
+    distinct signatures so the dedup doesn't drop real changes.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    cyclonext_idle = {"mode": 0, "cycle": 1, "cycleStartTime": 0, "errors": {"code": "0"}}
+    cyclonext_cleaning = {"mode": 1, "cycle": 1, "cycleStartTime": 1700000000, "errors": {"code": "0"}}
+    cyclonext_cycle_changed = {"mode": 1, "cycle": 3, "cycleStartTime": 1700000000, "errors": {"code": "0"}}
+    cyclonext_error = {"mode": 1, "cycle": 3, "cycleStartTime": 1700000000, "errors": {"code": "E04"}}
+
+    sigs = [
+        AqualinkClient._state_signature(cyclonext_idle),
+        AqualinkClient._state_signature(cyclonext_cleaning),
+        AqualinkClient._state_signature(cyclonext_cycle_changed),
+        AqualinkClient._state_signature(cyclonext_error),
+    ]
+    assert len(set(sigs)) == 4, (
+        "Each cyclonext state transition (idle→cleaning, fan-speed change, "
+        "error onset) must produce a unique signature so dedup doesn't drop "
+        "the push. Got: " + repr(sigs)
+    )
+
+
+def test_state_signature_handles_cyclonext_missing_errors_dict() -> None:
+    """Defensive: cyclonext payloads may omit the `errors` key entirely on
+    healthy steady-state pushes. The signature must produce a stable
+    None placeholder for `errors.code` rather than crashing on the
+    missing dict — otherwise the broad-except at the listener would
+    silently drop pushes from healthy cyclonext robots.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    # No `errors` key at all.
+    sig = AqualinkClient._state_signature({"mode": 1, "cycle": 1})
+    # Should not raise; should return a tuple with errors.code slot as None.
+    assert isinstance(sig, tuple)
+    # `errors.code` is the last slot per current layout.
+    assert sig[-1] is None
+
+
+def test_parse_ws_state_message_accepts_cyclonext_robot_dot_one_key() -> None:
+    """C4-ws review F2: `_parse_ws_state_message` filter must accept
+    `equipment.robot.1` (cyclonext's key) in addition to
+    `equipment.robot` (vr/vortrax/cyclobat). Before F2, cyclonext
+    pushes hit the empty-robot check and were unconditionally dropped,
+    forcing cyclonext owners to rely entirely on polled refreshes."""
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    cyclonext_message = {
+        "service": "StateStreamer",
+        "namespace": "cyclonext",
+        "type": "StateReported",
+        "payload": {
+            "state": {
+                "reported": {
+                    "equipment": {
+                        # Cyclonext's distinctive key — pre-F2 the filter
+                        # rejected this and bailed.
+                        "robot.1": {"mode": 1, "cycle": 1, "cycleStartTime": 0},
+                    },
+                },
+            },
+        },
+    }
+
+    parsed = AqualinkClient._parse_ws_state_message(cyclonext_message)
+    assert parsed is not None, (
+        "F2 regression: cyclonext WS push must pass the intake filter. "
+        "Pre-fix, every cyclonext push was silently dropped at the "
+        "empty-robot check because the filter only looked at "
+        "`equipment.robot`."
+    )
+    # The returned `reported` subtree must still contain the cyclonext data
+    # so downstream apply path can reach the per-device-type parser.
+    assert "equipment" in parsed
+    assert "robot.1" in parsed["equipment"]
+
+
+def test_parse_ws_state_message_still_rejects_truly_empty_robot() -> None:
+    """F2 regression guard: relaxing the filter to accept `robot.1`
+    must NOT also accept fully-empty messages. A message with both
+    `equipment.robot = {}` AND `equipment.robot.1 = {}` (or missing
+    both) is still a heartbeat / status-only push that should be
+    filtered out before any push work.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    empty_robot_message = {
+        "service": "StateStreamer",
+        "namespace": "cyclonext",
+        "type": "StateReported",
+        "payload": {"state": {"reported": {"equipment": {"robot": {}, "robot.1": {}}}}},
+    }
+    assert AqualinkClient._parse_ws_state_message(empty_robot_message) is None
+
+
 # AC #2 + AC #4 — apply_realtime_envelope -------------------------------------
 
 
@@ -1966,4 +2071,141 @@ def test_websocket_listener_no_fire_and_forget_create_task() -> None:
         "blocks with a single awaited `_realtime_push_callback` so the "
         "coordinator's `async_set_updated_data` push displaces the "
         "refresh fan-out. Sites:\n  " + "\n  ".join(offenders)
+    )
+
+
+# ----------------------------------------------------------------------------
+# C4-ws review F1 + F3 — auth propagation in listener; baseline+signature
+# invalidation on _close_websocket.
+#
+# F1: the per-message handler re-raises `ConfigEntryAuthFailed` correctly,
+# but pre-patch the OUTER `except Exception as e:` at the listener level
+# caught it (ConfigEntryAuthFailed is an Exception subclass) and demoted
+# to WARNING. The listener task then died silently; HA never saw the
+# reauth signal from the WS path until the next polled cycle hit a 401.
+# Same H10 precedent as C4-cmd review F1: never swallow auth.
+#
+# F3: `_close_websocket` previously left `_last_ws_envelope` and
+# `_last_applied_state_signature` populated across disconnect/reconnect
+# cycles. New deltas on the reconnected session would merge onto a
+# stale baseline (propagating pre-disconnect field values the delta
+# didn't touch) and the first identical-to-stale push could be dedup-
+# dropped. Both are now cleared on close so the next `_ws_subscribe`
+# seeds fresh state.
+# ----------------------------------------------------------------------------
+
+
+async def test_websocket_listener_propagates_config_entry_auth_failed() -> None:
+    """C4-ws review F1: when the per-message handler re-raises
+    `ConfigEntryAuthFailed` from `_apply_realtime_envelope`, the
+    listener's outer try/except must let it propagate to HA's
+    coordinator (which translates it to the reauth flow). The
+    pre-patch broad-except wrapping the whole listener would swallow
+    this as a WARNING.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client = AqualinkClient(username="u", password="p", api_key="k")
+    client._serial = "T"
+    client._id = "uid"
+
+    # Build a fake WS connection that delivers one StateReported message
+    # and then "errors" out so the listener loop yields control.
+    cyclonext_msg_payload = {
+        "service": "StateStreamer",
+        "namespace": "vr",
+        "type": "StateReported",
+        "payload": {
+            "state": {
+                "reported": {
+                    "equipment": {"robot": {"state": 1, "errorState": 0, "prCyc": 1}},
+                },
+            },
+        },
+    }
+
+    class _Msg:
+        def __init__(self, type_, json_data=None):
+            self.type = type_
+            self.data = ""
+            self._json = json_data
+
+        def json(self):
+            return self._json
+
+    sent_messages = [
+        _Msg(aiohttp.WSMsgType.TEXT, cyclonext_msg_payload),
+    ]
+
+    class _FakeWS:
+        def __init__(self, messages):
+            self._messages = list(messages)
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._messages:
+                raise StopAsyncIteration
+            return self._messages.pop(0)
+
+        async def send_json(self, _):
+            return None
+
+    client._ws_connection = _FakeWS(sent_messages)
+    # Seed a baseline so the listener skips the first-push refresh fallback
+    # and reaches the apply path where the auth-failure raises.
+    client._last_ws_envelope = {
+        "payload": {"robot": {"state": {"reported": {"equipment": {"robot": {"state": 0}}}}}}
+    }
+
+    # The push callback raises ConfigEntryAuthFailed — simulates the
+    # post-H10 contract where `_apply_realtime_envelope` re-raises auth
+    # failures from its internal `clear_desired_state` call etc.
+    async def auth_failed_push(envelope):
+        raise ConfigEntryAuthFailed("simulated stale token at apply")
+
+    client._realtime_push_callback = auth_failed_push
+    client._coordinator_callback = AsyncMock()  # not used on this path
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await client._websocket_listener()
+
+
+async def test_close_websocket_clears_baseline_and_signature() -> None:
+    """C4-ws review F3: `_close_websocket` must invalidate
+    `_last_ws_envelope` and `_last_applied_state_signature` so a
+    reconnect doesn't merge new deltas onto stale baseline state and
+    doesn't dedup-drop the first real post-reconnect push that happens
+    to match the pre-disconnect signature.
+
+    Locks the contract — a future change that re-introduces stale-
+    baseline-after-reconnect would fail this test loudly.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client = AqualinkClient(username="u", password="p", api_key="k")
+
+    # Pre-populate the cache the way `_update_other_robots` would on a
+    # successful `_ws_subscribe`.
+    client._last_ws_envelope = {"payload": {"robot": {"state": {"reported": {"any": "thing"}}}}}
+    client._last_applied_state_signature = (1, 0, 1, 1700000000, 0, None, None, None, None, None, None, None)
+    assert client._last_ws_envelope is not None
+    assert client._last_applied_state_signature is not None
+
+    # _close_websocket should null both — no live connection / session
+    # state to tear down for this test.
+    client._ws_connection = None
+    client._ws_session = None
+    await client._close_websocket()
+
+    assert client._last_ws_envelope is None, (
+        "F3 regression: _close_websocket must clear `_last_ws_envelope` "
+        "so a reconnect doesn't deep-merge new deltas onto stale state"
+    )
+    assert client._last_applied_state_signature is None, (
+        "F3 regression: _close_websocket must clear "
+        "`_last_applied_state_signature` so the first push after "
+        "reconnect doesn't dedup against pre-disconnect state"
     )

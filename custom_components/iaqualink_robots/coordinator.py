@@ -2433,6 +2433,38 @@ class AqualinkClient:
 
         return response_data
 
+    async def _safe_post_command_refresh(self) -> None:
+        """Trigger the coordinator refresh callback after a cloud command.
+
+        Each of the 6 command methods (``start_cleaning`` /
+        ``stop_cleaning`` / ``pause_cleaning`` / ``return_to_base`` /
+        ``add_fifteen_minutes`` / ``reduce_fifteen_minutes``) calls this
+        helper after sending its cloud request to trigger a single
+        coordinator refresh.
+
+        C4-cmd review F1 (2026-05-18): the original per-site
+        ``except Exception`` blocks swallowed ``ConfigEntryAuthFailed``
+        raised by ``_handle_realtime_update`` — the H10 review's
+        precedent explicitly says auth failures must propagate so HA's
+        reauth flow fires. This helper preserves the broad-except for
+        transient noise (network blips, parser errors during refresh)
+        while letting ``ConfigEntryAuthFailed`` and ``CancelledError``
+        through. Single helper instead of 6 inlined try/except blocks
+        also closes M2 (drift hazard if future patches forget one site).
+        """
+        if not getattr(self, "_coordinator_callback", None):
+            return
+        try:
+            await self._coordinator_callback()
+        except asyncio.CancelledError:
+            raise
+        except ConfigEntryAuthFailed:
+            # H10 precedent: auth failures must surface so HA dispatches
+            # reauth — never swallow them into the transient-noise branch.
+            raise
+        except Exception as e:  # noqa: BLE001 — transient refresh noise
+            _LOGGER.debug(f"Error triggering coordinator callback: {e}")
+
     def _build_state_request(
         self,
         action: str,
@@ -2542,11 +2574,9 @@ class AqualinkClient:
                 # inside `_handle_realtime_update`) collapses near-duplicate
                 # refreshes from button.py / vacuum.py into a single
                 # `_async_update_data` call.
-                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
-                    try:
-                        await self._coordinator_callback()
-                    except Exception as e:
-                        _LOGGER.debug(f"Error triggering coordinator callback: {e}")
+                # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
+                # CancelledError; old inlined except-Exception swallowed reauth.
+                await self._safe_post_command_refresh()
 
     async def clear_desired_state(self):
         """Clear the desired state to prevent auto-restart after natural cycle completion.
@@ -2625,11 +2655,9 @@ class AqualinkClient:
             _LOGGER.debug("Stop cleaning requested, reset time values: %s", reset_values)
 
             # C4-cmd: one awaited refresh (see start_cleaning for rationale).
-            if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
-                try:
-                    await self._coordinator_callback()
-                except Exception as e:
-                    _LOGGER.debug(f"Error triggering coordinator callback: {e}")
+            # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
+            # CancelledError; old inlined except-Exception swallowed reauth.
+            await self._safe_post_command_refresh()
 
         return reset_values
 
@@ -2661,11 +2689,9 @@ class AqualinkClient:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
                 # C4-cmd: one awaited refresh (see start_cleaning for rationale).
-                if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
-                    try:
-                        await self._coordinator_callback()
-                    except Exception as e:
-                        _LOGGER.debug(f"Error triggering coordinator callback: {e}")
+                # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
+                # CancelledError; old inlined except-Exception swallowed reauth.
+                await self._safe_post_command_refresh()
 
     async def return_to_base(self):
         """Set the vacuum cleaner to return to the dock."""
@@ -2686,11 +2712,9 @@ class AqualinkClient:
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
             # C4-cmd: one awaited refresh (see start_cleaning for rationale).
-            if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
-                try:
-                    await self._coordinator_callback()
-                except Exception as e:
-                    _LOGGER.debug(f"Error triggering coordinator callback: {e}")
+            # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
+            # CancelledError; old inlined except-Exception swallowed reauth.
+            await self._safe_post_command_refresh()
 
     def _extract_fan_speed_from_response(self, response_data, requested_fan_speed):
         """Extract current fan speed from websocket response if available."""
@@ -3016,11 +3040,9 @@ class AqualinkClient:
                 _LOGGER.debug("✅ Add 15 minutes command completed successfully")
 
             # C4-cmd: one awaited refresh (see start_cleaning for rationale).
-            if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
-                try:
-                    await self._coordinator_callback()
-                except Exception as e:
-                    _LOGGER.debug(f"Error triggering coordinator callback: {e}")
+            # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
+            # CancelledError; old inlined except-Exception swallowed reauth.
+            await self._safe_post_command_refresh()
 
             # Return success result with notification info for coordinator to handle
             return {
@@ -3104,11 +3126,9 @@ class AqualinkClient:
                 _LOGGER.debug("✅ Reduce 15 minutes command completed successfully")
 
             # C4-cmd: one awaited refresh (see start_cleaning for rationale).
-            if hasattr(self, '_coordinator_callback') and self._coordinator_callback:
-                try:
-                    await self._coordinator_callback()
-                except Exception as e:
-                    _LOGGER.debug(f"Error triggering coordinator callback: {e}")
+            # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
+            # CancelledError; old inlined except-Exception swallowed reauth.
+            await self._safe_post_command_refresh()
 
             # Return success result with notification info for coordinator to handle
             return {
@@ -3298,10 +3318,14 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         H10 deletes that block in favour of ``async_request_refresh()`` —
         HA's documented API for "fetch fresh data right now". It goes
         through the coordinator's lock, fires the listener notification
-        via the public ``async_update_listeners`` path, and honours the
-        default ~0.3 s debouncer which collapses rapid websocket-event
-        bursts into a single update (a desirable property the old loop
-        didn't have).
+        via the public ``async_update_listeners`` path, and honours HA's
+        default request-refresh debouncer (``cooldown=10s``,
+        ``immediate=True`` — the first call fires the refresh
+        synchronously; subsequent calls within 10 s coalesce into one
+        trailing refresh) which collapses rapid websocket-event bursts
+        into a single update — a desirable property the old loop didn't
+        have. (C4-cmd review F2 2026-05-18 corrected this docstring from
+        an earlier "~0.3 s" claim that misread HA's defaults.)
         """
         try:
             await self.async_request_refresh()

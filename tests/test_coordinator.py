@@ -12,10 +12,12 @@ gets tested by upcoming stories — each adds its own slice here.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 
 
 def _build_mock_client(
@@ -502,9 +504,11 @@ def test_pending_stop_reset_no_op_when_timestamp_missing() -> None:
 #     — two lines below, so the manual loop was redundant.
 #
 # H10 deletes the custom method in favour of `async_request_refresh()`, HA's
-# documented API for the same job. The behavioural change is positive: the
-# default ~0.3 s debouncer collapses rapid websocket-event bursts into a
-# single refresh, which the old manual loop did not.
+# documented API for the same job. The behavioural change is positive: HA's
+# default request-refresh debouncer (cooldown=10s, immediate=True) fires the
+# first call synchronously and coalesces subsequent calls within 10s into a
+# single trailing refresh — the old manual loop had no such coalescing.
+# (C4-cmd review F2 2026-05-18 corrected an earlier "~0.3 s" claim here.)
 
 
 def test_immediate_refresh_method_removed() -> None:
@@ -1144,6 +1148,163 @@ def test_no_fire_and_forget_callback_create_task_in_command_methods() -> None:
         "`self._coordinator_callback()` call so the coordinator's debounced "
         "`async_request_refresh` collapses near-duplicate refreshes into one "
         "`_async_update_data` call. Sites:\n  " + "\n  ".join(offenders)
+    )
+
+
+# ----------------------------------------------------------------------------
+# C4-cmd review F1 — `_safe_post_command_refresh` helper propagates auth
+# failures while swallowing transient refresh noise.
+#
+# The original C4-cmd commit inlined `try: await self._coordinator_callback();
+# except Exception as e: _LOGGER.debug(...)` at all 6 command sites. The
+# Edge Case Hunter review (2026-05-18) caught that this broad-except silently
+# demoted `ConfigEntryAuthFailed` raised by `_handle_realtime_update` to DEBUG,
+# breaking H10's reauth-on-401 contract for the narrow case of a button press
+# landing on a freshly-401-stale token. The 6 inlined blocks are now collapsed
+# to one `_safe_post_command_refresh` helper that explicitly re-raises
+# `ConfigEntryAuthFailed` and `CancelledError`.
+# ----------------------------------------------------------------------------
+
+
+async def test_safe_post_command_refresh_propagates_config_entry_auth_failed() -> None:
+    """Reauth contract: `ConfigEntryAuthFailed` from the coordinator
+    callback must propagate to the command method so HA's reauth flow fires.
+    Pre-fix, the inlined `except Exception` at each of the 6 command sites
+    silently demoted this to DEBUG and the user never saw the reauth prompt.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client = AqualinkClient(username="u", password="p", api_key="k")
+
+    async def raising_callback():
+        raise ConfigEntryAuthFailed("simulated stale token")
+
+    client._coordinator_callback = raising_callback
+
+    with pytest.raises(ConfigEntryAuthFailed):
+        await client._safe_post_command_refresh()
+
+
+async def test_safe_post_command_refresh_propagates_cancelled_error() -> None:
+    """Cancellation contract: `CancelledError` (HA shutdown / unload race)
+    must propagate so the awaiting command method's `wait_for` / outer
+    cancellation handling sees the cancel cleanly. `except Exception`
+    doesn't catch `CancelledError` in Python 3.8+ (it's `BaseException`),
+    but the helper has an explicit `raise` for clarity — this test pins
+    the contract regardless of CancelledError's superclass evolution.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client = AqualinkClient(username="u", password="p", api_key="k")
+
+    async def cancelling_callback():
+        raise asyncio.CancelledError
+
+    client._coordinator_callback = cancelling_callback
+
+    with pytest.raises(asyncio.CancelledError):
+        await client._safe_post_command_refresh()
+
+
+async def test_safe_post_command_refresh_swallows_transient_exception(caplog) -> None:
+    """Transient noise (network blip during refresh, parser KeyError, etc.)
+    must NOT bubble to the command method — the cloud command itself
+    succeeded, and the next polling cycle will recover state. Helper logs
+    at DEBUG and returns cleanly.
+    """
+    import logging
+
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client = AqualinkClient(username="u", password="p", api_key="k")
+
+    async def transient_failure_callback():
+        raise RuntimeError("simulated transient refresh failure")
+
+    client._coordinator_callback = transient_failure_callback
+
+    caplog.set_level(logging.DEBUG, logger="custom_components.iaqualink_robots.coordinator")
+    # Should NOT raise.
+    await client._safe_post_command_refresh()
+
+    debug_records = [
+        r for r in caplog.records
+        if r.levelno == logging.DEBUG
+        and "simulated transient refresh failure" in r.message
+    ]
+    assert debug_records, (
+        "Transient refresh exception must be logged at DEBUG so it's "
+        "observable in operator logs without blocking the command method"
+    )
+
+
+async def test_safe_post_command_refresh_no_callback_is_noop() -> None:
+    """If `_coordinator_callback` is not set (or set to None), the helper
+    must return cleanly without raising AttributeError. Defensive against
+    the pre-existing `hasattr` guard at each call site, which the helper
+    replaced.
+    """
+    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+
+    client = AqualinkClient(username="u", password="p", api_key="k")
+    # _coordinator_callback is None by default (see AqualinkClient.__init__).
+
+    # Should NOT raise.
+    await client._safe_post_command_refresh()
+
+
+def test_all_command_sites_use_safe_post_command_refresh() -> None:
+    """Structural guard: each of the 6 command methods must route its
+    post-command refresh through `_safe_post_command_refresh()`, NOT
+    through a direct `await self._coordinator_callback()` call.
+
+    A future PR that inlines the callback again (e.g. for a "tighter
+    error message" or to avoid the helper indirection) would silently
+    reintroduce the auth-swallow regression this F1 patch fixed.
+    """
+    import ast
+    from pathlib import Path
+
+    coordinator_path = (
+        Path(__file__).parent.parent
+        / "custom_components"
+        / "iaqualink_robots"
+        / "coordinator.py"
+    )
+    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+
+    target_methods = {
+        "start_cleaning",
+        "stop_cleaning",
+        "pause_cleaning",
+        "return_to_base",
+        "add_fifteen_minutes",
+        "reduce_fifteen_minutes",
+    }
+
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef) or node.name not in target_methods:
+            continue
+        for inner in ast.walk(node):
+            # Look for direct `await self._coordinator_callback(...)` calls.
+            # The single legitimate site for this awaited call now lives
+            # inside `_safe_post_command_refresh`, NOT in the 6 commands.
+            if (
+                isinstance(inner, ast.Await)
+                and isinstance(inner.value, ast.Call)
+                and isinstance(inner.value.func, ast.Attribute)
+                and inner.value.func.attr == "_coordinator_callback"
+                and isinstance(inner.value.func.value, ast.Name)
+                and inner.value.func.value.id == "self"
+            ):
+                offenders.append(f"{node.name}:line {inner.lineno}")
+
+    assert not offenders, (
+        "Direct `await self._coordinator_callback()` detected in a command "
+        "method — must route through `self._safe_post_command_refresh()` "
+        "instead so `ConfigEntryAuthFailed` propagates and triggers HA "
+        "reauth (C4-cmd review F1). Sites:\n  " + "\n  ".join(offenders)
     )
 
 

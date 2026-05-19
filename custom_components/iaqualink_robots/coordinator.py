@@ -1693,133 +1693,13 @@ class AqualinkClient:
         get_protocol("vr").parse_status(self, data, result)
 
     def _update_cyclobat_robot_data(self, data, result):
-        """Update status for cyclobat type robot."""
-        # Ensure we have valid data structure before proceeding
-        if not data or 'payload' not in data:
-            _LOGGER.debug("Invalid data structure for cyclobat robot update")
-            result["activity"] = "unknown"
-            result["error_state"] = "no_data"
-            return
+        """Update status for cyclobat type robot — delegates to
+        CycloBatProtocol.parse_status (story R25-cyclobat).
 
-        try:
-            robot_data = data['payload']['robot']['state']['reported']['equipment']['robot']
-            main_data = robot_data['main']
-            battery_data = robot_data['battery']
-            stats_data = robot_data['stats']
-            last_cycle_data = robot_data['lastCycle']
-            cycles_data = robot_data['cycles']
-        except (KeyError, TypeError):
-            _LOGGER.debug("Missing robot data structure for cyclobat robot")
-            result["activity"] = "unknown"
-            result["error_state"] = "no_data"
-            return
-
-        # Basic status and version info with safe access
-        try:
-            raw_status = data['payload']['robot']['state']['reported']['aws']['status']
-            result["status"] = self._stabilize_status(raw_status)
-        except (KeyError, TypeError):
-            pass  # Status already set in calling method
-
-        result["version"] = robot_data.get('vr', 'Unknown')
-        result["serial"] = robot_data.get('sn', '')
-
-        # Main state information with safe access
-        try:
-            robot_state = main_data['state']
-            if robot_state == 1:
-                self._activity = VacuumActivity.CLEANING
-                result["activity"] = "cleaning"
-            elif robot_state == 3:
-                self._activity = VacuumActivity.RETURNING
-                result["activity"] = "returning"
-            else:
-                self._activity = VacuumActivity.IDLE
-                result["activity"] = "idle"
-        except (KeyError, TypeError):
-            result["activity"] = "unknown"
-
-        # Main control and mode information with safe access
-        result["control_state"] = str(main_data.get('ctrl', 'unknown'))
-        result["mode"] = str(main_data.get('mode', 'unknown'))
-        result["error_code"] = str(main_data.get('error', 'unknown'))
-
-        # Battery information with safe access
-        result["battery_version"] = battery_data.get('vr', 'Unknown')
-        result["battery_state"] = str(battery_data.get('state', 'unknown'))
-        result["battery_percentage"] = str(battery_data.get('userChargePerc', '0'))
-        result["battery_level"] = str(battery_data.get('userChargePerc', '0'))
-        result["battery_charge_state"] = str(battery_data.get('userChargeState', 'unknown'))
-        result["battery_cycles"] = str(battery_data.get('cycles', '0'))
-        result["battery_warning_code"] = str(battery_data.get('warning', {}).get('code', 'unknown'))
-
-        # Statistics with safe access
-        result["total_hours"] = str(stats_data.get('totRunTime', '0'))
-        result["diagnostic_code"] = str(stats_data.get('diagnostic', 'unknown'))
-        result["temperature"] = str(stats_data.get('tmp', '0'))
-        result["last_error_code"] = str(stats_data.get('lastError', {}).get('code', 'unknown'))
-        result["last_error_cycle"] = str(stats_data.get('lastError', {}).get('cycleNb', 'unknown'))
-
-        # Last cycle information with safe access
-        result["last_cycle_number"] = str(last_cycle_data.get('cycleNb', 'unknown'))
-        result["last_cycle_duration"] = str(last_cycle_data.get('duration', '0'))
-        result["last_cycle_mode"] = str(last_cycle_data.get('mode', 'unknown'))
-        result["cycle"] = str(last_cycle_data.get('endCycleType', '0'))
-        result["last_cycle_error"] = str(last_cycle_data.get('errorCode', 'unknown'))
-
-        # Cycle durations with safe access
-        result["floor_duration"] = str(cycles_data.get('floorTim', {}).get('duration', '0'))
-        result["floor_walls_duration"] = str(cycles_data.get('floorWallsTim', {}).get('duration', '0'))
-        result["smart_duration"] = str(cycles_data.get('smartTim', {}).get('duration', '0'))
-        result["waterline_duration"] = str(cycles_data.get('waterlineTim', {}).get('duration', '0'))
-        result["first_smart_done"] = str(cycles_data.get('firstSmartDone', 'false'))
-        result["lift_pattern_time"] = str(cycles_data.get('liftPatternTim', '0'))
-
-        # Convert timestamp to datetime for cycle start time with safe access.
-        # H8: aware-UTC datetime objects emitted directly (no .isoformat()).
-        # H8 review follow-up: emit None on never-cleaned + parse failure.
-        try:
-            timestamp = main_data['cycleStartTime']
-            if timestamp > 0:
-                cycle_start_time = dt_util.utc_from_timestamp(timestamp)
-                result["cycle_start_time"] = cycle_start_time
-
-                # Get the appropriate cycle duration based on the current cycle type
-                cycle_type = last_cycle_data['endCycleType']
-                cycle_duration = None
-                if cycle_type == 0:  # Floor only
-                    cycle_duration = cycles_data['floorTim']['duration']
-                elif cycle_type == 1:  # Floor and walls
-                    cycle_duration = cycles_data['floorWallsTim']['duration']
-                elif cycle_type == 2:  # Smart
-                    cycle_duration = cycles_data['smartTim']['duration']
-                elif cycle_type == 3:  # Waterline
-                    cycle_duration = cycles_data['waterlineTim']['duration']
-
-                if cycle_duration is not None:
-                    result["cycle_duration"] = cycle_duration
-                    # Calculate end time and remaining time
-                    self._calculate_times(cycle_start_time, cycle_duration, result)
-                else:
-                    result["cycle_duration"] = 0
-                    result["time_remaining"] = 0
-                    result["time_remaining_human"] = self._format_time_human(0, 0, 0)
-            else:
-                # Never-cleaned robot.
-                result["cycle_start_time"] = None
-                result["cycle_end_time"] = None
-                result["estimated_end_time"] = None
-                result["cycle_duration"] = 0
-                result["time_remaining"] = 0
-                result["time_remaining_human"] = self._format_time_human(0, 0, 0)
-        except Exception as e:
-            _LOGGER.debug(f"Error processing cycle times for cyclobat robot: {e}")
-            result["cycle_start_time"] = None
-            result["cycle_end_time"] = None
-            result["estimated_end_time"] = None
-            result["cycle_duration"] = 0
-            result["time_remaining"] = 0
-            result["time_remaining_human"] = self._format_time_human(0, 0, 0)
+        Stable 2-line seam called by both the polled path
+        (``fetch_status``) and the push path (``_apply_realtime_envelope``).
+        """
+        get_protocol("cyclobat").parse_status(self, data, result)
 
     def _update_vortrax_robot_data(self, data, result):
         """Update status for vortrax type robot — delegates to
@@ -2395,11 +2275,7 @@ class AqualinkClient:
             elif self._device_type == "vortrax":
                 request = get_protocol("vortrax").start_payload(self)
             elif self._device_type == "cyclobat":
-                request = self._build_state_request(
-                    "setCleaningMode",
-                    {"main": {"ctrl": 1}},
-                    namespace="cyclobat",
-                )
+                request = get_protocol("cyclobat").start_payload(self)
             elif self._device_type == "cyclonext":
                 request = self._build_state_request(
                     "setCleanerState",
@@ -2472,11 +2348,7 @@ class AqualinkClient:
             elif self._device_type == "vortrax":
                 request = get_protocol("vortrax").stop_payload(self)
             elif self._device_type == "cyclobat":
-                request = self._build_state_request(
-                    "setCleaningMode",
-                    {"main": {"ctrl": 0}},
-                    namespace="cyclobat",
-                )
+                request = get_protocol("cyclobat").stop_payload(self)
             elif self._device_type == "cyclonext":
                 request = self._build_state_request(
                     "setCleanerState",
@@ -2531,11 +2403,7 @@ class AqualinkClient:
             elif self._device_type == "vortrax":
                 request = get_protocol("vortrax").pause_payload(self)
             elif self._device_type == "cyclobat":
-                request = self._build_state_request(
-                    "setCleaningMode",
-                    {"main": {"ctrl": 2}},
-                    namespace="cyclobat",
-                )
+                request = get_protocol("cyclobat").pause_payload(self)
             elif self._device_type == "cyclonext":
                 request = self._build_state_request(
                     "setCleanerState",
@@ -2563,17 +2431,16 @@ class AqualinkClient:
             url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
             await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
         elif self._device_type in ("vr", "vortrax", "cyclobat"):
-            # R25-vr / R25-vortrax: both route through their protocol.
-            # Cyclobat's return_to_base uses `robot` + `state` field
-            # directly (unlike its other commands which nest under
-            # `main.ctrl`). Preserved as-is — the cloud accepts it today and
-            # changing it would be a behavior change.
+            # R25 series: all 3 families route through their protocol. The
+            # cyclobat anomaly (flat ``setCleanerState`` + ``state:3``
+            # instead of the ``setCleaningMode`` + ``main.ctrl`` shape its
+            # other commands use) lives inside ``CycloBatProtocol`` now.
             if self._device_type == "vr":
                 request = get_protocol("vr").return_to_base_payload(self)
             elif self._device_type == "vortrax":
                 request = get_protocol("vortrax").return_to_base_payload(self)
-            else:
-                request = self._build_state_request("setCleanerState", {"state": 3})
+            else:  # cyclobat
+                request = get_protocol("cyclobat").return_to_base_payload(self)
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
             # C4-cmd: one awaited refresh (see start_cleaning for rationale).
@@ -2602,13 +2469,9 @@ class AqualinkClient:
                 )
 
             if self._device_type == "cyclobat":
-                # Look for mode in cyclobat response
-                robot_state = payload.get("robot", {}).get("state", {}).get(
-                    "reported", {}).get("equipment", {}).get("robot", {}).get("main", {})
-                mode = robot_state.get("mode")
-                if mode is not None:
-                    cycle_map = {3: "wall_only", 0: "floor_only", 2: "smart_floor_and_walls", 1: "floor_and_walls"}
-                    return cycle_map.get(mode, requested_fan_speed)
+                return get_protocol("cyclobat").extract_fan_speed_from_response(
+                    response_data, requested_fan_speed
+                )
 
             if self._device_type == "cyclonext":
                 # Look for cycle in cyclonext response
@@ -2677,19 +2540,7 @@ class AqualinkClient:
             request = get_protocol("vortrax").set_fan_speed_payload(self, fan_speed)
 
         elif self._device_type == "cyclobat":
-            cycle_speed_map = {
-                "wall_only": "3",
-                "floor_only": "0",
-                "smart_floor_and_walls": "2",
-                "floor_and_walls": "1"
-            }
-            _cycle_speed = cycle_speed_map.get(fan_speed)
-            if _cycle_speed:
-                request = self._build_state_request(
-                    "setCleaningMode",
-                    {"main": {"mode": _cycle_speed}},
-                    namespace="cyclobat",
-                )
+            request = get_protocol("cyclobat").set_fan_speed_payload(self, fan_speed)
 
         elif self._device_type == "cyclonext":
             # The keys here MUST match the snake_case translation keys passed in

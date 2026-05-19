@@ -14,14 +14,16 @@ matching R25 story lands.
 from __future__ import annotations
 
 from .base import RobotProtocol
+from .cyclobat import CycloBatProtocol
 from .vortrax import VortraxProtocol
 from .vr import VRProtocol
 
 #: Dispatch table — ``device_type`` → protocol instance. Extended as each
-#: R25 story lands (R25-cyclobat / cyclonext / i2d are pending).
+#: R25 story lands (R25-cyclonext / i2d are pending).
 _DEVICE_PROTOCOLS: dict[str, RobotProtocol] = {
     "vr": VRProtocol(),
     "vortrax": VortraxProtocol(),
+    "cyclobat": CycloBatProtocol(),
 }
 
 
@@ -33,4 +35,10 @@ def get_protocol(device_type: str) -> RobotProtocol | None:
     return _DEVICE_PROTOCOLS.get(device_type)
 
 
-__all__ = ["RobotProtocol", "VortraxProtocol", "VRProtocol", "get_protocol"]
+__all__ = [
+    "CycloBatProtocol",
+    "RobotProtocol",
+    "VortraxProtocol",
+    "VRProtocol",
+    "get_protocol",
+]

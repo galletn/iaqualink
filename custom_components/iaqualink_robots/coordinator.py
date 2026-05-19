@@ -1713,85 +1713,13 @@ class AqualinkClient:
         get_protocol("vortrax").parse_status(self, data, result)
 
     def _update_cyclonext_robot_data(self, data, result):
-        """Update status for cyclonext type robot."""
-        # Ensure we have valid data structure before proceeding
-        if not data or 'payload' not in data:
-            _LOGGER.debug("Invalid data structure for cyclonext robot update")
-            result["activity"] = "unknown"
-            result["error_state"] = "no_data"
-            return
+        """Update status for cyclonext type robot — delegates to
+        CycloNextProtocol.parse_status (story R25-cyclonext).
 
-        try:
-            robot_data = data['payload']['robot']['state']['reported']['equipment']['robot.1']
-        except (KeyError, TypeError):
-            _LOGGER.debug("Missing robot.1 data structure for cyclonext robot")
-            result["activity"] = "unknown"
-            result["error_state"] = "no_data"
-            return
-
-        try:
-            if robot_data['mode'] == 1:
-                self._activity = VacuumActivity.CLEANING
-                result["activity"] = "cleaning"
-            else:
-                self._activity = VacuumActivity.IDLE
-                result["activity"] = "idle"
-        except (KeyError, TypeError):
-            result["activity"] = "unknown"
-
-        # Extract attributes with safe access
-        try:
-            result["canister"] = robot_data['canister']*100
-        except (KeyError, TypeError):
-            result["canister"] = 0
-
-        try:
-            result["error_state"] = robot_data['errors']['code']
-        except (KeyError, TypeError):
-            result["error_state"] = "unknown"
-
-        try:
-            result["total_hours"] = robot_data['totRunTime']
-        except Exception:
-            # Not supported by some cyclonext models
-            result["total_hours"] = 0
-
-        # Convert timestamp to datetime with safe access.
-        # H8: aware-UTC datetime objects emitted directly (no .isoformat()).
-        # H8 review follow-up: emit None on never-cleaned + parse failure.
-        try:
-            timestamp = robot_data['cycleStartTime']
-            if timestamp > 0:
-                cycle_start_time = dt_util.utc_from_timestamp(timestamp)
-                result["cycle_start_time"] = cycle_start_time
-
-                result["cycle"] = robot_data['cycle']
-
-                cycle_duration = self._resolve_cycle_duration(
-                    robot_data['durations'], result["cycle"]
-                )
-                result["cycle_duration"] = cycle_duration
-
-                # Calculate end time and remaining time
-                self._calculate_times(cycle_start_time, cycle_duration, result)
-            else:
-                # Never-cleaned robot.
-                result["cycle_start_time"] = None
-                result["cycle_end_time"] = None
-                result["estimated_end_time"] = None
-                result["cycle"] = 0
-                result["cycle_duration"] = 0
-                result["time_remaining"] = 0
-                result["time_remaining_human"] = self._format_time_human(0, 0, 0)
-        except Exception as e:
-            _LOGGER.debug(f"Error processing cycle times for cyclonext robot: {e}")
-            result["cycle_start_time"] = None
-            result["cycle_end_time"] = None
-            result["estimated_end_time"] = None
-            result["cycle"] = 0
-            result["cycle_duration"] = 0
-            result["time_remaining"] = 0
-            result["time_remaining_human"] = self._format_time_human(0, 0, 0)
+        Stable 2-line seam called by both the polled path
+        (``fetch_status``) and the push path (``_apply_realtime_envelope``).
+        """
+        get_protocol("cyclonext").parse_status(self, data, result)
 
     def _calculate_times(self, start_time, duration_minutes, result, robot_data=None):
         """Calculate end time and remaining time using stepper-based adjustments."""
@@ -2277,12 +2205,7 @@ class AqualinkClient:
             elif self._device_type == "cyclobat":
                 request = get_protocol("cyclobat").start_payload(self)
             elif self._device_type == "cyclonext":
-                request = self._build_state_request(
-                    "setCleanerState",
-                    {"mode": 1},
-                    namespace="cyclonext",
-                    robot_key="robot.1",
-                )
+                request = get_protocol("cyclonext").start_payload(self)
 
             if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2350,12 +2273,7 @@ class AqualinkClient:
             elif self._device_type == "cyclobat":
                 request = get_protocol("cyclobat").stop_payload(self)
             elif self._device_type == "cyclonext":
-                request = self._build_state_request(
-                    "setCleanerState",
-                    {"mode": 0},
-                    namespace="cyclonext",
-                    robot_key="robot.1",
-                )
+                request = get_protocol("cyclonext").stop_payload(self)
 
         # Create result with reset time values always, regardless of robot type.
         # H8 review follow-up: emit None for the two TIMESTAMP-classed sensors
@@ -2405,12 +2323,7 @@ class AqualinkClient:
             elif self._device_type == "cyclobat":
                 request = get_protocol("cyclobat").pause_payload(self)
             elif self._device_type == "cyclonext":
-                request = self._build_state_request(
-                    "setCleanerState",
-                    {"mode": 2},
-                    namespace="cyclonext",
-                    robot_key="robot.1",
-                )
+                request = get_protocol("cyclonext").pause_payload(self)
 
             if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2474,13 +2387,9 @@ class AqualinkClient:
                 )
 
             if self._device_type == "cyclonext":
-                # Look for cycle in cyclonext response
-                robot_state = payload.get("robot", {}).get("state", {}).get(
-                    "reported", {}).get("equipment", {}).get("robot.1", {})
-                cycle = robot_state.get("cycle")
-                if cycle is not None:
-                    cycle_map = {1: "floor_only", 3: "floor_and_walls"}
-                    return cycle_map.get(cycle, requested_fan_speed)
+                return get_protocol("cyclonext").extract_fan_speed_from_response(
+                    response_data, requested_fan_speed
+                )
 
         except Exception as e:
             _LOGGER.debug(f"Error extracting fan speed from response: {e}")
@@ -2543,27 +2452,13 @@ class AqualinkClient:
             request = get_protocol("cyclobat").set_fan_speed_payload(self, fan_speed)
 
         elif self._device_type == "cyclonext":
-            # The keys here MUST match the snake_case translation keys passed in
-            # by `vacuum.py::async_set_fan_speed` (which forwards the internal
-            # key after converting from any display-name input). Pre-issue-#76
-            # this map used the legacy display-name keys ("Floor only",
-            # "Floor and walls"), so `.get(fan_speed)` always returned None,
-            # `request` stayed None, and the command silently fell through to
-            # `{"success": False, ..., "error": "No valid request generated"}`.
-            # That's the "fan speed no longer propagates from HA to AquaLink"
-            # symptom reported in issue #76 (galletn comment on RE 4400 iQ).
-            cycle_speed_map = {
-                "floor_only": "1",
-                "floor_and_walls": "3"
-            }
-            _cycle_speed = cycle_speed_map.get(fan_speed)
-            if _cycle_speed:
-                request = self._build_state_request(
-                    "setCleaningMode",
-                    {"cycle": _cycle_speed},
-                    namespace="cyclonext",
-                    robot_key="robot.1",
-                )
+            # R25-cyclonext: ``CycloNextProtocol.set_fan_speed_payload`` owns
+            # the cyclonext-specific encoding (``cycle`` field, ``robot.1`` key,
+            # string values, only ``floor_only`` / ``floor_and_walls`` accepted).
+            # The translation-key contract issue #76 originally tripped on
+            # (display-name keys vs snake_case translation keys) is locked at
+            # the protocol layer + by ``tests/protocols/test_cyclonext.py``.
+            request = get_protocol("cyclonext").set_fan_speed_payload(self, fan_speed)
 
         if request:
             response_data = await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)

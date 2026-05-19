@@ -15,15 +15,17 @@ from __future__ import annotations
 
 from .base import RobotProtocol
 from .cyclobat import CycloBatProtocol
+from .cyclonext import CycloNextProtocol
 from .vortrax import VortraxProtocol
 from .vr import VRProtocol
 
 #: Dispatch table — ``device_type`` → protocol instance. Extended as each
-#: R25 story lands (R25-cyclonext / i2d are pending).
+#: R25 story lands (R25-i2d is pending).
 _DEVICE_PROTOCOLS: dict[str, RobotProtocol] = {
     "vr": VRProtocol(),
     "vortrax": VortraxProtocol(),
     "cyclobat": CycloBatProtocol(),
+    "cyclonext": CycloNextProtocol(),
 }
 
 
@@ -37,6 +39,7 @@ def get_protocol(device_type: str) -> RobotProtocol | None:
 
 __all__ = [
     "CycloBatProtocol",
+    "CycloNextProtocol",
     "RobotProtocol",
     "VortraxProtocol",
     "VRProtocol",

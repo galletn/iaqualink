@@ -25,6 +25,7 @@ from .const import (
     PENDING_STOP_RESET_MAX_AGE_SECONDS,
     LONG_OUTAGE_THRESHOLD_SECONDS,
 )
+from .protocols import get_protocol
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1680,124 +1681,16 @@ class AqualinkClient:
         return result
 
     def _update_vr_robot_data(self, data, result):
-        """Update status for VR type robot."""
-        # Ensure we have valid data structure before proceeding
-        if not data or 'payload' not in data:
-            _LOGGER.debug("Invalid data structure for VR robot update")
-            result["activity"] = "unknown"
-            result["error_state"] = "no_data"
-            return
+        """Update status for VR type robot — delegates to VRProtocol.parse_status.
 
-        try:
-            robot_data = data['payload']['robot']['state']['reported']['equipment']['robot']
-        except (KeyError, TypeError):
-            _LOGGER.debug("Missing robot data structure for VR robot")
-            result["activity"] = "unknown"
-            result["error_state"] = "no_data"
-            return
-
-        try:
-            result["temperature"] = robot_data['sensors']['sns_1']['val']
-        except Exception:
-            try:
-                result["temperature"] = robot_data['sensors']['sns_1']['state']
-            except Exception:
-                # Zodiac XA 5095 iQ does not support temp
-                result["temperature"] = '0'
-
-        try:
-            robot_state = robot_data['state']
-            if robot_state == 1:
-                self._activity = VacuumActivity.CLEANING
-                result["activity"] = "cleaning"
-            elif robot_state == 3:
-                self._activity = VacuumActivity.RETURNING
-                result["activity"] = "returning"
-            else:
-                self._activity = VacuumActivity.IDLE
-                result["activity"] = "idle"
-        except (KeyError, TypeError):
-            result["activity"] = "unknown"
-
-        # Extract other attributes with safe access
-        try:
-            result["canister"] = robot_data['canister']*100
-        except (KeyError, TypeError):
-            result["canister"] = 0
-
-        try:
-            result["error_state"] = robot_data['errorState']
-        except (KeyError, TypeError):
-            result["error_state"] = "unknown"
-
-        try:
-            result["total_hours"] = robot_data['totalHours']
-        except (KeyError, TypeError):
-            result["total_hours"] = 0
-
-        # Get stepper information for timing adjustments
-        try:
-            result["stepper"] = robot_data['stepper']
-            result["stepper_adj_time"] = robot_data.get('stepperAdjTime', 15)
-            _LOGGER.debug(
-                f"Stepper info: value={robot_data['stepper']}, adj_time={robot_data.get('stepperAdjTime', 15)}")
-        except (KeyError, TypeError):
-            result["stepper"] = 0
-            result["stepper_adj_time"] = 15
-            _LOGGER.debug("No stepper data found, using defaults")
-
-        # Get current cycle (fan speed) and update it
-        try:
-            current_cycle = robot_data['prCyc']
-            result["cycle"] = current_cycle
-            # Map cycle to fan speed (using translation keys)
-            cycle_map = {
-                0: "wall_only",           # Wall only
-                1: "floor_only",          # Floor only
-                2: "smart_floor_and_walls",  # SMART mode
-                3: "floor_and_walls"      # Floor and walls
-            }
-            self._fan_speed = cycle_map.get(current_cycle, "floor_only")
-            result["fan_speed"] = self._fan_speed
-        except Exception as e:
-            _LOGGER.debug(f"Error setting fan speed for VR robot: {e}")
-            self._fan_speed = "floor_only"  # Default to floor only if we can't determine
-            result["fan_speed"] = self._fan_speed
-
-        # Convert timestamp to datetime. H8: aware-UTC datetime objects stored
-        # directly (no .isoformat()); sensor entity uses device_class=TIMESTAMP.
-        # H8 review follow-up: emit None on never-cleaned (cycleStartTime=0)
-        # and on parse failure so HA renders "Unknown" instead of "1970-01-01"
-        # or "cycle started right now" pinned to the failure moment.
-        try:
-            timestamp = robot_data['cycleStartTime']
-            if timestamp > 0:
-                cycle_start_time = dt_util.utc_from_timestamp(timestamp)
-                result["cycle_start_time"] = cycle_start_time
-
-                cycle_duration = self._resolve_cycle_duration(
-                    robot_data['durations'], result["cycle"]
-                )
-                result["cycle_duration"] = cycle_duration
-
-                # Calculate end time and remaining time with stepper adjustments
-                self._calculate_times(cycle_start_time, cycle_duration, result, robot_data)
-            else:
-                # Never-cleaned robot — emit None instead of a 1970 epoch render.
-                result["cycle_start_time"] = None
-                result["cycle_end_time"] = None
-                result["estimated_end_time"] = None
-                result["cycle_duration"] = 0
-                result["time_remaining"] = 0
-                result["time_remaining_human"] = self._format_time_human(0, 0, 0)
-        except Exception as e:
-            _LOGGER.debug(f"Error processing cycle times for VR robot: {e}")
-            result["cycle_start_time"] = None
-            result["cycle_end_time"] = None
-            result["estimated_end_time"] = None
-            result["cycle_duration"] = 0
-            result["time_remaining"] = 0
-            result["time_remaining_human"] = self._format_time_human(0, 0, 0)
+        R25-vr: the parser body lives on ``VRProtocol`` so each device family
+        owns its own parsing logic. This method stays as a stable seam for
+        the two callers (``fetch_status`` and ``_apply_realtime_envelope``)
+        so the push-path dispatch doesn't need to know about the protocol
+        package yet (the dispatch will collapse once all five R25 stories
+        land — story R26).
+        """
+        get_protocol("vr").parse_status(self, data, result)
 
     def _update_cyclobat_robot_data(self, data, result):
         """Update status for cyclobat type robot."""
@@ -2581,10 +2474,12 @@ class AqualinkClient:
             return result  # Return the time values to be used in the coordinator's update
         else:
             # R23: envelope literals collapsed to `_build_state_request` calls.
-            # Per-device-type drift preserved (cyclonext uses `robot.1`/`mode`;
-            # cyclobat nests under `main.ctrl`).
+            # R25-vr: vr routes through VRProtocol.start_payload (the other 4
+            # families stay inline until their R25 story lands).
             request = None
-            if self._device_type == "vr" or self._device_type == "vortrax":
+            if self._device_type == "vr":
+                request = get_protocol("vr").start_payload(self)
+            elif self._device_type == "vortrax":
                 request = self._build_state_request("setCleanerState", {"state": 1})
             elif self._device_type == "cyclobat":
                 request = self._build_state_request(
@@ -2636,8 +2531,8 @@ class AqualinkClient:
         if self._device_type != "vr":
             return
 
-        # R23: envelope literal collapsed to `_build_state_request`.
-        request = self._build_state_request("setCleanerState", {"state": 0})
+        # R25-vr: VRProtocol.clear_desired_payload owns the per-family envelope.
+        request = get_protocol("vr").clear_desired_payload(self)
 
         try:
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2658,7 +2553,10 @@ class AqualinkClient:
             await asyncio.wait_for(self.post_command_i2d(url, i2d_request), timeout=800)
         else:
             # R23: envelope literals collapsed to `_build_state_request` calls.
-            if self._device_type == "vr" or self._device_type == "vortrax":
+            # R25-vr: vr routes through VRProtocol.stop_payload.
+            if self._device_type == "vr":
+                request = get_protocol("vr").stop_payload(self)
+            elif self._device_type == "vortrax":
                 request = self._build_state_request("setCleanerState", {"state": 0})
             elif self._device_type == "cyclobat":
                 request = self._build_state_request(
@@ -2713,8 +2611,11 @@ class AqualinkClient:
             return await self.stop_cleaning()
         else:
             # R23: envelope literals collapsed to `_build_state_request` calls.
+            # R25-vr: vr routes through VRProtocol.pause_payload.
             request = None
-            if self._device_type == "vr" or self._device_type == "vortrax":
+            if self._device_type == "vr":
+                request = get_protocol("vr").pause_payload(self)
+            elif self._device_type == "vortrax":
                 request = self._build_state_request("setCleanerState", {"state": 2})
             elif self._device_type == "cyclobat":
                 request = self._build_state_request(
@@ -2748,12 +2649,16 @@ class AqualinkClient:
             }
             url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
             await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
-        elif self._device_type in ["vr", "vortrax", "cyclobat"]:
-            # R23: envelope literal collapsed. Note: cyclobat's return_to_base
-            # uses `robot` + `state` field directly (unlike its other commands
-            # which nest under `main.ctrl`). Preserved as-is — the cloud accepts
-            # it today and changing it would be a behavior change.
-            request = self._build_state_request("setCleanerState", {"state": 3})
+        elif self._device_type in ("vr", "vortrax", "cyclobat"):
+            # R25-vr: vr routes through VRProtocol.return_to_base_payload.
+            # Note: cyclobat's return_to_base uses `robot` + `state` field
+            # directly (unlike its other commands which nest under
+            # `main.ctrl`). Preserved as-is — the cloud accepts it today and
+            # changing it would be a behavior change.
+            if self._device_type == "vr":
+                request = get_protocol("vr").return_to_base_payload(self)
+            else:
+                request = self._build_state_request("setCleanerState", {"state": 3})
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
             # C4-cmd: one awaited refresh (see start_cleaning for rationale).
@@ -2769,8 +2674,15 @@ class AqualinkClient:
         try:
             payload = response_data.get("payload", {})
 
-            # For different robot types, the fan speed might be in different locations
-            if self._device_type == "vr" or self._device_type == "vortrax":
+            # R25-vr: VR family routes through the protocol; others stay inline
+            # until their R25 stories land. The protocol owns the prCyc → fan-
+            # speed-key map so the encoding is single-sourced with VRProtocol.
+            if self._device_type == "vr":
+                return get_protocol("vr").extract_fan_speed_from_response(
+                    response_data, requested_fan_speed
+                )
+
+            if self._device_type == "vortrax":
                 # Look for prCyc (program cycle) in the response
                 robot_state = payload.get("robot", {}).get("state", {}).get(
                     "reported", {}).get("equipment", {}).get("robot", {})
@@ -2842,11 +2754,16 @@ class AqualinkClient:
     async def _set_other_fan_speed(self, fan_speed):
         """Set fan speed for non-i2d robots."""
         # R23: envelope literals collapsed to `_build_state_request` calls.
+        # R25-vr: vr routes through VRProtocol.set_fan_speed_payload; vortrax
+        # / cyclobat / cyclonext stay inline until their R25 stories land.
         # Per-device fields preserved exactly: vr/vortrax use `prCyc` (int),
         # cyclobat uses `main.mode` (str), cyclonext uses `cycle` under
         # `robot.1` (str).
         request = None
-        if self._device_type == "vr" or self._device_type == "vortrax":
+        if self._device_type == "vr":
+            request = get_protocol("vr").set_fan_speed_payload(self, fan_speed)
+
+        elif self._device_type == "vortrax":
             cycle_speed_map = {
                 "wall_only": "0",
                 "floor_only": "1",

@@ -12,10 +12,9 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from .types import IaqualinkConfigEntry
 
 # Field names that ``async_redact_data`` will replace with ``"**REDACTED**"``
 # anywhere they appear in a dict-like payload (entry.data, entry.options,
@@ -49,7 +48,7 @@ TO_REDACT = frozenset({
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: IaqualinkConfigEntry,
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry.
 
@@ -62,12 +61,17 @@ async def async_get_config_entry_diagnostics(
         }
 
     The ``coordinator`` and ``client`` blocks are omitted if the integration
-    is mid-setup (entry hasn't reached ``async_setup_entry`` yet), so the
-    diagnostic remains useful for "stuck loading" reports too.
+    is mid-setup (entry hasn't reached ``async_setup_entry`` yet, so
+    ``entry.runtime_data`` isn't populated). That keeps the diagnostic
+    useful for "stuck loading" reports too — the user still gets the
+    entry block back even when the platforms haven't finished setting up.
     """
-    store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-    coordinator = store.get("coordinator")
-    client = store.get("client")
+    # P3: read coordinator/client from ``entry.runtime_data`` instead of
+    # ``hass.data[DOMAIN][entry.entry_id]``. The mid-setup window where the
+    # attribute is unset surfaces as the ``getattr(..., None)`` fallback.
+    runtime_data = getattr(entry, "runtime_data", None)
+    coordinator = runtime_data.coordinator if runtime_data is not None else None
+    client = coordinator.client if coordinator is not None else None
 
     payload: dict[str, Any] = {
         "entry": {

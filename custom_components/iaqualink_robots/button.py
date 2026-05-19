@@ -2,26 +2,25 @@
 import logging
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
 from .coordinator import AqualinkDataUpdateCoordinator
 from .device import build_device_info
+from .types import IaqualinkConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: IaqualinkConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the button entities."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
-    client = hass.data[DOMAIN][config_entry.entry_id]["client"]
+    coordinator = config_entry.runtime_data.coordinator
+    client = coordinator.client
 
     # Only create remote control buttons for VR and VortraX robots
     if client.device_type in ["vr", "vortrax"]:

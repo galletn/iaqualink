@@ -228,3 +228,47 @@ def test_aqualink_client_exposes_device_type_and_serial_as_properties() -> None:
         "AqualinkClient.serial must be a @property (story M15). "
         f"Got: {type(serial_attr).__name__}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Story P3 — runtime_data migration guard.
+#
+# Pre-P3 the integration stored per-entry runtime state on
+# ``hass.data[DOMAIN][entry.entry_id]``. P3 moved that to the typed
+# ``ConfigEntry.runtime_data`` attribute (HA 2024+ convention). Any
+# reintroduction of ``hass.data[DOMAIN]`` reads or writes in production code
+# would silently fork the storage contract — diagnostics, lifecycle, and
+# platform setup would diverge on which dict carries the truth.
+# ---------------------------------------------------------------------------
+
+
+_HASS_DATA_DOMAIN_ACCESS = re.compile(
+    r"""hass\.data            # ``hass.data``
+        (?:\.(?:get|setdefault|pop)\(\s*)?  # optional .get( / .setdefault( / .pop(
+        \[?DOMAIN              # ``[DOMAIN`` or `(DOMAIN`
+    """,
+    re.VERBOSE,
+)
+
+
+def test_no_hass_data_domain_access_in_production_code() -> None:
+    """P3: production code must not touch ``hass.data[DOMAIN]``.
+
+    Per-entry runtime state lives on ``entry.runtime_data`` (typed as
+    ``IaqualinkData`` in ``types.py``). Reintroducing ``hass.data[DOMAIN]``
+    in production would fork the storage contract — diagnostics, lifecycle
+    cleanup, and platform setup would each read a different source of truth.
+
+    Scope is the production package only (``custom_components/iaqualink_robots/*.py``).
+    Tests are excluded — they may reference the legacy shape in xfail
+    comments or migration docstrings.
+    """
+    hits = _scan(_HASS_DATA_DOMAIN_ACCESS, _ALL_PYTHON_FILES)
+    assert not hits, (
+        "Found ``hass.data[DOMAIN]`` / ``hass.data.get(DOMAIN, ...)`` /\n"
+        "``hass.data.setdefault(DOMAIN, ...)`` access in production code. "
+        "Story P3 migrated per-entry runtime state to the typed "
+        "``entry.runtime_data`` attribute (``IaqualinkData`` in types.py). "
+        "Read via ``entry.runtime_data.coordinator`` instead.\n"
+        + "\n".join(f"  {p.name}:{n}: {line}" for p, n, line in hits)
+    )

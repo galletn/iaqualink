@@ -4,8 +4,8 @@ import logging
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from .const import DOMAIN
 from .device import build_device_info
+from .types import IaqualinkConfigEntry
 
 # Sensor keys that surface an aware-UTC datetime from the coordinator (H8).
 # Marking these with device_class=TIMESTAMP makes HA's frontend render the
@@ -85,11 +85,10 @@ ALL_SENSOR_TYPES = [
 ]
 
 
-async def async_setup_entry(hass, entry, async_add_entities):
+async def async_setup_entry(hass, entry: IaqualinkConfigEntry, async_add_entities):
     """Set up sensors for an entry, filtering based on robot type."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data["coordinator"]
-    client = data["client"]
+    coordinator = entry.runtime_data.coordinator
+    client = coordinator.client
 
     # Efficiently filter sensor types based on device type
     device_type = client.device_type

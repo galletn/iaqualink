@@ -58,16 +58,20 @@ def mock_coordinator():
 
 @pytest.mark.xfail(
     reason=(
-        "Story P3: setup currently forwards to platforms (vacuum/sensor/button) which "
-        "have their own coordinator wiring not yet stubbable from this seed. Will pass "
-        "once runtime_data migration + platform-fixture polish lands."
+        "Setup forwards to platforms (vacuum/sensor/button) whose own coordinator "
+        "wiring is not yet stubbable from this seed. Test body now asserts the post-P3 "
+        "runtime_data contract — passes once platform-fixture polish lands."
     ),
     strict=False,
 )
-async def test_setup_entry_stores_client_and_coordinator(
+async def test_setup_entry_stores_coordinator_on_runtime_data(
     hass: HomeAssistant, mock_coordinator
 ) -> None:
-    """async_setup_entry creates a client + coordinator and stashes them in hass.data."""
+    """P3: async_setup_entry stashes the coordinator on ``entry.runtime_data``.
+
+    Pre-P3 the coordinator lived in ``hass.data[DOMAIN][entry.entry_id]``; the
+    new shape uses the HA 2024+ typed ``entry.runtime_data`` convention.
+    """
     entry = MockConfigEntry(
         domain=DOMAIN,
         data=MOCK_ENTRY_DATA,
@@ -82,9 +86,7 @@ async def test_setup_entry_stores_client_and_coordinator(
     mock_coordinator["client_cls"].assert_called_once()
     mock_coordinator["coord"].async_config_entry_first_refresh.assert_awaited_once()
 
-    entry_store = hass.data[DOMAIN][entry.entry_id]
-    assert entry_store["client"] is mock_coordinator["client"]
-    assert entry_store["coordinator"] is mock_coordinator["coord"]
+    assert entry.runtime_data.coordinator is mock_coordinator["coord"]
 
 
 # ---------------------------------------------------------------------------
@@ -426,16 +428,21 @@ async def test_migrate_v1_without_serial_preserves_registry(hass: HomeAssistant)
 
 
 # ---------------------------------------------------------------------------
-# Lifecycle — XFAIL until P3 (runtime_data) and platform-fixture polish lands.
+# Lifecycle — XFAIL until platform-fixture polish lands.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.xfail(
-    reason="See test_setup_entry_stores_client_and_coordinator — same dependency on platform fixtures.",
+    reason="See test_setup_entry_stores_coordinator_on_runtime_data — same dependency on platform fixtures.",
     strict=False,
 )
 async def test_unload_entry_calls_cleanup(hass: HomeAssistant, mock_coordinator) -> None:
-    """async_unload_entry must call coordinator.cleanup() and remove the entry from hass.data."""
+    """async_unload_entry must call coordinator.cleanup() after platforms detach.
+
+    P3: post-migration the integration no longer reaches into ``hass.data``
+    on unload; the cleanup contract is the awaited ``coordinator.cleanup()``
+    call alone. HA owns the ``entry.runtime_data`` lifecycle.
+    """
     entry = MockConfigEntry(
         domain=DOMAIN,
         data=MOCK_ENTRY_DATA,
@@ -451,4 +458,3 @@ async def test_unload_entry_calls_cleanup(hass: HomeAssistant, mock_coordinator)
     await hass.async_block_till_done()
 
     mock_coordinator["coord"].cleanup.assert_awaited_once()
-    assert entry.entry_id not in hass.data.get(DOMAIN, {})

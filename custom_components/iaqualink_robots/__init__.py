@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -11,6 +10,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
 )
+from .types import IaqualinkConfigEntry, IaqualinkData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -144,8 +144,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {}
+async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) -> bool:
     from .coordinator import AqualinkClient, AqualinkDataUpdateCoordinator
     from .const import SCAN_INTERVAL
 
@@ -212,9 +211,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Initial refresh to get data
     await coordinator.async_config_entry_first_refresh()
 
-    # Store client and coordinator in hass.data
-    hass.data[DOMAIN][entry.entry_id]["client"] = client
-    hass.data[DOMAIN][entry.entry_id]["coordinator"] = coordinator
+    # P3: per-entry runtime state lives on `entry.runtime_data` (HA 2024+
+    # convention). Replaces the prior `hass.data[DOMAIN][entry.entry_id]`
+    # dict — type-checkable end-to-end and scoped to the entry's lifecycle.
+    entry.runtime_data = IaqualinkData(coordinator=coordinator)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -230,25 +230,18 @@ async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # Clean up resources before unloading
-    if entry.entry_id in hass.data[DOMAIN]:
-        entry_data = hass.data[DOMAIN][entry.entry_id]
-        if "coordinator" in entry_data:
-            coordinator = entry_data["coordinator"]
-            try:
-                # Clean up any persistent connections
-                await coordinator.cleanup()
-            except Exception as e:
-                _LOGGER.warning(f"Error during coordinator cleanup: {e}")
+async def async_unload_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) -> bool:
+    # Unload the platforms; clean up the coordinator only after every
+    # platform has detached so no remaining listener observes a torn-down
+    # coordinator. HA's helper raises if a platform unload fails and we
+    # short-circuit the cleanup in that case (the next setup will retry).
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
 
-    # Unload the platforms
-    unload_ok = await asyncio.gather(
-        *[
-            hass.config_entries.async_forward_entry_unload(entry, platform)
-            for platform in PLATFORMS
-        ]
-    )
-    if all(unload_ok):
-        hass.data[DOMAIN].pop(entry.entry_id)
-    return all(unload_ok)
+    try:
+        await entry.runtime_data.coordinator.cleanup()
+    except Exception as e:  # noqa: BLE001 — cleanup is best-effort
+        _LOGGER.warning(f"Error during coordinator cleanup: {e}")
+
+    return True

@@ -23,7 +23,6 @@ import datetime as dt
 from typing import Any
 from unittest.mock import MagicMock
 
-from custom_components.iaqualink_robots.const import DOMAIN
 from custom_components.iaqualink_robots.diagnostics import (
     TO_REDACT,
     _partial_redact,
@@ -40,8 +39,21 @@ from tests.const import (
 REDACTED = "**REDACTED**"
 
 
-def _entry(data: dict | None = None, options: dict | None = None) -> MagicMock:
-    """Build a MagicMock ConfigEntry with the surface diagnostics reads."""
+def _entry(
+    data: dict | None = None,
+    options: dict | None = None,
+    coordinator: Any = None,
+    client: Any = None,
+) -> MagicMock:
+    """Build a MagicMock ConfigEntry with the surface diagnostics reads.
+
+    Post-P3, the diagnostics module reads its coordinator + client via
+    ``entry.runtime_data.coordinator`` / ``coordinator.client`` instead of
+    ``hass.data[DOMAIN][entry_id]``. Pass ``coordinator=`` to wire that up;
+    pass ``client=`` to attach a client to the coordinator. With both
+    omitted the entry simulates the mid-setup case where ``runtime_data``
+    hasn't been populated yet (the diagnostics ``getattr`` fallback path).
+    """
     entry = MagicMock()
     entry.entry_id = "test-entry-id"
     entry.data = data if data is not None else dict(MOCK_ENTRY_DATA)
@@ -49,6 +61,16 @@ def _entry(data: dict | None = None, options: dict | None = None) -> MagicMock:
     entry.version = 3
     entry.title = "Test Pool Robot"
     entry.state = "loaded"
+    if coordinator is None:
+        # Mid-setup: ``getattr(entry, "runtime_data", None)`` must return None.
+        # MagicMock's __getattr__ would synthesise a child mock otherwise.
+        entry.runtime_data = None
+    else:
+        if client is not None:
+            coordinator.client = client
+        runtime = MagicMock()
+        runtime.coordinator = coordinator
+        entry.runtime_data = runtime
     return entry
 
 
@@ -93,13 +115,13 @@ def _client(
 
 
 def _hass(coordinator: Any = None, client: Any = None, entry_id: str = "test-entry-id") -> MagicMock:
-    """Build a MagicMock hass with ``hass.data[DOMAIN][entry_id]`` populated."""
-    hass = MagicMock()
-    if coordinator is None and client is None:
-        hass.data = {}
-    else:
-        hass.data = {DOMAIN: {entry_id: {"coordinator": coordinator, "client": client}}}
-    return hass
+    """Build a MagicMock hass — post-P3, diagnostics doesn't read ``hass.data``.
+
+    The ``coordinator`` / ``client`` parameters are accepted for back-compat
+    with the existing test call sites but are ignored: the wiring now lives
+    on ``entry.runtime_data.coordinator`` (set by ``_entry(coordinator=...)``).
+    """
+    return MagicMock()
 
 
 def _walk_strings(obj: Any):
@@ -177,8 +199,8 @@ def test_partial_redact_coerces_non_string_to_string() -> None:
 
 async def test_diagnostics_redacts_known_credentials_in_entry_data() -> None:
     """AC #2: username, password, api_key are redacted in entry.data."""
-    hass = _hass(_coordinator(), _client())
-    entry = _entry()
+    hass = _hass()
+    entry = _entry(coordinator=_coordinator(), client=_client())
 
     payload = await async_get_config_entry_diagnostics(hass, entry)
 
@@ -198,8 +220,8 @@ async def test_diagnostics_includes_runtime_state() -> None:
         last_update_success=True,
         update_interval_seconds=3.0,
     )
-    hass = _hass(coordinator, _client())
-    entry = _entry()
+    hass = _hass()
+    entry = _entry(coordinator=coordinator, client=_client())
 
     payload = await async_get_config_entry_diagnostics(hass, entry)
 
@@ -213,8 +235,8 @@ async def test_diagnostics_includes_runtime_state() -> None:
 async def test_diagnostics_serial_is_partially_redacted() -> None:
     """AC #2: serial appears in first-3-***-last-3 form, not in full."""
     client = _client(serial="R23X12345678")
-    hass = _hass(_coordinator(), client)
-    entry = _entry()
+    hass = _hass()
+    entry = _entry(coordinator=_coordinator(), client=client)
 
     payload = await async_get_config_entry_diagnostics(hass, entry)
 
@@ -230,8 +252,8 @@ async def test_diagnostics_token_expires_at_serialised_as_iso() -> None:
     """``_token_expires_at`` is an aware-UTC datetime post-H8 — needs JSON-safe shape."""
     expires = dt.datetime(2026, 6, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
     client = _client(token_expires_at=expires)
-    hass = _hass(_coordinator(), client)
-    entry = _entry()
+    hass = _hass()
+    entry = _entry(coordinator=_coordinator(), client=client)
 
     payload = await async_get_config_entry_diagnostics(hass, entry)
 
@@ -241,8 +263,8 @@ async def test_diagnostics_token_expires_at_serialised_as_iso() -> None:
 async def test_diagnostics_token_expires_at_none_is_passed_through() -> None:
     """Pre-auth path: token_expires_at is None; payload must not crash."""
     client = _client(token_expires_at=None)
-    hass = _hass(_coordinator(), client)
-    entry = _entry()
+    hass = _hass()
+    entry = _entry(coordinator=_coordinator(), client=client)
 
     payload = await async_get_config_entry_diagnostics(hass, entry)
 
@@ -276,8 +298,8 @@ async def test_no_token_or_password_key_appears_unredacted() -> None:
             "password": MOCK_PASSWORD,  # ... or this, the redactor must catch it
         },
     )
-    hass = _hass(coordinator, _client())
-    entry = _entry(data=entry_data)
+    hass = _hass()
+    entry = _entry(data=entry_data, coordinator=coordinator, client=_client())
 
     payload = await async_get_config_entry_diagnostics(hass, entry)
 
@@ -294,8 +316,8 @@ async def test_no_token_or_password_key_appears_unredacted() -> None:
 
 async def test_no_raw_password_substring_anywhere_in_payload() -> None:
     """Defence-in-depth: the raw password literal must not appear anywhere."""
-    hass = _hass(_coordinator(), _client())
-    entry = _entry()
+    hass = _hass()
+    entry = _entry(coordinator=_coordinator(), client=_client())
 
     payload = await async_get_config_entry_diagnostics(hass, entry)
 
@@ -311,13 +333,13 @@ async def test_no_raw_password_substring_anywhere_in_payload() -> None:
 
 
 async def test_diagnostics_without_coordinator_or_client_returns_entry_only() -> None:
-    """If the integration is mid-setup, ``hass.data[DOMAIN][entry_id]`` may be absent.
+    """If the integration is mid-setup, ``entry.runtime_data`` may be absent.
 
     A diagnostic in that state should still surface entry.data (redacted) so
     users with "stuck loading" reports can attach something useful.
     """
-    hass = _hass(coordinator=None, client=None)  # hass.data = {}
-    entry = _entry()
+    hass = _hass()
+    entry = _entry()  # no coordinator/client → entry.runtime_data is None
 
     payload = await async_get_config_entry_diagnostics(hass, entry)
 
@@ -355,8 +377,8 @@ def test_to_redact_includes_known_credential_field_names() -> None:
 
 async def test_async_get_config_entry_diagnostics_is_awaitable() -> None:
     """Verify the function signature matches HA's expected async hook shape."""
-    hass = _hass(_coordinator(), _client())
-    entry = _entry()
+    hass = _hass()
+    entry = _entry(coordinator=_coordinator(), client=_client())
 
     result = async_get_config_entry_diagnostics(hass, entry)
     # Must return a coroutine that we can await.

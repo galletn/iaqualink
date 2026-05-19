@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .coordinator import AqualinkDataUpdateCoordinator
 from .const import DOMAIN
 from .device import build_device_info
+from .types import IaqualinkConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 ROBOT_FEATURES = {
@@ -62,11 +63,10 @@ ROBOT_FEATURES = {
 PLATFORM = "vacuum"
 
 
-async def async_setup_entry(hass, entry, async_add_entities):
+async def async_setup_entry(hass, entry: IaqualinkConfigEntry, async_add_entities):
     """Set up the vacuum platform."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data["coordinator"]
-    client = data["client"]
+    coordinator = entry.runtime_data.coordinator
+    client = coordinator.client
 
     # Use the device serial number as part of the unique ID
     serial_number = entry.data.get("serial_number", client.robot_id)

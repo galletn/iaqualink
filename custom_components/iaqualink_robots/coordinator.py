@@ -1412,145 +1412,27 @@ class AqualinkClient:
         return self._model or "Unknown"
 
     async def _update_i2d_robot(self):
-        """Update status for i2d_robot type."""
-        request = {
+        """Update status for i2d_robot type — HTTP fetch + protocol parse.
+
+        R25-i2d (R27 fold): the 138-line god-function body now lives as
+        ``I2DProtocol.parse_status`` + the pure ``parse_i2d_payload``
+        helper. This method handles the HTTP transport (which can't move
+        to the protocol because the URL helper depends on the client's
+        serial); the protocol owns the request shape, the response
+        decode, and the per-family side-effects.
+        """
+        i2d = get_protocol("i2d_robot")
+        status_request = {
             "command": "/command",
             "params": "request=OA11",
-            "user_id": self._id
+            "user_id": self._id,
         }
-        url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
-        data = await asyncio.wait_for(self.post_command_i2d(url, request), timeout=30)
+        data = await asyncio.wait_for(
+            self.post_command_i2d(i2d.i2d_url(self), status_request), timeout=30
+        )
 
-        result = {
-            "serial_number": str(self._serial),
-            "device_type": str(self._device_type),
-            "status": "offline"
-        }
-
-        try:
-            if data.get("command", {}).get("request") == "OA11":
-                result["status"] = "connected"
-                debug = data.get("command", {}).get("response", "")
-                result["debug"] = str(debug) if self._debug_mode else ""
-
-                # Clean up response string and convert to bytes
-                hex_str = debug.replace(" ", "")
-                if len(hex_str) != 36:  # 18 bytes * 2 characters per byte
-                    raise ValueError(f"Expected 36 hex characters; got {len(hex_str)} characters.")
-
-                try:
-                    data_val = bytes.fromhex(hex_str)
-                except ValueError as e:
-                    raise ValueError(f"Invalid hex string: {e}")
-
-                # Lookup tables for status codes
-                state_map = {
-                    0x01: "Idle / Docked",
-                    0x02: "Cleaning just started",
-                    0x03: "Finished",
-                    0x04: "Actively cleaning",
-                    0x0C: "Paused",
-                    0x0D: "Error state D",
-                    0x0E: "Error state E"
-                }
-
-                error_map = {
-                    0x00: "no_error",
-                    0x01: "pump_short_circuit",
-                    0x02: "right_drive_motor_short_circuit",
-                    0x03: "left_drive_motor_short_circuit",
-                    0x04: "pump_motor_overconsumption",
-                    0x05: "right_drive_motor_overconsumption",
-                    0x06: "left_drive_motor_overconsumption",
-                    0x07: "floats_on_surface",
-                    0x08: "running_out_of_water",
-                    0x0A: "communication_error"
-                }
-
-                mode_map = {
-                    0x00: "Quick clean floor only (standard)",
-                    0x03: "Deep clean floor + walls (high power)",
-                    0x04: "Waterline only (standard)",
-                    0x08: "Quick – floor only (standard)",
-                    0x09: "Custom – floor only (high power)",
-                    0x0A: "Custom – floor + walls (standard)",
-                    0x0B: "Custom – floor + walls (high power)",
-                    0x0C: "Waterline only (standard)",
-                    0x0D: "Custom – waterline (high power)",
-                    0x0E: "Custom – waterline (standard)"
-                }
-
-                # Parse fields
-                state_code = data_val[2]
-                error_code = data_val[3]
-                mode_byte = data_val[4]
-                # Extract mode code (lower nibble) and canister status (higher nibble)
-                mode_code = mode_byte & 0x0F  # Get lower 4 bits for mode
-                canister_full = (mode_byte & 0xF0) > 0  # Any non-zero value in upper nibble means canister is full
-                time_remaining = data_val[5]
-                uptime_min = int.from_bytes(data_val[6:9], byteorder='little')
-                total_hours = int.from_bytes(data_val[9:12], byteorder='little')
-                hardware_id = data_val[12:15].hex()
-                firmware_id = data_val[15:18].hex()
-
-                # Update result dictionary with parsed values (convert all values to strings)
-                result["header"] = data_val[:2].hex()
-                result["state_code"] = str(state_code)
-                result["state"] = state_map.get(state_code, f"Unknown (0x{state_code:02X})")
-                result["error_code"] = str(error_code)
-                result["error"] = error_map.get(error_code, f"Unknown (0x{error_code:02X})")
-                result["mode_code"] = str(mode_code)
-                result["cycle"] = mode_map.get(mode_code, f"Unknown (0x{mode_code:02X})")
-                result["mode"] = mode_map.get(mode_code, f"Unknown (0x{mode_code:02X})")
-                result["canister"] = "100" if canister_full else "0"  # 100% if full, 0% if not full
-                result["time_remaining"] = str(time_remaining)
-                result["uptime_minutes"] = str(uptime_min)
-                result["total_hours"] = str(total_hours)
-                result["hardware_id"] = str(hardware_id)
-                result["firmware_id"] = str(firmware_id)
-
-                # Set fan speed based on mode code, regardless of activity state (using translation keys)
-                if mode_code == 0x03:  # Deep clean mode
-                    self._fan_speed = 3
-                    result["fan_speed"] = "floor_and_walls"
-                elif mode_code == 0x00:  # Quick clean floor only mode
-                    self._fan_speed = 1
-                    result["fan_speed"] = "floor_only"
-                elif mode_code == 0x04:  # Waterline only
-                    self._fan_speed = 2
-                    result["fan_speed"] = "walls_only"
-
-                # Update activity state based on state code
-                if state_code == 0x04 or state_code == 0x02:  # Actively cleaning or Just started cleaning
-                    self._activity = VacuumActivity.CLEANING
-                    result["activity"] = "cleaning"
-                elif error_code != 0x00:
-                    self._activity = VacuumActivity.ERROR
-                    result["activity"] = "error"
-                    result["error_state"] = error_map.get(error_code, f"unknown_{error_code:02X}")
-                else:
-                    self._activity = VacuumActivity.IDLE
-                    result["activity"] = "idle"
-                    result["error_state"] = "no_error"
-
-                # Calculate estimated end time if cleaning. H8: emit aware-UTC
-                # datetime objects (not isoformat strings) so the sensor with
-                # device_class=TIMESTAMP renders correctly in HA's local timezone.
-                if time_remaining > 0 and self._activity == VacuumActivity.CLEANING:
-                    estimated_end_time = self.add_minutes_to_datetime(
-                        dt_util.utcnow(), time_remaining)
-                    result["estimated_end_time"] = estimated_end_time
-                    result["time_remaining_human"] = self._format_time_human(
-                        time_remaining // 60, time_remaining % 60, 0)
-
-        except Exception as e:
-            if self._debug_mode:
-                _LOGGER.error(f"Error updating i2d robot status: {e}")
-            if isinstance(data, dict) and data.get("status") == "500":
-                result["status"] = "offline"
-            result["debug"] = str(data) if self._debug_mode else ""
-            result["error_state"] = "update_failed"
-
+        result = {}
+        i2d.parse_status(self, data, result)
         return result
 
     async def _update_other_robots(self):
@@ -2177,6 +2059,8 @@ class AqualinkClient:
     async def start_cleaning(self):
         """Start the vacuum cleaning."""
         if self._device_type == "i2d_robot":
+            # R25-i2d: i2d uses HTTP POST not WS. The protocol owns the
+            # HTTP body shape; the URL helper lives on I2DProtocol.
             # Record the start time when starting cleaning for i2d robots.
             # H8: aware-UTC datetime stored directly (no .isoformat()).
             now = dt_util.utcnow()
@@ -2184,13 +2068,11 @@ class AqualinkClient:
                 "cycle_start_time": now,
                 "activity": "cleaning"
             }
-            request = {
-                "command": "/command",
-                "params": "request=0A1240&timeout=800",
-                "user_id": self._id
-            }
-            url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
-            await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
+            i2d = get_protocol("i2d_robot")
+            await asyncio.wait_for(
+                self.post_command_i2d(i2d.i2d_url(self), i2d.start_payload(self)),
+                timeout=800,
+            )
             return result  # Return the time values to be used in the coordinator's update
         else:
             # R23: envelope literals collapsed to `_build_state_request` calls.
@@ -2256,13 +2138,12 @@ class AqualinkClient:
         """Stop the vacuum cleaning."""
         request = None
         if self._device_type == "i2d_robot":
-            i2d_request = {
-                "command": "/command",
-                "params": "request=0A1210&timeout=800",
-                "user_id": self._id
-            }
-            url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
-            await asyncio.wait_for(self.post_command_i2d(url, i2d_request), timeout=800)
+            # R25-i2d: stop_payload + i2d_url helper on the protocol.
+            i2d = get_protocol("i2d_robot")
+            await asyncio.wait_for(
+                self.post_command_i2d(i2d.i2d_url(self), i2d.stop_payload(self)),
+                timeout=800,
+            )
         else:
             # R23: envelope literals collapsed to `_build_state_request` calls.
             # R25-vr / R25-vortrax: both route through their protocol.
@@ -2336,13 +2217,14 @@ class AqualinkClient:
     async def return_to_base(self):
         """Set the vacuum cleaner to return to the dock."""
         if self._device_type == "i2d_robot":
-            request = {
-                "command": "/command",
-                "params": "request=0A1701&timeout=800",
-                "user_id": self._id
-            }
-            url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
-            await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
+            # R25-i2d: return_to_base_payload + i2d_url helper.
+            i2d = get_protocol("i2d_robot")
+            await asyncio.wait_for(
+                self.post_command_i2d(
+                    i2d.i2d_url(self), i2d.return_to_base_payload(self)
+                ),
+                timeout=800,
+            )
         elif self._device_type in ("vr", "vortrax", "cyclobat"):
             # R25 series: all 3 families route through their protocol. The
             # cyclobat anomaly (flat ``setCleanerState`` + ``state:3``
@@ -2362,39 +2244,27 @@ class AqualinkClient:
             await self._safe_post_command_refresh()
 
     def _extract_fan_speed_from_response(self, response_data, requested_fan_speed):
-        """Extract current fan speed from websocket response if available."""
+        """Extract current fan speed from a WS response, via the device's
+        protocol.
+
+        R25 series: all 4 WS families (vr / vortrax / cyclobat / cyclonext)
+        own their decode in ``<Family>Protocol.extract_fan_speed_from_response``.
+        i2d's HTTP responses don't carry a confirmed-mode field; its
+        protocol returns ``None`` for this method.
+        """
         if not response_data:
             return None
 
         try:
-            payload = response_data.get("payload", {})
-
-            # R25-vr / R25-vortrax: both route through their protocol.
-            # Cyclobat / cyclonext stay inline until their R25 story lands.
-            if self._device_type == "vr":
-                return get_protocol("vr").extract_fan_speed_from_response(
-                    response_data, requested_fan_speed
-                )
-
-            if self._device_type == "vortrax":
-                return get_protocol("vortrax").extract_fan_speed_from_response(
-                    response_data, requested_fan_speed
-                )
-
-            if self._device_type == "cyclobat":
-                return get_protocol("cyclobat").extract_fan_speed_from_response(
-                    response_data, requested_fan_speed
-                )
-
-            if self._device_type == "cyclonext":
-                return get_protocol("cyclonext").extract_fan_speed_from_response(
-                    response_data, requested_fan_speed
-                )
-
+            protocol = get_protocol(self._device_type)
+            if protocol is None:
+                return None
+            return protocol.extract_fan_speed_from_response(
+                response_data, requested_fan_speed
+            )
         except Exception as e:
             _LOGGER.debug(f"Error extracting fan speed from response: {e}")
-
-        return None
+            return None
 
     async def set_fan_speed(self, fan_speed, fan_speed_list):
         """Set fan speed (cleaning mode) for the vacuum cleaner."""
@@ -2407,24 +2277,15 @@ class AqualinkClient:
             return await self._set_other_fan_speed(fan_speed)
 
     async def _set_i2d_fan_speed(self, fan_speed):
-        """Set fan speed for i2d robot."""
-        cycle_speed_map = {
-            "walls_only": "0A1284",
-            "floor_only": "0A1280",
-            "floor_and_walls": "0A1283"
-        }
-
-        _cycle_speed = cycle_speed_map.get(fan_speed)
-        if not _cycle_speed:
+        """Set fan speed for i2d robot — delegates to I2DProtocol (R25-i2d)."""
+        i2d = get_protocol("i2d_robot")
+        request = i2d.set_fan_speed_payload(self, fan_speed)
+        if request is None:
             return None
 
-        request = {
-            "command": "/command",
-            "params": f"request={_cycle_speed}&timeout=800",
-            "user_id": self._id
-        }
-        url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
-        response = await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
+        response = await asyncio.wait_for(
+            self.post_command_i2d(i2d.i2d_url(self), request), timeout=800
+        )
 
         # For i2d robots, extract success/failure from response
         if response and response.get("command", {}).get("response"):

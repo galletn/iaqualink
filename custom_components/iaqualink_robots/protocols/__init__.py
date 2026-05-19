@@ -16,23 +16,27 @@ from __future__ import annotations
 from .base import RobotProtocol
 from .cyclobat import CycloBatProtocol
 from .cyclonext import CycloNextProtocol
+from .i2d import I2DProtocol
 from .vortrax import VortraxProtocol
 from .vr import VRProtocol
 
-#: Dispatch table — ``device_type`` → protocol instance. Extended as each
-#: R25 story lands (R25-i2d is pending).
+#: Dispatch table — ``device_type`` → protocol instance. All 5 R25
+#: families now extracted; ``get_protocol()`` returns a protocol for
+#: every device type the integration supports.
 _DEVICE_PROTOCOLS: dict[str, RobotProtocol] = {
     "vr": VRProtocol(),
     "vortrax": VortraxProtocol(),
     "cyclobat": CycloBatProtocol(),
     "cyclonext": CycloNextProtocol(),
+    "i2d_robot": I2DProtocol(),
 }
 
 
 def get_protocol(device_type: str) -> RobotProtocol | None:
-    """Return the protocol for ``device_type``, or ``None`` if it hasn't
-    been extracted yet. Callers must fall through to the legacy inline
-    branch when ``None`` is returned (until all five families ship).
+    """Return the protocol for ``device_type``, or ``None`` for an
+    unknown family. Post-R25-i2d every supported family has an entry;
+    the ``None`` return path exists for defence-in-depth against a
+    cloud bug surfacing an unrecognised ``device_type`` string.
     """
     return _DEVICE_PROTOCOLS.get(device_type)
 
@@ -40,6 +44,7 @@ def get_protocol(device_type: str) -> RobotProtocol | None:
 __all__ = [
     "CycloBatProtocol",
     "CycloNextProtocol",
+    "I2DProtocol",
     "RobotProtocol",
     "VortraxProtocol",
     "VRProtocol",

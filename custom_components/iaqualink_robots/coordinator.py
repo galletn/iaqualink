@@ -396,23 +396,42 @@ class AqualinkClient:
     async def _cloud_session(self):
         """Yield an aiohttp session for iAqualink cloud REST calls (story L19).
 
-        When ``self._hass`` is set, yields HA's shared, pooled session via
-        ``async_get_clientsession`` so the 4 cloud sites (login, devices,
-        features, i2d command) reuse one connection pool across calls and
-        avoid a fresh TLS handshake per request. HA owns lifecycle, so the
-        session is NOT closed on context exit.
+        When ``self._hass`` is set, constructs a per-call ``aiohttp.ClientSession``
+        that **reuses HA's pooled connector** (so the integration keeps the
+        connection-pooling win — no fresh TLS handshake per request) but with
+        its own private ``aiohttp.DummyCookieJar``. ``connector_owner=False``
+        means closing the wrapper does NOT close the connector — HA still
+        owns its lifecycle. This is cheap: ``aiohttp.ClientSession``
+        construction is pure Python (no I/O); the TCP/TLS work is in the
+        connector, which we share.
+
+        **Why the private cookie jar (L19 review F1).** HA's
+        ``async_get_clientsession(hass)`` returns a process-wide session
+        with a shared default cookie jar. iAqualink's Cognito- and ALB-
+        fronted endpoints set session-affinity cookies (``AWSALB``,
+        ``AWSALBCORS``) on responses. Without isolation, those persist
+        for the HA-process lifetime and auto-attach to any other
+        integration's requests within a matching ``Domain``/``Path``
+        scope — the symmetric risk to the header leak the story's
+        original AC#1 defended via headers-on-request. A
+        ``DummyCookieJar`` silently drops every cookie set on every
+        cloud response, defending the leak without affecting auth (we
+        don't rely on cookies — every request carries its own
+        Authorization header).
 
         When ``self._hass`` is None (config-flow discovery via the
         ``discover_devices`` classmethod, or unit tests that build a bare
         ``AqualinkClient``), falls back to a one-shot ``aiohttp.ClientSession``
         that closes on exit. Pooling has no value for a single-shot
-        discovery probe, and tests that monkeypatch ``aiohttp.ClientSession``
-        keep working unchanged.
+        discovery probe.
 
         Headers are NOT passed to the session here — callers MUST attach
         them per-request (``session.get(url, headers=...)``). The shared
-        HA session is reused across many integrations, so setting default
-        headers on it would leak iAqualink auth tokens to other consumers.
+        HA connector is shared across many integrations, so setting default
+        headers on the wrapper would still leak auth via the request path
+        if the wrapper were ever reused — keep headers per-request for
+        the same defence-in-depth reasoning the original L19 patch used.
+
         Note: the websocket session at ``_ensure_websocket_connection`` is
         intentionally owned by this client (not shared) — it holds the live
         WS connection and is closed via ``_close_websocket``. The Vortrax
@@ -420,7 +439,13 @@ class AqualinkClient:
         isolated (third-party site — see comment there).
         """
         if self._hass is not None:
-            yield async_get_clientsession(self._hass)
+            shared = async_get_clientsession(self._hass)
+            async with aiohttp.ClientSession(
+                connector=shared.connector,
+                connector_owner=False,
+                cookie_jar=aiohttp.DummyCookieJar(),
+            ) as session:
+                yield session
         else:
             async with aiohttp.ClientSession() as session:
                 yield session

@@ -1,9 +1,19 @@
 """Constants used by IaqualinkRobots."""
-import json
 from datetime import timedelta
-from pathlib import Path
 from typing import Final
 from homeassistant.const import Platform
+
+# L22: ``DOMAIN`` is hardcoded as a string literal — not read from
+# ``manifest.json`` at import time — so the integration does no synchronous
+# file I/O on module load. HA's blocking-call detector in dev mode flagged
+# the prior read because ``async_setup_entry``'s first import of any
+# ``custom_components.*`` module runs on the event loop thread on first
+# load. The value here MUST stay in sync with the ``domain`` field in
+# ``manifest.json``; hassfest catches drift (it errors when the directory
+# name, ``domain`` in manifest, and ``DOMAIN`` constant disagree) and
+# ``tests/test_const.py::test_domain_matches_manifest`` provides a faster
+# unit-level guard so CI fails before hassfest gets a chance to.
+DOMAIN: Final = "iaqualink_robots"
 
 PLATFORMS: Final = [Platform.VACUUM, Platform.SENSOR, Platform.BUTTON]
 
@@ -51,30 +61,3 @@ LONG_OUTAGE_THRESHOLD_SECONDS: Final = 30 * 60
 # (which would also slow remote-control button responsiveness).
 CONF_INCLUDE_SECONDS_REMAINING: Final = "include_seconds_remaining"
 DEFAULT_INCLUDE_SECONDS_REMAINING: Final = True
-
-# Load manifest data efficiently
-
-
-def _load_manifest_data():
-    """Load manifest data once and cache it."""
-    manifestfile = Path(__file__).parent / "manifest.json"
-    with open(manifestfile, encoding="utf-8") as json_file:
-        return json.load(json_file)
-
-
-_MANIFEST_DATA = _load_manifest_data()
-
-DOMAIN: Final = _MANIFEST_DATA.get("domain")
-NAME: Final = _MANIFEST_DATA.get("name")
-VERSION: Final = _MANIFEST_DATA.get("version")
-ISSUEURL: Final = _MANIFEST_DATA.get("issue_tracker")
-
-STARTUP: Final = f"""
--------------------------------------------------------------------
-{NAME}
-Version: {VERSION}
-This is a custom component
-If you have any issues with this you need to open an issue here:
-{ISSUEURL}
--------------------------------------------------------------------
-"""

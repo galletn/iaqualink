@@ -2433,6 +2433,57 @@ class AqualinkClient:
 
         return response_data
 
+    def _build_state_request(
+        self,
+        action: str,
+        desired: dict,
+        *,
+        namespace: str | None = None,
+        robot_key: str = "robot",
+    ) -> dict:
+        """Build a StateController websocket request envelope (story R23).
+
+        Collapses 21 near-identical envelope literals across the 11 command
+        methods (start / stop / pause / return_to_base / clear_desired_state
+        / set_fan_speed / enter+exit remote control / remote steering /
+        stepper add+reduce) into one canonical shape.
+
+        AC#4 ("zero behavior change") is interpreted as **dict-content
+        equal** — recursive value-equality, ignoring JSON key order.
+        Confirmed with the user before implementation: the iAqualink
+        cloud is AWS IoT-shaped and parses JSON into dicts, so transmit
+        key order is unobservable. Every field present in the pre-R23
+        envelopes is still present with the same value; nothing was
+        dropped. Per-device-type drift is preserved by the caller passing
+        the appropriate ``desired`` / ``namespace`` / ``robot_key`` —
+        cyclonext uses ``robot.1`` instead of ``robot`` and cyclobat
+        nests under ``main.ctrl`` / ``main.mode``.
+
+        Args:
+            action: Cloud action verb — ``"setCleanerState"``,
+                ``"setCleaningMode"``, or ``"setRemoteSteeringControl"``.
+            desired: The dict to nest under
+                ``payload.state.desired.equipment.<robot_key>``. Embedded
+                verbatim — the helper does not transform it.
+            namespace: Override the top-level ``namespace`` field.
+                Defaults to ``self._device_type``.
+            robot_key: Equipment dict key. ``"robot"`` (default) for
+                vr / vortrax / cyclobat; ``"robot.1"`` for cyclonext.
+        """
+        ns = namespace if namespace is not None else self._device_type
+        client_token = f"{self._id}|{self._auth_token}|{self._app_client_id}"
+        return {
+            "action": action,
+            "version": 1,
+            "namespace": ns,
+            "payload": {
+                "state": {"desired": {"equipment": {robot_key: desired}}},
+                "clientToken": client_token,
+            },
+            "service": "StateController",
+            "target": self._serial,
+        }
+
     async def start_cleaning(self):
         """Start the vacuum cleaning."""
         if self._device_type == "i2d_robot":
@@ -2452,54 +2503,25 @@ class AqualinkClient:
             await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
             return result  # Return the time values to be used in the coordinator's update
         else:
-            clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-
+            # R23: envelope literals collapsed to `_build_state_request` calls.
+            # Per-device-type drift preserved (cyclonext uses `robot.1`/`mode`;
+            # cyclobat nests under `main.ctrl`).
             request = None
             if self._device_type == "vr" or self._device_type == "vortrax":
-                # Use exact format from MITM proxy capture
-                request = {
-                    "action": "setCleanerState",
-                    "version": 1,
-                    "namespace": self._device_type,
-                    "payload": {
-                        "state": {
-                            "desired": {
-                                "equipment": {
-                                    "robot": {
-                                        "state": 1
-                                    }
-                                }
-                            }
-                        },
-                        "clientToken": clientToken
-                    },
-                    "service": "StateController",
-                    "target": self._serial
-                }
+                request = self._build_state_request("setCleanerState", {"state": 1})
             elif self._device_type == "cyclobat":
-                request = {
-                    "action": "setCleaningMode",
-                    "version": 1,
-                    "namespace": "cyclobat",
-                    "payload": {
-                        "state": {"desired": {"equipment": {"robot": {"main": {"ctrl": 1}}}}},
-                        "clientToken": clientToken
-                    },
-                    "service": "StateController",
-                    "target": self._serial
-                }
+                request = self._build_state_request(
+                    "setCleaningMode",
+                    {"main": {"ctrl": 1}},
+                    namespace="cyclobat",
+                )
             elif self._device_type == "cyclonext":
-                request = {
-                    "action": "setCleanerState",
-                    "namespace": "cyclonext",
-                    "payload": {
-                        "clientToken": clientToken,
-                        "state": {"desired": {"equipment": {"robot.1": {"mode": 1}}}}
-                    },
-                    "service": "StateController",
-                    "target": self._serial,
-                    "version": 1
-                }
+                request = self._build_state_request(
+                    "setCleanerState",
+                    {"mode": 1},
+                    namespace="cyclonext",
+                    robot_key="robot.1",
+                )
 
             if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2539,27 +2561,8 @@ class AqualinkClient:
         if self._device_type != "vr":
             return
 
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-
-        request = {
-            "action": "setCleanerState",
-            "version": 1,
-            "namespace": self._device_type,
-            "payload": {
-                "state": {
-                    "desired": {
-                        "equipment": {
-                            "robot": {
-                                "state": 0
-                            }
-                        }
-                    }
-                },
-                "clientToken": clientToken
-            },
-            "service": "StateController",
-            "target": self._serial
-        }
+        # R23: envelope literal collapsed to `_build_state_request`.
+        request = self._build_state_request("setCleanerState", {"state": 0})
 
         try:
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2579,53 +2582,22 @@ class AqualinkClient:
             url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
             await asyncio.wait_for(self.post_command_i2d(url, i2d_request), timeout=800)
         else:
-            clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-
+            # R23: envelope literals collapsed to `_build_state_request` calls.
             if self._device_type == "vr" or self._device_type == "vortrax":
-                # Use exact format from MITM proxy capture
-                request = {
-                    "action": "setCleanerState",
-                    "version": 1,
-                    "namespace": self._device_type,
-                    "payload": {
-                        "state": {
-                            "desired": {
-                                "equipment": {
-                                    "robot": {
-                                        "state": 0
-                                    }
-                                }
-                            }
-                        },
-                        "clientToken": clientToken
-                    },
-                    "service": "StateController",
-                    "target": self._serial
-                }
+                request = self._build_state_request("setCleanerState", {"state": 0})
             elif self._device_type == "cyclobat":
-                request = {
-                    "action": "setCleaningMode",
-                    "version": 1,
-                    "namespace": "cyclobat",
-                    "payload": {
-                        "state": {"desired": {"equipment": {"robot": {"main": {"ctrl": 0}}}}},
-                        "clientToken": clientToken
-                    },
-                    "service": "StateController",
-                    "target": self._serial
-                }
+                request = self._build_state_request(
+                    "setCleaningMode",
+                    {"main": {"ctrl": 0}},
+                    namespace="cyclobat",
+                )
             elif self._device_type == "cyclonext":
-                request = {
-                    "action": "setCleanerState",
-                    "namespace": "cyclonext",
-                    "payload": {
-                        "clientToken": clientToken,
-                        "state": {"desired": {"equipment": {"robot.1": {"mode": 0}}}}
-                    },
-                    "service": "StateController",
-                    "target": self._serial,
-                    "version": 1
-                }
+                request = self._build_state_request(
+                    "setCleanerState",
+                    {"mode": 0},
+                    namespace="cyclonext",
+                    robot_key="robot.1",
+                )
 
         # Create result with reset time values always, regardless of robot type.
         # H8 review follow-up: emit None for the two TIMESTAMP-classed sensors
@@ -2667,56 +2639,23 @@ class AqualinkClient:
             # i2d robots might not support pause - use stop instead
             return await self.stop_cleaning()
         else:
-            clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-
+            # R23: envelope literals collapsed to `_build_state_request` calls.
             request = None
             if self._device_type == "vr" or self._device_type == "vortrax":
-                # Use exact format from MITM proxy capture - state 2 = pause
-                request = {
-                    "action": "setCleanerState",
-                    "version": 1,
-                    "namespace": self._device_type,
-                    "payload": {
-                        "state": {
-                            "desired": {
-                                "equipment": {
-                                    "robot": {
-                                        "state": 2
-                                    }
-                                }
-                            }
-                        },
-                        "clientToken": clientToken
-                    },
-                    "service": "StateController",
-                    "target": self._serial
-                }
+                request = self._build_state_request("setCleanerState", {"state": 2})
             elif self._device_type == "cyclobat":
-                # Cyclobat pause might be different - using same format for now
-                request = {
-                    "action": "setCleaningMode",
-                    "version": 1,
-                    "namespace": "cyclobat",
-                    "payload": {
-                        "state": {"desired": {"equipment": {"robot": {"main": {"ctrl": 2}}}}},
-                        "clientToken": clientToken
-                    },
-                    "service": "StateController",
-                    "target": self._serial
-                }
+                request = self._build_state_request(
+                    "setCleaningMode",
+                    {"main": {"ctrl": 2}},
+                    namespace="cyclobat",
+                )
             elif self._device_type == "cyclonext":
-                # Cyclonext pause might be different
-                request = {
-                    "action": "setCleanerState",
-                    "namespace": "cyclonext",
-                    "payload": {
-                        "clientToken": clientToken,
-                        "state": {"desired": {"equipment": {"robot.1": {"mode": 2}}}}
-                    },
-                    "service": "StateController",
-                    "target": self._serial,
-                    "version": 1
-                }
+                request = self._build_state_request(
+                    "setCleanerState",
+                    {"mode": 2},
+                    namespace="cyclonext",
+                    robot_key="robot.1",
+                )
 
             if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2739,18 +2678,11 @@ class AqualinkClient:
             url = f"https://r-api.iaqualink.net/v2/devices/{self._serial}/control.json"
             await asyncio.wait_for(self.post_command_i2d(url, request), timeout=800)
         elif self._device_type in ["vr", "vortrax", "cyclobat"]:
-            clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-            request = {
-                "action": "setCleanerState",
-                "namespace": self._device_type,
-                "payload": {
-                    "clientToken": clientToken,
-                    "state": {"desired": {"equipment": {"robot": {"state": 3}}}}
-                },
-                "service": "StateController",
-                "target": self._serial,
-                "version": 1
-            }
+            # R23: envelope literal collapsed. Note: cyclobat's return_to_base
+            # uses `robot` + `state` field directly (unlike its other commands
+            # which nest under `main.ctrl`). Preserved as-is — the cloud accepts
+            # it today and changing it would be a behavior change.
+            request = self._build_state_request("setCleanerState", {"state": 3})
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
             # C4-cmd: one awaited refresh (see start_cleaning for rationale).
@@ -2840,8 +2772,10 @@ class AqualinkClient:
 
     async def _set_other_fan_speed(self, fan_speed):
         """Set fan speed for non-i2d robots."""
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-
+        # R23: envelope literals collapsed to `_build_state_request` calls.
+        # Per-device fields preserved exactly: vr/vortrax use `prCyc` (int),
+        # cyclobat uses `main.mode` (str), cyclonext uses `cycle` under
+        # `robot.1` (str).
         request = None
         if self._device_type == "vr" or self._device_type == "vortrax":
             cycle_speed_map = {
@@ -2852,26 +2786,10 @@ class AqualinkClient:
             }
             _cycle_speed = cycle_speed_map.get(fan_speed)
             if _cycle_speed:
-                # Use exact format from MITM proxy capture matching setCleaningMode action
-                request = {
-                    "action": "setCleaningMode",
-                    "version": 1,
-                    "namespace": self._device_type,
-                    "payload": {
-                        "state": {
-                            "desired": {
-                                "equipment": {
-                                    "robot": {
-                                        "prCyc": int(_cycle_speed)
-                                    }
-                                }
-                            }
-                        },
-                        "clientToken": clientToken
-                    },
-                    "service": "StateController",
-                    "target": self._serial
-                }
+                request = self._build_state_request(
+                    "setCleaningMode",
+                    {"prCyc": int(_cycle_speed)},
+                )
 
         elif self._device_type == "cyclobat":
             cycle_speed_map = {
@@ -2882,17 +2800,11 @@ class AqualinkClient:
             }
             _cycle_speed = cycle_speed_map.get(fan_speed)
             if _cycle_speed:
-                request = {
-                    "action": "setCleaningMode",
-                    "version": 1,
-                    "namespace": "cyclobat",
-                    "payload": {
-                        "state": {"desired": {"equipment": {"robot": {"main": {"mode": _cycle_speed}}}}},
-                        "clientToken": clientToken
-                    },
-                    "service": "StateController",
-                    "target": self._serial
-                }
+                request = self._build_state_request(
+                    "setCleaningMode",
+                    {"main": {"mode": _cycle_speed}},
+                    namespace="cyclobat",
+                )
 
         elif self._device_type == "cyclonext":
             # The keys here MUST match the snake_case translation keys passed in
@@ -2910,17 +2822,12 @@ class AqualinkClient:
             }
             _cycle_speed = cycle_speed_map.get(fan_speed)
             if _cycle_speed:
-                request = {
-                    "action": "setCleaningMode",
-                    "namespace": "cyclonext",
-                    "payload": {
-                        "clientToken": clientToken,
-                        "state": {"desired": {"equipment": {"robot.1": {"cycle": _cycle_speed}}}}
-                    },
-                    "service": "StateController",
-                    "target": self._serial,
-                    "version": 1
-                }
+                request = self._build_state_request(
+                    "setCleaningMode",
+                    {"cycle": _cycle_speed},
+                    namespace="cyclonext",
+                    robot_key="robot.1",
+                )
 
         if request:
             response_data = await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2949,75 +2856,26 @@ class AqualinkClient:
     async def _enter_remote_control_mode(self):
         """Enter remote control mode by setting robot to pause state (state: 2)."""
         _LOGGER.debug("Entering remote control mode (state: 2)")
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-        request = {
-            "action": "setCleanerState",
-            "version": 1,
-            "namespace": self._device_type,
-            "payload": {
-                "state": {
-                    "desired": {
-                        "equipment": {
-                            "robot": {
-                                "state": 2  # Pause mode enables remote control
-                            }
-                        }
-                    }
-                },
-                "clientToken": clientToken
-            },
-            "service": "StateController",
-            "target": self._serial
-        }
+        # R23: envelope literal collapsed. state=2 enables remote control on vr/vortrax.
+        request = self._build_state_request("setCleanerState", {"state": 2})
         await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
     async def _exit_remote_control_mode(self):
         """Exit remote control mode by setting robot to stopped state (state: 0)."""
         _LOGGER.debug("Exiting remote control mode (state: 0)")
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-        request = {
-            "action": "setCleanerState",
-            "version": 1,
-            "namespace": self._device_type,
-            "payload": {
-                "state": {
-                    "desired": {
-                        "equipment": {
-                            "robot": {
-                                "state": 0  # Stopped state exits remote control
-                            }
-                        }
-                    }
-                },
-                "clientToken": clientToken
-            },
-            "service": "StateController",
-            "target": self._serial
-        }
+        # R23: envelope literal collapsed. state=0 exits remote control.
+        request = self._build_state_request("setCleanerState", {"state": 0})
         await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
     async def _send_remote_command(self, rmt_ctrl_value, command_name="remote"):
         """Send a remote control command with optimized timeout."""
-        clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-        request = {
-            "action": "setRemoteSteeringControl",
-            "version": 1,
-            "namespace": self._device_type,
-            "payload": {
-                "state": {
-                    "desired": {
-                        "equipment": {
-                            "robot": {
-                                "rmt_ctrl": rmt_ctrl_value
-                            }
-                        }
-                    }
-                },
-                "clientToken": clientToken
-            },
-            "service": "StateController",
-            "target": self._serial
-        }
+        # R23: envelope literal collapsed. Note the action is
+        # `setRemoteSteeringControl` (not `setCleanerState`) — the cloud
+        # routes steering commands through a different state-controller verb.
+        request = self._build_state_request(
+            "setRemoteSteeringControl",
+            {"rmt_ctrl": rmt_ctrl_value},
+        )
         _LOGGER.debug(f"Sending {command_name} command (rmt_ctrl: {rmt_ctrl_value})")
         await asyncio.wait_for(self.set_cleaner_state(request), timeout=15)  # Shorter timeout, no artificial delays
 
@@ -3129,8 +2987,6 @@ class AqualinkClient:
                 _LOGGER.debug(f"🔍 Add 15min: Current stepper value = {current_stepper}")
                 _LOGGER.debug(f"Adding 15 minutes: current stepper={current_stepper}")
 
-            clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-
             # Get the new stepper value (current + 15 minutes)
             # Stepper represents total minutes adjustment
             new_stepper = current_stepper + 15
@@ -3138,26 +2994,12 @@ class AqualinkClient:
             if self._debug_mode:
                 _LOGGER.debug(f"🔍 Add 15min: Setting stepper {current_stepper} → {new_stepper}")
 
-            # Use the same format as the working test: setCleaningMode with stepper value
-            request = {
-                "action": "setCleaningMode",
-                "namespace": self._device_type,
-                "payload": {
-                    "state": {
-                        "desired": {
-                            "equipment": {
-                                "robot": {
-                                    "stepper": new_stepper
-                                }
-                            }
-                        }
-                    },
-                    "clientToken": clientToken
-                },
-                "service": "StateController",
-                "target": self._serial,
-                "version": 1
-            }
+            # R23: envelope literals collapsed. The set/clear pair matches
+            # the cloud's expected websocket-traffic pattern: first set the
+            # stepper value, then clear it (None) so the desired state
+            # doesn't persist as a sticky target after the cloud has
+            # applied the increment.
+            request = self._build_state_request("setCleaningMode", {"stepper": new_stepper})
 
             if self._debug_mode:
                 _LOGGER.debug(f"Sending add 15 minutes command: stepper {current_stepper} → {new_stepper}")
@@ -3166,25 +3008,7 @@ class AqualinkClient:
                 _LOGGER.debug(f"Add 15 minutes response: {result}")
 
             # Also send a null command to clear the desired state (as seen in websocket traffic)
-            clear_request = {
-                "action": "setCleaningMode",
-                "version": 1,
-                "namespace": self._device_type,
-                "payload": {
-                    "state": {
-                        "desired": {
-                            "equipment": {
-                                "robot": {
-                                    "stepper": None
-                                }
-                            }
-                        }
-                    },
-                    "clientToken": clientToken
-                },
-                "service": "StateController",
-                "target": self._serial
-            }
+            clear_request = self._build_state_request("setCleaningMode", {"stepper": None})
 
             await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=15)
 
@@ -3257,32 +3081,13 @@ class AqualinkClient:
             # Mark timing command time for rate limiting
             self._last_timing_command_time = time.time()
 
-            clientToken = f"{self._id}|{self._auth_token}|{self._app_client_id}"
-
             # Get the new stepper value (current - 15 minutes)
             # Stepper represents total minutes adjustment
             new_stepper = current_stepper - 15
 
-            # Use the same format as the working test: setCleaningMode with stepper value
-            request = {
-                "action": "setCleaningMode",
-                "namespace": self._device_type,
-                "payload": {
-                    "state": {
-                        "desired": {
-                            "equipment": {
-                                "robot": {
-                                    "stepper": new_stepper
-                                }
-                            }
-                        }
-                    },
-                    "clientToken": clientToken
-                },
-                "service": "StateController",
-                "target": self._serial,
-                "version": 1
-            }
+            # R23: envelope literals collapsed (set + clear, see add_fifteen_minutes
+            # for the rationale of the pair).
+            request = self._build_state_request("setCleaningMode", {"stepper": new_stepper})
 
             if self._debug_mode:
                 _LOGGER.debug(f"Sending reduce 15 minutes command: stepper {current_stepper} → {new_stepper}")
@@ -3291,25 +3096,7 @@ class AqualinkClient:
                 _LOGGER.debug(f"Reduce 15 minutes response: {result}")
 
             # Also send a null command to clear the desired state (as seen in websocket traffic)
-            clear_request = {
-                "action": "setCleaningMode",
-                "version": 1,
-                "namespace": self._device_type,
-                "payload": {
-                    "state": {
-                        "desired": {
-                            "equipment": {
-                                "robot": {
-                                    "stepper": None
-                                }
-                            }
-                        }
-                    },
-                    "clientToken": clientToken
-                },
-                "service": "StateController",
-                "target": self._serial
-            }
+            clear_request = self._build_state_request("setCleaningMode", {"stepper": None})
 
             await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=15)
 

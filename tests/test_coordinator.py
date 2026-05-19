@@ -2154,6 +2154,15 @@ async def test_websocket_listener_propagates_config_entry_auth_failed() -> None:
             return None
 
     client._ws_connection = _FakeWS(sent_messages)
+    # Also need _ws_session set so `_ensure_websocket_connection` takes
+    # the healthy-connection early-return path (line 718-721) instead of
+    # tearing down + reconnecting against a real cloud (which would fail
+    # in unit tests and the outer broad-except would log+exit, never
+    # reaching the apply path the test exercises).
+    fake_session = MagicMock()
+    fake_session.closed = False
+    client._ws_session = fake_session
+
     # Seed a baseline so the listener skips the first-push refresh fallback
     # and reaches the apply path where the auth-failure raises.
     client._last_ws_envelope = {

@@ -19,10 +19,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.util import dt as dt_util
 
 from .base import RobotProtocol
+from .common import apply_common_robot_fields
 
 if TYPE_CHECKING:
     from ..coordinator import AqualinkClient
@@ -136,43 +136,10 @@ class VRProtocol(RobotProtocol):
             result["error_state"] = "no_data"
             return
 
-        try:
-            result["temperature"] = robot_data['sensors']['sns_1']['val']
-        except Exception:
-            try:
-                result["temperature"] = robot_data['sensors']['sns_1']['state']
-            except Exception:
-                # Zodiac XA 5095 iQ does not support temp.
-                result["temperature"] = '0'
-
-        try:
-            robot_state = robot_data['state']
-            if robot_state == 1:
-                client._activity = VacuumActivity.CLEANING
-                result["activity"] = "cleaning"
-            elif robot_state == 3:
-                client._activity = VacuumActivity.RETURNING
-                result["activity"] = "returning"
-            else:
-                client._activity = VacuumActivity.IDLE
-                result["activity"] = "idle"
-        except (KeyError, TypeError):
-            result["activity"] = "unknown"
-
-        try:
-            result["canister"] = robot_data['canister'] * 100
-        except (KeyError, TypeError):
-            result["canister"] = 0
-
-        try:
-            result["error_state"] = robot_data['errorState']
-        except (KeyError, TypeError):
-            result["error_state"] = "unknown"
-
-        try:
-            result["total_hours"] = robot_data['totalHours']
-        except (KeyError, TypeError):
-            result["total_hours"] = 0
+        # R25-vortrax (R29 fold): temp / activity / canister / errorState /
+        # totalHours are shared with the Vortrax family — extracted to
+        # ``protocols/common.py::apply_common_robot_fields``.
+        apply_common_robot_fields(client, robot_data, result)
 
         # Stepper information for timing adjustments.
         try:

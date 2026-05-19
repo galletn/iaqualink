@@ -255,6 +255,75 @@ _CASES = [
         (("setCleaningMode", {"stepper": None}), {}),
         _expected("setCleaningMode", "vr", {"robot": {"stepper": None}}),
     ),
+    # --- vortrax device-type permutations of the vr-or-vortrax merged branches ---
+    #
+    # Production routes vortrax alongside vr through the same `if device_type
+    # in {"vr", "vortrax"}:` lines for stop / pause / return_to_base /
+    # set_fan_speed / remote-control state / remote steering / stepper. Both
+    # adversarial reviewers (Blind Hunter + Edge Case Hunter) flagged that
+    # without per-site vortrax fixtures, a future bug that hardcodes
+    # `namespace="vr"` at one of those call sites would slip past every vr
+    # test. These cases drive the helper with `device_type="vortrax"` and
+    # assert the envelope carries `namespace: "vortrax"` — the helper's
+    # default-from-`self._device_type` path is the only behaviour difference
+    # vs the vr cases above, but pinning it here means the regression test
+    # catches the literal-namespace-hardcode bug class. R23 review patch.
+    (
+        "stop_cleaning__vortrax",
+        "vortrax",
+        (("setCleanerState", {"state": 0}), {}),
+        _expected("setCleanerState", "vortrax", {"robot": {"state": 0}}),
+    ),
+    (
+        "pause_cleaning__vortrax",
+        "vortrax",
+        (("setCleanerState", {"state": 2}), {}),
+        _expected("setCleanerState", "vortrax", {"robot": {"state": 2}}),
+    ),
+    (
+        "return_to_base__vortrax",
+        "vortrax",
+        (("setCleanerState", {"state": 3}), {}),
+        _expected("setCleanerState", "vortrax", {"robot": {"state": 3}}),
+    ),
+    (
+        "set_fan_speed__vortrax",
+        "vortrax",
+        (("setCleaningMode", {"prCyc": 1}), {}),
+        _expected("setCleaningMode", "vortrax", {"robot": {"prCyc": 1}}),
+    ),
+    (
+        "enter_remote_control__vortrax",
+        "vortrax",
+        (("setCleanerState", {"state": 2}), {}),
+        _expected("setCleanerState", "vortrax", {"robot": {"state": 2}}),
+    ),
+    (
+        "exit_remote_control__vortrax",
+        "vortrax",
+        (("setCleanerState", {"state": 0}), {}),
+        _expected("setCleanerState", "vortrax", {"robot": {"state": 0}}),
+    ),
+    (
+        "remote_steering__vortrax_forward",
+        "vortrax",
+        (("setRemoteSteeringControl", {"rmt_ctrl": 1}), {}),
+        _expected(
+            "setRemoteSteeringControl", "vortrax", {"robot": {"rmt_ctrl": 1}}
+        ),
+    ),
+    (
+        "stepper_set__vortrax_add",
+        "vortrax",
+        (("setCleaningMode", {"stepper": 45}), {}),
+        _expected("setCleaningMode", "vortrax", {"robot": {"stepper": 45}}),
+    ),
+    (
+        "stepper_clear__vortrax_after_add",
+        "vortrax",
+        (("setCleaningMode", {"stepper": None}), {}),
+        _expected("setCleaningMode", "vortrax", {"robot": {"stepper": None}}),
+    ),
 ]
 
 

@@ -165,40 +165,14 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
                     return cached_value
                 # If no cached value, fall through to try getting current data
 
+            # M11: native_value returns raw cloud keys (e.g. "cleaning",
+            # "floor_only", "connected"). HA's frontend looks up
+            # ``entity.sensor.<key>.state.<value>`` from the locale file via
+            # the ``translation_key`` declared at __init__ and renders the
+            # localized text. Pre-M11 we title-cased the value here, which
+            # bypassed translation_key entirely (locale files were dead
+            # text) AND broke ``is_state(..., 'cleaning')`` for users.
             current_value = self.coordinator.data.get(self._key)
-
-            # Handle value translation for display
-            if self._key == "fan_speed" and current_value:
-                fan_speed_display_map = {
-                    "floor_only": "Floor only",
-                    "wall_only": "Wall only",
-                    "walls_only": "Walls only",
-                    "floor_and_walls": "Floor and walls",
-                    "smart_floor_and_walls": "SMART Floor and walls"
-                }
-                current_value = fan_speed_display_map.get(current_value, current_value)
-
-            # Handle activity translation for display
-            elif self._key == "activity" and current_value:
-                activity_display_map = {
-                    "cleaning": "Cleaning",
-                    "error": "Error",
-                    "idle": "Idle",
-                    "returning": "Returning",
-                    "docking": "Docking",
-                    "paused": "Paused"
-                }
-                current_value = activity_display_map.get(current_value, current_value)
-
-            # Handle status translation for display
-            elif self._key == "status" and current_value:
-                status_display_map = {
-                    "connected": "Connected",
-                    "disconnected": "Disconnected",
-                    "offline": "Offline",
-                    "online": "Online"
-                }
-                current_value = status_display_map.get(current_value, current_value)
 
             # Only update cached value if we have valid current data (not None and not "unknown")
             if current_value is not None and current_value != "unknown":

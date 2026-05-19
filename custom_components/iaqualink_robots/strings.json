@@ -49,6 +49,7 @@
     },
     "abort": {
       "already_configured": "This robot is already configured in Home Assistant.",
+      "already_in_progress": "Configuration of this robot is already in progress.",
       "no_serial": "No serial number was returned for this robot. The cloud account is reachable but the device list is empty or incomplete. Please try again later.",
       "reauth_successful": "Reauthentication successful. The integration has resumed.",
       "reauth_unavailable": "Reauthentication is no longer available for this entry (it may have been deleted). Please delete and re-add the integration if needed."
@@ -67,6 +68,115 @@
         }
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "serial_number": {
+        "name": "Serial Number"
+      },
+      "device_type": {
+        "name": "Device Type"
+      },
+      "cycle_start_time": {
+        "name": "Cycle Start Time"
+      },
+      "cycle_duration": {
+        "name": "Cycle Duration"
+      },
+      "cycle": {
+        "name": "Cycle"
+      },
+      "battery_level": {
+        "name": "Battery Level"
+      },
+      "total_hours": {
+        "name": "Total Hours"
+      },
+      "canister": {
+        "name": "Canister Level"
+      },
+      "error_state": {
+        "name": "Error State"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "time_remaining_human": {
+        "name": "Time Remaining"
+      },
+      "estimated_end_time": {
+        "name": "Estimated End Time"
+      },
+      "model": {
+        "name": "Model"
+      },
+      "time_remaining": {
+        "name": "Time Remaining (Minutes)"
+      },
+      "fan_speed": {
+        "name": "Fan Speed",
+        "state": {
+          "floor_only": "Floor only",
+          "wall_only": "Wall only",
+          "walls_only": "Walls only",
+          "floor_and_walls": "Floor and walls",
+          "smart_floor_and_walls": "SMART floor and walls"
+        }
+      },
+      "activity": {
+        "name": "Activity",
+        "state": {
+          "cleaning": "Cleaning",
+          "error": "Error",
+          "idle": "Idle",
+          "returning": "Returning",
+          "docking": "Docking",
+          "paused": "Paused"
+        }
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "connected": "Connected",
+          "disconnected": "Disconnected",
+          "offline": "Offline",
+          "online": "Online"
+        }
+      },
+      "stepper": {
+        "name": "Time Adjustments"
+      },
+      "stepper_adj_time": {
+        "name": "Adjustment Increment"
+      },
+      "stepper_adjustment_minutes": {
+        "name": "Time Added/Removed"
+      }
+    },
+    "button": {
+      "remote_forward": {
+        "name": "Remote Forward"
+      },
+      "remote_backward": {
+        "name": "Remote Backward"
+      },
+      "remote_rotate_left": {
+        "name": "Remote Rotate Left"
+      },
+      "remote_rotate_right": {
+        "name": "Remote Rotate Right"
+      },
+      "remote_stop": {
+        "name": "Remote Stop"
+      },
+      "add_fifteen_minutes": {
+        "name": "Add 15 Minutes"
+      },
+      "reduce_fifteen_minutes": {
+        "name": "Reduce 15 Minutes"
+      }
+    },
+    "vacuum": {}
   },
   "services": {
     "remote_forward": {

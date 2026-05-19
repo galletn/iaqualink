@@ -1610,7 +1610,7 @@ def test_parse_ws_state_message_accepts_cyclonext_robot_dot_one_key() -> None:
     cyclonext_message = {
         "service": "StateStreamer",
         "namespace": "cyclonext",
-        "type": "StateReported",
+        "event": "StateReported",
         "payload": {
             "state": {
                 "reported": {
@@ -1649,7 +1649,7 @@ def test_parse_ws_state_message_still_rejects_truly_empty_robot() -> None:
     empty_robot_message = {
         "service": "StateStreamer",
         "namespace": "cyclonext",
-        "type": "StateReported",
+        "event": "StateReported",
         "payload": {"state": {"reported": {"equipment": {"robot": {}, "robot.1": {}}}}},
     }
     assert AqualinkClient._parse_ws_state_message(empty_robot_message) is None
@@ -2114,7 +2114,7 @@ async def test_websocket_listener_propagates_config_entry_auth_failed() -> None:
     cyclonext_msg_payload = {
         "service": "StateStreamer",
         "namespace": "vr",
-        "type": "StateReported",
+        "event": "StateReported",
         "payload": {
             "state": {
                 "reported": {

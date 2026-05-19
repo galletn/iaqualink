@@ -3014,184 +3014,140 @@ class AqualinkClient:
             await self._exit_remote_control_mode()
             self._remote_control_active = False
 
-    async def add_fifteen_minutes(self):
-        """Add 15 minutes to cleaning time for VR and VortraX robots."""
-        if self._device_type not in ["vr", "vortrax"]:
-            _LOGGER.warning(f"Add 15 minutes not supported for device type: {self._device_type}")
-            return
+    async def _adjust_stepper(self, delta_minutes: int) -> dict | None:
+        """Adjust the stepper by ``delta_minutes`` (R24).
 
-        # Check if websocket operations should be attempted
+        Shared body for :meth:`add_fifteen_minutes` (+15) and
+        :meth:`reduce_fifteen_minutes` (-15). Replaces two near-identical
+        ~95-line methods that pre-R24 differed only in the sign of the
+        delta and the per-direction strings — bug fixes had to be applied
+        twice and any drift between them was a silent hazard.
+
+        Applies ``max(0, current + delta_minutes)`` to clamp the new
+        stepper non-negative. Pre-R24 a reduce when the stepper was
+        already at zero sent ``{"stepper": -15}`` to the cloud; cloud
+        behavior on a negative stepper is undefined. R24 clamps for the
+        safer semantic.
+
+        Routes the cloud roundtrip through R23's ``_build_state_request``
+        helper (set + clear pair, matching the WS-traffic pattern the
+        cloud expects). The post-command refresh goes through C4-cmd's
+        ``_safe_post_command_refresh`` so ``ConfigEntryAuthFailed`` /
+        ``CancelledError`` propagate to HA's reauth + shutdown paths.
+        """
+        if self._device_type not in ("vr", "vortrax"):
+            verb = "Add" if delta_minutes > 0 else "Reduce"
+            abs_delta = abs(delta_minutes)
+            _LOGGER.warning(
+                f"{verb} {abs_delta} minutes not supported for device type: "
+                f"{self._device_type}"
+            )
+            return None
+
         if not self._should_use_websocket():
-            _LOGGER.warning("Websocket operations temporarily suspended due to connection issues. Please try again later.")
+            _LOGGER.warning(
+                "Websocket operations temporarily suspended due to connection "
+                "issues. Please try again later."
+            )
             return {
                 "success": False,
                 "error": "websocket_unavailable",
-                "message": "Connection issues detected. Please try again in a moment."
+                "message": "Connection issues detected. Please try again in a moment.",
             }
 
         try:
-            # Check for button press rate limiting (debouncing)
-            if hasattr(self, '_last_timing_command_time'):
+            if hasattr(self, "_last_timing_command_time"):
                 time_since_last = time.time() - self._last_timing_command_time
-                if time_since_last < 3:  # 3 second debounce
+                if time_since_last < 3:
                     remaining_cooldown = 3 - time_since_last
                     _LOGGER.warning(
-                        f"Rate limiting timing commands. Please wait {remaining_cooldown:.1f} more seconds.")
+                        f"Rate limiting timing commands. Please wait "
+                        f"{remaining_cooldown:.1f} more seconds."
+                    )
                     return {
                         "success": False,
                         "error": "rate_limited",
                         "cooldown_remaining": remaining_cooldown,
-                        "message": f"Please wait {remaining_cooldown:.1f} seconds before sending another timing command."
+                        "message": (
+                            f"Please wait {remaining_cooldown:.1f} seconds before "
+                            "sending another timing command."
+                        ),
                     }
 
-            # Mark timing command time for rate limiting
             self._last_timing_command_time = time.time()
 
-            # Always fetch current stepper value to ensure accuracy
-            # fetch_status() returns a flat dict with 'stepper' at the top level
+            # fetch_status() returns a flat dict with 'stepper' at the top level.
             current_status = await self.fetch_status()
-            current_stepper = current_status.get('stepper', 0)
+            current_stepper = current_status.get("stepper", 0)
+
+            # R24: clamp non-negative — see docstring.
+            new_stepper = max(0, current_stepper + delta_minutes)
+
+            abs_delta = abs(delta_minutes)
+            action_label = f"{'Add' if delta_minutes > 0 else 'Reduce'} {abs_delta} minutes"
 
             if self._debug_mode:
-                _LOGGER.debug(f"🔍 Add 15min: Current stepper value = {current_stepper}")
-                _LOGGER.debug(f"Adding 15 minutes: current stepper={current_stepper}")
+                _LOGGER.debug(
+                    f"🔍 {action_label}: Setting stepper "
+                    f"{current_stepper} → {new_stepper}"
+                )
+                _LOGGER.debug(
+                    f"{action_label}: current stepper={current_stepper}, "
+                    f"new stepper={new_stepper}"
+                )
 
-            # Get the new stepper value (current + 15 minutes)
-            # Stepper represents total minutes adjustment
-            new_stepper = current_stepper + 15
-
-            if self._debug_mode:
-                _LOGGER.debug(f"🔍 Add 15min: Setting stepper {current_stepper} → {new_stepper}")
-
-            # R23: envelope literals collapsed. The set/clear pair matches
-            # the cloud's expected websocket-traffic pattern: first set the
-            # stepper value, then clear it (None) so the desired state
-            # doesn't persist as a sticky target after the cloud has
-            # applied the increment.
-            request = self._build_state_request("setCleaningMode", {"stepper": new_stepper})
-
-            if self._debug_mode:
-                _LOGGER.debug(f"Sending add 15 minutes command: stepper {current_stepper} → {new_stepper}")
+            # R23: set + clear envelope pair.
+            request = self._build_state_request(
+                "setCleaningMode", {"stepper": new_stepper}
+            )
             result = await asyncio.wait_for(self.set_cleaner_state(request), timeout=15)
             if self._debug_mode:
-                _LOGGER.debug(f"Add 15 minutes response: {result}")
+                _LOGGER.debug(f"{action_label} response: {result}")
 
-            # Also send a null command to clear the desired state (as seen in websocket traffic)
-            clear_request = self._build_state_request("setCleaningMode", {"stepper": None})
-
+            clear_request = self._build_state_request(
+                "setCleaningMode", {"stepper": None}
+            )
             await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=15)
 
             if self._debug_mode:
-                _LOGGER.debug("✅ Add 15 minutes command completed successfully")
+                _LOGGER.debug(f"✅ {action_label} command completed successfully")
 
-            # C4-cmd: one awaited refresh (see start_cleaning for rationale).
-            # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
-            # CancelledError; old inlined except-Exception swallowed reauth.
+            # C4-cmd: one awaited refresh; helper re-raises ConfigEntryAuthFailed.
             await self._safe_post_command_refresh()
 
-            # Return success result with notification info for coordinator to handle
+            past_verb = "Added" if delta_minutes > 0 else "Reduced"
+            preposition = "to" if delta_minutes > 0 else "from"
+            verb_lower = "add" if delta_minutes > 0 else "reduce"
             return {
                 "success": True,
-                "action": "add_15_minutes",
+                "action": f"{verb_lower}_{abs_delta}_minutes",
                 "previous_stepper": current_stepper,
                 "new_stepper": new_stepper,
-                "message": f"Added 15 minutes to cleaning time. Stepper: {current_stepper} → {new_stepper}"
+                "message": (
+                    f"{past_verb} {abs_delta} minutes {preposition} cleaning time. "
+                    f"Stepper: {current_stepper} → {new_stepper}"
+                ),
             }
 
         except Exception as e:
-            _LOGGER.error(f"❌ Add 15 minutes command failed: {e}")
-            # Return error result for coordinator to handle
+            verb = "add" if delta_minutes > 0 else "reduce"
+            abs_delta = abs(delta_minutes)
+            _LOGGER.error(
+                f"❌ {verb.capitalize()} {abs_delta} minutes command failed: {e}"
+            )
             return {
                 "success": False,
                 "error": str(e),
-                "message": f"Failed to add 15 minutes: {str(e)}"
+                "message": f"Failed to {verb} {abs_delta} minutes: {str(e)}",
             }
+
+    async def add_fifteen_minutes(self):
+        """Add 15 minutes to cleaning time for VR and VortraX robots."""
+        return await self._adjust_stepper(15)
 
     async def reduce_fifteen_minutes(self):
         """Reduce 15 minutes from cleaning time for VR and VortraX robots."""
-        if self._device_type not in ["vr", "vortrax"]:
-            _LOGGER.warning(f"Reduce 15 minutes not supported for device type: {self._device_type}")
-            return
-
-        # Check if websocket operations should be attempted
-        if not self._should_use_websocket():
-            _LOGGER.warning("Websocket operations temporarily suspended due to connection issues. Please try again later.")
-            return {
-                "success": False,
-                "error": "websocket_unavailable",
-                "message": "Connection issues detected. Please try again in a moment."
-            }
-
-        try:
-            # Get current status for logging
-            # fetch_status() returns a flat dict with 'stepper' at the top level
-            current_status = await self.fetch_status()
-            current_stepper = current_status.get('stepper', 0)
-
-            if self._debug_mode:
-                _LOGGER.debug(f"Reducing 15 minutes: current stepper={current_stepper}")
-
-            # Check for button press rate limiting (debouncing)
-            if hasattr(self, '_last_timing_command_time'):
-                time_since_last = time.time() - self._last_timing_command_time
-                if time_since_last < 3:  # 3 second debounce
-                    remaining_cooldown = 3 - time_since_last
-                    _LOGGER.warning(
-                        f"Rate limiting timing commands. Please wait {remaining_cooldown:.1f} more seconds.")
-                    return {
-                        "success": False,
-                        "error": "rate_limited",
-                        "cooldown_remaining": remaining_cooldown,
-                        "message": f"Please wait {remaining_cooldown:.1f} seconds before sending another timing command."
-                    }
-
-            # Mark timing command time for rate limiting
-            self._last_timing_command_time = time.time()
-
-            # Get the new stepper value (current - 15 minutes)
-            # Stepper represents total minutes adjustment
-            new_stepper = current_stepper - 15
-
-            # R23: envelope literals collapsed (set + clear, see add_fifteen_minutes
-            # for the rationale of the pair).
-            request = self._build_state_request("setCleaningMode", {"stepper": new_stepper})
-
-            if self._debug_mode:
-                _LOGGER.debug(f"Sending reduce 15 minutes command: stepper {current_stepper} → {new_stepper}")
-            result = await asyncio.wait_for(self.set_cleaner_state(request), timeout=15)
-            if self._debug_mode:
-                _LOGGER.debug(f"Reduce 15 minutes response: {result}")
-
-            # Also send a null command to clear the desired state (as seen in websocket traffic)
-            clear_request = self._build_state_request("setCleaningMode", {"stepper": None})
-
-            await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=15)
-
-            if self._debug_mode:
-                _LOGGER.debug("✅ Reduce 15 minutes command completed successfully")
-
-            # C4-cmd: one awaited refresh (see start_cleaning for rationale).
-            # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
-            # CancelledError; old inlined except-Exception swallowed reauth.
-            await self._safe_post_command_refresh()
-
-            # Return success result with notification info for coordinator to handle
-            return {
-                "success": True,
-                "action": "reduce_15_minutes",
-                "previous_stepper": current_stepper,
-                "new_stepper": new_stepper,
-                "message": f"Reduced 15 minutes from cleaning time. Stepper: {current_stepper} → {new_stepper}"
-            }
-
-        except Exception as e:
-            _LOGGER.error(f"❌ Reduce 15 minutes command failed: {e}")
-            # Return error result for coordinator to handle
-            return {
-                "success": False,
-                "error": str(e),
-                "message": f"Failed to reduce 15 minutes: {str(e)}"
-            }
+        return await self._adjust_stepper(-15)
 
 
 class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
@@ -3801,165 +3757,117 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         """Send stop command to the robot for remote control - centralized business logic."""
         await self._execute_remote_command(self.client.remote_stop)
 
-    async def async_add_fifteen_minutes(self):
-        """Add 15 minutes to cleaning time - centralized business logic."""
+    async def _async_adjust_stepper(
+        self,
+        delta_minutes: int,
+        client_method,
+        success_message_default: str,
+        failure_message_default: str,
+    ) -> None:
+        """Shared body for :meth:`async_add_fifteen_minutes` and
+        :meth:`async_reduce_fifteen_minutes` (R24).
+
+        Owns the HA-side concerns the client helper doesn't: the
+        3-second debounce on ``_last_timing_command``, the
+        browser_mod-or-persistent notification fallback, and the
+        post-command ``async_request_refresh``.
+
+        ``client_method`` is the unbound-but-pre-bound coroutine to
+        invoke after debounce (``self.client.add_fifteen_minutes`` or
+        ``self.client.reduce_fifteen_minutes``). The default messages
+        are the user-visible fallbacks when the client helper's
+        ``result.message`` is missing.
+        """
         if self.client.device_type not in {"vr", "vortrax"}:
             return
 
-        # Debouncing: Check if enough time has passed since last timing command
         current_time = time.time()
         time_since_last = current_time - self._last_timing_command
-        debounce_seconds = 3  # 3 second cooldown
+        debounce_seconds = 3
 
         if time_since_last < debounce_seconds:
-            # Too soon - send notification about rate limiting
+            wait_msg = (
+                f"Please wait {debounce_seconds - time_since_last:.1f} more "
+                "seconds before next timing adjustment."
+            )
             try:
                 await self.hass.services.async_call(
                     "browser_mod",
                     "notification",
                     {
-                        "message": f"Please wait {debounce_seconds - time_since_last:.1f} more seconds before next timing adjustment.",
-                        "duration": 2000,  # 2 seconds
-                        "action_text": "OK"
-                    }
+                        "message": wait_msg,
+                        "duration": 2000,
+                        "action_text": "OK",
+                    },
                 )
             except Exception:
-                # Fallback to persistent notification if browser_mod not available
                 await self.hass.services.async_call(
                     "persistent_notification",
                     "create",
                     {
                         "title": "Rate Limited",
-                        "message": f"Please wait {debounce_seconds - time_since_last:.1f} more seconds before next timing adjustment.",
-                        "notification_id": f"timing_rate_limit_{self.client.robot_id}"
-                    }
+                        "message": wait_msg,
+                        "notification_id": f"timing_rate_limit_{self.client.robot_id}",
+                    },
                 )
             return
 
-        # Update timestamp for debouncing
         self._last_timing_command = current_time
 
-        result = await self.client.add_fifteen_minutes()
+        result = await client_method()
 
-        # Send notification to user
         if result and isinstance(result, dict):
             if result.get("success"):
-                # Try browser_mod toast notification first (more elegant)
                 try:
                     await self.hass.services.async_call(
                         "browser_mod",
                         "notification",
                         {
-                            "message": result.get("message", "Added 15 minutes to cleaning time."),
-                            "duration": 4000,  # 4 seconds
-                            "action_text": "OK"
-                        }
+                            "message": result.get("message", success_message_default),
+                            "duration": 4000,
+                            "action_text": "OK",
+                        },
                     )
                 except Exception:
-                    # Fallback to persistent notification if browser_mod not available
                     await self.hass.services.async_call(
                         "persistent_notification",
                         "create",
                         {
                             "title": "Pool Robot",
-                            "message": result.get("message", "Added 15 minutes to cleaning time."),
-                            "notification_id": f"robot_time_change_{self.client.serial}"
-                        }
+                            "message": result.get("message", success_message_default),
+                            "notification_id": f"robot_time_change_{self.client.serial}",
+                        },
                     )
             else:
-                # For errors, always use persistent notifications (more important)
                 await self.hass.services.async_call(
                     "persistent_notification",
                     "create",
                     {
                         "title": "Pool Robot Error",
-                        "message": result.get("message", "Failed to add 15 minutes."),
-                        "notification_id": f"robot_error_{self.client.serial}"
-                    }
+                        "message": result.get("message", failure_message_default),
+                        "notification_id": f"robot_error_{self.client.serial}",
+                    },
                 )
 
-        # Request immediate refresh to get updated timing information
         await self.async_request_refresh()
+
+    async def async_add_fifteen_minutes(self):
+        """Add 15 minutes to cleaning time - centralized business logic."""
+        await self._async_adjust_stepper(
+            15,
+            self.client.add_fifteen_minutes,
+            "Added 15 minutes to cleaning time.",
+            "Failed to add 15 minutes.",
+        )
 
     async def async_reduce_fifteen_minutes(self):
         """Reduce 15 minutes from cleaning time - centralized business logic."""
-        if self.client.device_type not in {"vr", "vortrax"}:
-            return
-
-        # Debouncing: Check if enough time has passed since last timing command
-        current_time = time.time()
-        time_since_last = current_time - self._last_timing_command
-        debounce_seconds = 3  # 3 second cooldown
-
-        if time_since_last < debounce_seconds:
-            # Too soon - send notification about rate limiting
-            try:
-                await self.hass.services.async_call(
-                    "browser_mod",
-                    "notification",
-                    {
-                        "message": f"Please wait {debounce_seconds - time_since_last:.1f} more seconds before next timing adjustment.",
-                        "duration": 2000,  # 2 seconds
-                        "action_text": "OK"
-                    }
-                )
-            except Exception:
-                # Fallback to persistent notification if browser_mod not available
-                await self.hass.services.async_call(
-                    "persistent_notification",
-                    "create",
-                    {
-                        "title": "Rate Limited",
-                        "message": f"Please wait {debounce_seconds - time_since_last:.1f} more seconds before next timing adjustment.",
-                        "notification_id": f"timing_rate_limit_{self.client.robot_id}"
-                    }
-                )
-            return
-
-        # Update timestamp for debouncing
-        self._last_timing_command = current_time
-
-        result = await self.client.reduce_fifteen_minutes()
-
-        # Send notification to user
-        if result and isinstance(result, dict):
-            if result.get("success"):
-                # Try browser_mod toast notification first (more elegant)
-                try:
-                    await self.hass.services.async_call(
-                        "browser_mod",
-                        "notification",
-                        {
-                            "message": result.get("message", "Reduced cleaning time by 15 minutes."),
-                            "duration": 4000,  # 4 seconds
-                            "action_text": "OK"
-                        }
-                    )
-                except Exception:
-                    # Fallback to persistent notification if browser_mod not available
-                    await self.hass.services.async_call(
-                        "persistent_notification",
-                        "create",
-                        {
-                            "title": "Pool Robot",
-                            "message": result.get("message", "Reduced cleaning time by 15 minutes."),
-                            "notification_id": f"robot_time_change_{self.client.serial}"
-                        }
-                    )
-            else:
-                # For errors, always use persistent notifications (more important)
-                await self.hass.services.async_call(
-                    "persistent_notification",
-                    "create",
-                    {
-                        "title": "Pool Robot Error",
-                        "message": result.get("message", "Failed to reduce 15 minutes."),
-                        "notification_id": f"robot_error_{self.client.serial}"
-                    }
-                )
-
-        # Request immediate refresh to get updated timing information
-        await self.async_request_refresh()
+        await self._async_adjust_stepper(
+            -15,
+            self.client.reduce_fifteen_minutes,
+            "Reduced cleaning time by 15 minutes.",
+            "Failed to reduce 15 minutes.",
+        )
 
     async def cleanup(self):
         """Clean up resources when coordinator is being unloaded.

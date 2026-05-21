@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 import logging
+from typing import Any
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv, entity_registry as er
@@ -33,7 +37,7 @@ _M12_BUTTON_COMMANDS = (
 )
 
 
-async def async_setup(hass: HomeAssistant, config) -> bool:
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     return True
 
 

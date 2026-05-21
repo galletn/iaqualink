@@ -1,5 +1,10 @@
+from __future__ import annotations
+
 import logging
+from typing import Any
+
 from homeassistant import config_entries, data_entry_flow
+from homeassistant.config_entries import ConfigEntry, ConfigFlowResult
 from homeassistant.core import callback
 import voluptuous as vol
 
@@ -23,20 +28,24 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry):
+    def async_get_options_flow(
+        config_entry: ConfigEntry,
+    ) -> IaqualinkOptionsFlow:
         """Return the OptionsFlow for runtime toggles."""
         return IaqualinkOptionsFlow(config_entry)
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the config flow."""
-        self._username = None
-        self._password = None
-        self._devices = []
-        self._include_seconds_remaining = DEFAULT_INCLUDE_SECONDS_REMAINING
+        self._username: str | None = None
+        self._password: str | None = None
+        self._devices: list[dict[str, Any]] = []
+        self._include_seconds_remaining: bool = DEFAULT_INCLUDE_SECONDS_REMAINING
         # Set by async_step_reauth, consumed by async_step_reauth_confirm. P4.
-        self._reauth_entry = None
+        self._reauth_entry: ConfigEntry | None = None
 
-    async def async_step_user(self, user_input=None):
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle the initial step."""
         errors = {}
 
@@ -158,7 +167,9 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def async_step_select_device(self, user_input=None):
+    async def async_step_select_device(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle the device selection step."""
         errors = {}
 
@@ -243,14 +254,18 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # referencing it. No history loss, no re-add.
     # ------------------------------------------------------------------
 
-    async def async_step_reauth(self, entry_data):
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> ConfigFlowResult:
         """Entry point invoked by HA when ConfigEntryAuthFailed fires."""
         self._reauth_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
         return await self.async_step_reauth_confirm()
 
-    async def async_step_reauth_confirm(self, user_input=None):
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Prompt the user for a new password and re-validate credentials."""
         errors = {}
         # Sign-off P2: defensive `is None` check instead of `assert`. Under
@@ -321,10 +336,19 @@ class IaqualinkOptionsFlow(config_entries.OptionsFlow):
     picks up the new setting.
     """
 
-    def __init__(self, config_entry):
-        self.config_entry = config_entry
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        # OptionsFlow.config_entry is read-only on HA 2024+; instantiate the
+        # base class normally and assign our own copy through the
+        # name-mangled slot HA reserves for subclass storage.
+        self._config_entry: ConfigEntry = config_entry
 
-    async def async_step_init(self, user_input=None):
+    @property
+    def config_entry(self) -> ConfigEntry:
+        return self._config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 

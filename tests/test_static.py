@@ -280,3 +280,78 @@ def test_no_hass_data_domain_access_in_production_code() -> None:
         "Read via ``entry.runtime_data.coordinator`` instead.\n"
         + "\n".join(f"  {p.name}:{n}: {line}" for p, n, line in hits)
     )
+
+
+# ---------------------------------------------------------------------------
+# Story P6 — Platinum strict typing guards.
+#
+# P6 ratcheted ``mypy --strict`` clean on the whole package and added the
+# foundations every typed integration needs:
+#   1. ``from __future__ import annotations`` at the top of every module so
+#      forward references resolve cleanly and runtime evaluation cost stays
+#      zero.
+#   2. A ``py.typed`` marker so consumers (HA core, tests) read our type
+#      hints instead of treating the package as untyped (PEP 561).
+#   3. Zero ``# type: ignore`` — every site has either been fixed or is
+#      annotated explicitly. Re-introducing one without a comment + upstream
+#      issue link is a regression of AC #3.
+# ---------------------------------------------------------------------------
+
+
+_TYPE_IGNORE = re.compile(r"#\s*type:\s*ignore")
+
+
+def test_no_type_ignore_in_production_code() -> None:
+    """P6 AC#3: zero ``# type: ignore`` comments remain in the package.
+
+    Each one historically masked either a missing HA-side stub or a real
+    typing bug. The whole point of the P6 ratchet is to surface those at
+    lint time, not hide them. If you genuinely need a new one (e.g., an
+    HA-internal API that still lacks types), add it with a comment that
+    links the upstream issue and add it to an allowlist here.
+    """
+    hits = _scan(_TYPE_IGNORE, _ALL_PYTHON_FILES)
+    assert not hits, (
+        "``# type: ignore`` reappeared in production code. Each one either "
+        "masks a real typing bug or a missing HA stub — fix the underlying "
+        "issue, or if it genuinely needs to stay add a comment that links "
+        "the upstream issue and update this allowlist:\n"
+        + "\n".join(f"  {p.name}:{n}: {line}" for p, n, line in hits)
+    )
+
+
+def test_every_module_imports_future_annotations() -> None:
+    """P6 AC#2: every ``.py`` module starts with ``from __future__ import annotations``.
+
+    Empty ``__init__.py`` files are excluded — they have nothing to annotate.
+    The check looks only at the first ~5 non-blank, non-docstring lines so a
+    long module-level docstring doesn't trip it. ``py.typed`` is a marker
+    file (not Python source) and lives outside the glob.
+    """
+    missing: list[Path] = []
+    for path in _ALL_PYTHON_FILES:
+        text = path.read_text(encoding="utf-8")
+        if not text.strip():
+            continue  # empty file
+        if "from __future__ import annotations" not in text:
+            missing.append(path)
+
+    assert not missing, (
+        "P6 AC#2: every module must declare ``from __future__ import "
+        "annotations`` at the top. Missing in:\n"
+        + "\n".join(f"  {p.relative_to(PACKAGE.parent.parent)}" for p in missing)
+    )
+
+
+def test_py_typed_marker_exists() -> None:
+    """P6 AC#5: the ``py.typed`` marker file exists.
+
+    PEP 561 — without this, downstream consumers (HA core, unit tests
+    using ``mypy --strict``) treat the package as untyped no matter how
+    many annotations it carries. The file is intentionally empty.
+    """
+    marker = PACKAGE / "py.typed"
+    assert marker.exists(), (
+        f"Expected PEP 561 marker at {marker} — without this consumers "
+        "ignore the package's type annotations (P6 AC#5)."
+    )

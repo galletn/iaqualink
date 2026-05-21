@@ -1,4 +1,6 @@
 """Coordinator and client for iaqualink_robots integration."""
+from __future__ import annotations
+
 import base64
 import json
 import datetime
@@ -9,14 +11,21 @@ import asyncio
 import re
 import time
 
+from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from datetime import timedelta
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed  # type: ignore # noqa
-from homeassistant.helpers.aiohttp_client import async_get_clientsession  # type: ignore # noqa
-from homeassistant.exceptions import ConfigEntryAuthFailed  # type: ignore # noqa
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.exceptions import ConfigEntryAuthFailed
 # Note: This import requires Home Assistant 2025.1 or later
-from homeassistant.components.vacuum import VacuumActivity  # type: ignore # noqa
-from homeassistant.util import dt as dt_util  # type: ignore # noqa
+from homeassistant.components.vacuum import VacuumActivity
+from homeassistant.util import dt as dt_util
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+
 from .const import (
     URL_LOGIN,
     URL_GET_DEVICES,
@@ -25,7 +34,38 @@ from .const import (
     PENDING_STOP_RESET_MAX_AGE_SECONDS,
     LONG_OUTAGE_THRESHOLD_SECONDS,
 )
-from .protocols import get_protocol
+from .protocols import I2DProtocol, RobotProtocol, get_protocol
+
+
+def _i2d_protocol() -> I2DProtocol:
+    """Return the I2D protocol singleton, typed as ``I2DProtocol``.
+
+    Centralises the cast at one call-site so the coordinator's i2d code
+    paths can call ``i2d_url`` (an I2D-only method, absent from the
+    ``RobotProtocol`` base) without each site repeating the cast.
+    """
+    protocol = get_protocol("i2d_robot")
+    assert isinstance(protocol, I2DProtocol), \
+        "i2d_robot protocol must be I2DProtocol"
+    return protocol
+
+
+def _require_protocol(device_type: str) -> RobotProtocol:
+    """Return the protocol for ``device_type`` or raise.
+
+    Wraps ``get_protocol`` (which returns ``RobotProtocol | None``) with an
+    assertion so the call-site type-narrows to non-None. Every call here
+    is gated by ``self._device_type in (...)`` checks that match the keys
+    in ``_DEVICE_PROTOCOLS``, so the None branch is unreachable at runtime
+    — the explicit raise replaces what would otherwise be a silent
+    ``AttributeError`` on a future cloud surfacing an unknown
+    ``device_type`` value.
+    """
+    protocol = get_protocol(device_type)
+    if protocol is None:
+        raise RuntimeError(f"No protocol registered for device_type={device_type!r}")
+    return protocol
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,6 +107,8 @@ def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
     H8 swapped this from naive-local to aware-UTC via `dt_util.utc_from_timestamp`,
     matching the rest of the integration's datetime hygiene.
     """
+    if token is None:
+        return None
     try:
         parts = token.split(".")
         if len(parts) != 3:
@@ -84,7 +126,9 @@ def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
         exp = payload.get("exp")
         # Tight type guard: exclude bool (Python: isinstance(True, int) is True),
         # require finite and positive epoch. Anything else hits the fallback.
-        if type(exp) not in (int, float) or not math.isfinite(exp) or exp <= 0:
+        if not isinstance(exp, (int, float)) or isinstance(exp, bool):
+            return None
+        if not math.isfinite(exp) or exp <= 0:
             return None
         return dt_util.utc_from_timestamp(int(exp) - _TOKEN_EXP_SAFETY_MARGIN_S)
     except (AttributeError, OSError, OverflowError, TypeError, ValueError, json.JSONDecodeError):
@@ -130,15 +174,15 @@ class AqualinkClient:
         api_key: str,
         debug_mode: bool = False,
         include_seconds_remaining: bool = True,
-    ):
-        self._username = username
-        self._password = password
-        self._api_key = api_key
+    ) -> None:
+        self._username: str = username
+        self._password: str = password
+        self._api_key: str = api_key
         # Whether to include seconds in `time_remaining_human`. Setting this
         # to False reduces HA activity-log entries from ~one-per-poll to
         # one-per-minute without changing SCAN_INTERVAL. Plumbed in from the
         # config-flow / options-flow option `include_seconds_remaining`.
-        self._include_seconds_remaining = include_seconds_remaining
+        self._include_seconds_remaining: bool = include_seconds_remaining
         self._auth_token: str = ""
         self._id: str = ""
         self._id_token: str = ""
@@ -146,60 +190,58 @@ class AqualinkClient:
         self._serial: str = ""
         self._device_type: str = ""
         self._first_name: str = ""
-        self._last_name = None
-        self._model = None
-        self._token_expires_at = None  # Track token expiration
-        self._model_fetch_attempts = 0  # Track model fetch attempts
-        self._model_last_attempt = None  # Track last model fetch attempt time
-        self._pending_stop_reset = None  # Store reset values from stop command
-        # H6: paired with `_pending_stop_reset`. Set to ``dt_util.utcnow()`` at
-        # the same site that populates the reset dict; consulted in
-        # ``fetch_status`` to expire stale resets (>10 s old) and to discard
-        # the reset if the cloud has already moved past idle (the
-        # "user restarts between stop and poll" race). Cleared whenever
-        # ``_pending_stop_reset`` is cleared; the two are always set / both
-        # ``None`` together.
-        self._pending_stop_reset_at = None
-        self._remote_control_active = False  # Track if we're in remote control mode
-        self._activity = VacuumActivity.IDLE  # Default activity state
-        self._hass = None  # Will be set by coordinator
-        self._headers = {
+        self._last_name: str | None = None
+        self._model: str | None = None
+        self._token_expires_at: datetime.datetime | None = None
+        self._model_fetch_attempts: int = 0
+        self._model_last_attempt: datetime.datetime | None = None
+        self._pending_stop_reset: dict[str, Any] | None = None
+        # H6: paired with `_pending_stop_reset`. Cleared whenever
+        # ``_pending_stop_reset`` is cleared; the two are always both-set or
+        # both-``None``.
+        self._pending_stop_reset_at: datetime.datetime | None = None
+        self._remote_control_active: bool = False
+        self._activity: VacuumActivity = VacuumActivity.IDLE
+        # Set by ``set_hass`` once the coordinator wires the integration in.
+        self._hass: HomeAssistant | None = None
+        self._headers: dict[str, str] = {
             "Content-Type": "application/json; charset=utf-8",
             "Connection": "keep-alive",
-            "Accept": "*/*"
+            "Accept": "*/*",
         }
-        self._debug_mode = debug_mode  # Debug mode configurable
+        self._debug_mode: bool = debug_mode
         # Persistent websocket connection for commands and status updates
-        self._ws_connection = None
-        self._ws_session = None
-        self._last_ws_activity = None
-        self._coordinator_callback = None  # Callback to notify coordinator of real-time updates
+        self._ws_connection: aiohttp.ClientWebSocketResponse | None = None
+        self._ws_session: aiohttp.ClientSession | None = None
+        self._last_ws_activity: float | None = None
+        # Callback the coordinator wires in to be notified of real-time updates.
+        self._coordinator_callback: Callable[[], Awaitable[None]] | None = None
         # C4-ws: push-callback wired by the coordinator. The WS listener uses
         # this to apply a merged shadow envelope directly via
         # ``coordinator.async_set_updated_data`` — no HTTP refresh roundtrip.
-        # Kept separate from ``_coordinator_callback`` (which the 6 command
-        # methods still use post-C4-cmd) so the two callsites stay decoupled.
-        self._realtime_push_callback = None
+        self._realtime_push_callback: (
+            Callable[[dict[str, Any]], Awaitable[None]] | None
+        ) = None
         # C4-ws: cached deep copy of the last full ``_ws_subscribe`` response.
         # The WS listener deep-merges inbound shadow deltas into this baseline
         # so the existing per-device-type parsers (which expect a complete
         # envelope) keep working unchanged on the push path. ``None`` until the
         # first successful ``_ws_subscribe`` — the listener falls back to
         # ``_coordinator_callback`` (refresh) for that first race window.
-        self._last_ws_envelope = None
+        self._last_ws_envelope: dict[str, Any] | None = None
         # C4-ws: tuple of (state, errorState, prCyc, cycleStartTime, stepper,
         # cyclobat-main-state, cyclobat-battery-charge) extracted from the
         # last-applied envelope. Used to dedup repeated StateReported pushes
-        # that don't change anything we care about (AC #3 — zero
-        # ``_async_update_data`` invocations during 60 s of unchanged chatter).
-        self._last_applied_state_signature = None
+        # that don't change anything we care about.
+        self._last_applied_state_signature: tuple[Any, ...] | None = None
         # Websocket connection failure tracking (not device offline status)
         # Device being 'offline' via working websocket is normal, not a failure
-        self._ws_consecutive_failures = 0
-        self._last_known_status = None
-        self._max_ws_failures_before_offline = 5  # Allow 5 websocket connection failures before marking offline
+        self._ws_consecutive_failures: int = 0
+        self._last_known_status: str | None = None
+        # Allow 5 websocket connection failures before marking offline.
+        self._max_ws_failures_before_offline: int = 5
         # Simple instance ID for logging purposes
-        self._instance_id = f"ha-{hash(username + str(id(self))) % 10000:04d}"
+        self._instance_id: str = f"ha-{hash(username + str(id(self))) % 10000:04d}"
 
         # Serialises `_authenticate()` so two coordinator cycles overlapping
         # near token expiry can't both fire parallel Cognito refresh requests
@@ -207,14 +249,39 @@ class AqualinkClient:
         # this from the H9a review. Double-checked locking pattern used inside
         # `_authenticate` makes the second caller a no-op once the first
         # refresh completes.
-        self._auth_lock = asyncio.Lock()
+        self._auth_lock: asyncio.Lock = asyncio.Lock()
 
         # Status stabilization to prevent rapid connection status changes
-        self._status_history = []  # Track recent status values
-        self._status_stabilization_window = 30  # 30 second window to stabilize status
-        self._minimum_status_duration = 15  # Minimum time (seconds) a status must persist before changing
-        self._last_status_change_time = 0
-        self._stable_status = None  # The stabilized status we report
+        self._status_history: list[dict[str, Any]] = []
+        # 30 second window to stabilize status.
+        self._status_stabilization_window: int = 30
+        # Minimum time (seconds) a status must persist before changing.
+        self._minimum_status_duration: int = 15
+        self._last_status_change_time: float = 0
+        # The stabilized status we report.
+        self._stable_status: str | None = None
+
+        # Set by per-family ``parse_status`` to the most recently observed
+        # translation key (e.g. ``"floor_only"``); read by callers that need
+        # to surface the last-known fan_speed when the cloud doesn't echo
+        # one back on a command response. Initialised lazily so an unknown
+        # family doesn't crash on first read. Typed as ``Any`` because the
+        # VR / vortrax / cyclobat / cyclonext families write a translation
+        # key string here while the i2d family writes the cloud-side int
+        # code — the inconsistency predates P6 and tightening it is out
+        # of scope.
+        self._fan_speed: Any = None
+
+        # Reference to the owning coordinator, set via
+        # ``set_coordinator_reference`` once the coordinator constructs
+        # itself. Used by paths that need to schedule debounced refreshes
+        # without going through the public coordinator API.
+        self._coordinator_ref: AqualinkDataUpdateCoordinator | None = None
+
+        # Wall-clock stamp of the last successful stepper-adjust command;
+        # used by ``_adjust_stepper`` to rate-limit timing changes to one
+        # per 3 s. ``None`` until the first successful adjust.
+        self._last_timing_command_time: float | None = None
 
     def _get_resilient_status(self, error_context: str) -> str:
         """Get status that's resilient to temporary websocket connection failures.
@@ -260,13 +327,13 @@ class AqualinkClient:
             return False
         return True
 
-    def _reset_websocket_failures(self):
+    def _reset_websocket_failures(self) -> None:
         """Reset websocket failure counters after successful operation."""
         if self._ws_consecutive_failures > 0:
             _LOGGER.debug(f"Resetting websocket failure counter (was {self._ws_consecutive_failures})")
             self._ws_consecutive_failures = 0
 
-    def _stabilize_status(self, raw_status):
+    def _stabilize_status(self, raw_status: str) -> str:
         """Stabilize status changes to prevent rapid flapping between connected/disconnected.
 
         This prevents the sensor from rapidly changing state due to temporary network issues
@@ -389,12 +456,12 @@ class AqualinkClient:
             return True
         return dt_util.utcnow() >= self._token_expires_at
 
-    def set_hass(self, hass):
+    def set_hass(self, hass: HomeAssistant) -> None:
         """Set Home Assistant instance for translations."""
         self._hass = hass
 
     @asynccontextmanager
-    async def _cloud_session(self):
+    async def _cloud_session(self) -> AsyncIterator[aiohttp.ClientSession]:
         """Yield an aiohttp session for iAqualink cloud REST calls (story L19).
 
         When ``self._hass`` is set, constructs a per-call ``aiohttp.ClientSession``
@@ -452,7 +519,7 @@ class AqualinkClient:
                 yield session
 
     @staticmethod
-    def _resolve_cycle_duration(durations, cycle) -> int:
+    def _resolve_cycle_duration(durations: dict[str, int], cycle: int) -> int:
         """Look up the cycle duration for cycle code ``cycle`` (story C5).
 
         Pre-C5, the three callers each did
@@ -511,7 +578,7 @@ class AqualinkClient:
         """
         return f"{hours} Hour(s) {minutes} Minute(s) {seconds} Second(s)"
 
-    async def fetch_status(self, quick_setup=False) -> dict:
+    async def fetch_status(self, quick_setup: bool = False) -> dict[str, Any]:
         """Authenticate, discover device, and parse status.
 
         Args:
@@ -554,7 +621,7 @@ class AqualinkClient:
 
         return data
 
-    def _apply_pending_stop_reset(self, data: dict) -> dict:
+    def _apply_pending_stop_reset(self, data: dict[str, Any]) -> dict[str, Any]:
         """Apply / discard a pending stop-reset based on age and live cloud state.
 
         Returns ``data`` (possibly mutated). Always clears
@@ -615,7 +682,7 @@ class AqualinkClient:
         self._pending_stop_reset_at = None
         return data
 
-    async def _authenticate(self, force: bool = False):
+    async def _authenticate(self, force: bool = False) -> None:
         """Authenticate with iAqualink API.
 
         Serialised under ``self._auth_lock`` with a double-check guard so two
@@ -645,13 +712,15 @@ class AqualinkClient:
             if self._debug_mode:
                 _LOGGER.debug("Authenticating with iAqualink API...")
             try:
-                data = {
+                payload = {
                     "apiKey": self._api_key,
                     "email": self._username,
-                    "password": self._password
+                    "password": self._password,
                 }
-                data = json.dumps(data)
-                auth = await asyncio.wait_for(self.send_login(data, self._headers), timeout=30)
+                body = json.dumps(payload)
+                auth = await asyncio.wait_for(
+                    self.send_login(body, self._headers), timeout=30
+                )
 
                 # H9b sign-off: a 200-shaped Cognito body that is missing the
                 # expected envelope means the response is an error payload
@@ -684,7 +753,7 @@ class AqualinkClient:
                     _LOGGER.debug("Authentication cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
 
-    async def _discover_device(self, target_serial=None):
+    async def _discover_device(self, target_serial: str | None = None) -> None:
         """Get list of devices and pick the pool robot.
 
         If target_serial is provided, select that specific device.
@@ -741,7 +810,9 @@ class AqualinkClient:
             raise  # Re-raise cancellation to preserve shutdown behavior
 
     @classmethod
-    async def discover_devices(cls, username, password, api_key):
+    async def discover_devices(
+        cls, username: str, password: str, api_key: str
+    ) -> list[dict[str, Any]]:
         """Discover all available devices for an account.
 
         Returns a list of device information dictionaries.
@@ -771,7 +842,7 @@ class AqualinkClient:
 
         return compatible_devices
 
-    async def _ensure_websocket_connection(self):
+    async def _ensure_websocket_connection(self) -> None:
         """Ensure we have an active websocket connection, creating one if needed.
         Implements retry logic to handle transient connection issues."""
         # Check if connection exists and is still valid
@@ -788,7 +859,7 @@ class AqualinkClient:
 
         # Reset failure counter on successful reconnection attempts
         max_retries = 3
-        retry_delay = 2  # seconds
+        retry_delay: float = 2  # seconds
 
         for attempt in range(max_retries):
             try:
@@ -878,7 +949,7 @@ class AqualinkClient:
                     _LOGGER.error(f"Failed to establish websocket connection after {max_retries} attempts: {e}")
                     raise
 
-    async def _close_websocket(self):
+    async def _close_websocket(self) -> None:
         """Close the websocket connection and session if they exist."""
         if self._ws_connection:
             try:
@@ -911,7 +982,7 @@ class AqualinkClient:
         self._last_ws_envelope = None
         self._last_applied_state_signature = None
 
-    async def _websocket_listener(self):
+    async def _websocket_listener(self) -> None:
         """Listen for real-time websocket updates and apply them via the coordinator push hook.
 
         Story C4-ws rewrote this method:
@@ -1082,11 +1153,15 @@ class AqualinkClient:
                 f"({applied_count} applied)"
             )
 
-    def set_coordinator_callback(self, callback):
+    def set_coordinator_callback(
+        self, callback: Callable[[], Awaitable[None]]
+    ) -> None:
         """Set the callback function to notify coordinator of real-time updates."""
         self._coordinator_callback = callback
 
-    def set_realtime_push_callback(self, callback):
+    def set_realtime_push_callback(
+        self, callback: Callable[[dict[str, Any]], Awaitable[None]]
+    ) -> None:
         """Set the push callback used by the WS listener (story C4-ws).
 
         The push callback is invoked with a deep-merged shadow envelope
@@ -1101,12 +1176,16 @@ class AqualinkClient:
         """
         self._realtime_push_callback = callback
 
-    def set_coordinator_reference(self, coordinator):
+    def set_coordinator_reference(
+        self, coordinator: AqualinkDataUpdateCoordinator
+    ) -> None:
         """Set reference to coordinator for adaptive polling control."""
         self._coordinator_ref = coordinator
 
     @staticmethod
-    def _deep_merge_dict(base: dict, overlay: dict) -> dict:
+    def _deep_merge_dict(
+        base: dict[str, Any], overlay: dict[str, Any]
+    ) -> dict[str, Any]:
         """Return a new dict with ``overlay`` overlaid onto ``base`` (story C4-ws).
 
         Recursive on nested dicts. Scalars and lists are replaced wholesale
@@ -1134,7 +1213,9 @@ class AqualinkClient:
         return result
 
     @staticmethod
-    def _parse_ws_state_message(message_json: dict) -> dict | None:
+    def _parse_ws_state_message(
+        message_json: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Extract the ``reported`` shadow document from an inbound WS message.
 
         Returns the ``payload.state.reported`` dict for messages we care about
@@ -1174,7 +1255,7 @@ class AqualinkClient:
         return reported
 
     @staticmethod
-    def _state_signature(robot_data: dict) -> tuple:
+    def _state_signature(robot_data: dict[str, Any]) -> tuple[Any, ...]:
         """Build a comparable signature of the ``equipment.robot`` fields that drive entity state (story C4-ws).
 
         The dedup check at AC #3 ("60 s of unchanged WS chatter → 0
@@ -1188,9 +1269,13 @@ class AqualinkClient:
         """
         if not isinstance(robot_data, dict):
             return ()
-        main = robot_data.get("main") if isinstance(robot_data.get("main"), dict) else {}
-        battery = robot_data.get("battery") if isinstance(robot_data.get("battery"), dict) else {}
-        errors = robot_data.get("errors") if isinstance(robot_data.get("errors"), dict) else {}
+
+        def _as_dict(value: Any) -> dict[str, Any]:
+            return value if isinstance(value, dict) else {}
+
+        main = _as_dict(robot_data.get("main"))
+        battery = _as_dict(robot_data.get("battery"))
+        errors = _as_dict(robot_data.get("errors"))
         return (
             robot_data.get("state"),
             robot_data.get("errorState"),
@@ -1216,7 +1301,7 @@ class AqualinkClient:
             errors.get("code"),
         )
 
-    async def _ws_subscribe(self):
+    async def _ws_subscribe(self) -> dict[str, Any] | None:
         """Subscribe via websocket to get live updates."""
         req = {
             "action": "subscribe",
@@ -1348,9 +1433,9 @@ class AqualinkClient:
                 return self._handle_model_fetch_failure()
 
             # Try to get model, if not found or None, return Unknown
-            model = data.get('model')
-            if model is not None and model != "":
-                self._model = str(model)  # Cache the successful result
+            features_model = data.get('model')
+            if features_model is not None and features_model != "":
+                self._model = str(features_model)  # Cache the successful result
                 self._model_fetch_attempts = 0  # Reset attempts on success
                 _LOGGER.debug(f"Successfully cached model from features API: {self._model}")
                 return self._model
@@ -1411,7 +1496,7 @@ class AqualinkClient:
 
         return self._model or "Unknown"
 
-    async def _update_i2d_robot(self):
+    async def _update_i2d_robot(self) -> dict[str, Any]:
         """Update status for i2d_robot type — HTTP fetch + protocol parse.
 
         R25-i2d (R27 fold): the 138-line god-function body now lives as
@@ -1421,21 +1506,22 @@ class AqualinkClient:
         serial); the protocol owns the request shape, the response
         decode, and the per-family side-effects.
         """
-        i2d = get_protocol("i2d_robot")
+        i2d = _i2d_protocol()
         status_request = {
             "command": "/command",
             "params": "request=OA11",
             "user_id": self._id,
         }
         data = await asyncio.wait_for(
-            self.post_command_i2d(i2d.i2d_url(self), status_request), timeout=30
+            self.post_command_i2d(i2d.i2d_url(self), status_request),
+            timeout=30,
         )
 
-        result = {}
+        result: dict[str, Any] = {}
         i2d.parse_status(self, data, result)
         return result
 
-    async def _update_other_robots(self):
+    async def _update_other_robots(self) -> dict[str, Any]:
         """Update status for non-i2d robot types."""
         try:
             data = await self._ws_subscribe()
@@ -1489,9 +1575,9 @@ class AqualinkClient:
                 "error_state": "update_failed"
             }
 
-        result = {
+        result: dict[str, Any] = {
             "serial_number": self._serial,
-            "device_type": self._device_type
+            "device_type": self._device_type,
         }
 
         try:
@@ -1562,7 +1648,9 @@ class AqualinkClient:
 
         return result
 
-    def _update_vr_robot_data(self, data, result):
+    def _update_vr_robot_data(
+        self, data: dict[str, Any], result: dict[str, Any]
+    ) -> None:
         """Update status for VR type robot — delegates to VRProtocol.parse_status.
 
         R25-vr: the parser body lives on ``VRProtocol`` so each device family
@@ -1572,18 +1660,22 @@ class AqualinkClient:
         package yet (the dispatch will collapse once all five R25 stories
         land — story R26).
         """
-        get_protocol("vr").parse_status(self, data, result)
+        _require_protocol("vr").parse_status(self, data, result)
 
-    def _update_cyclobat_robot_data(self, data, result):
+    def _update_cyclobat_robot_data(
+        self, data: dict[str, Any], result: dict[str, Any]
+    ) -> None:
         """Update status for cyclobat type robot — delegates to
         CycloBatProtocol.parse_status (story R25-cyclobat).
 
         Stable 2-line seam called by both the polled path
         (``fetch_status``) and the push path (``_apply_realtime_envelope``).
         """
-        get_protocol("cyclobat").parse_status(self, data, result)
+        _require_protocol("cyclobat").parse_status(self, data, result)
 
-    def _update_vortrax_robot_data(self, data, result):
+    def _update_vortrax_robot_data(
+        self, data: dict[str, Any], result: dict[str, Any]
+    ) -> None:
         """Update status for vortrax type robot — delegates to
         VortraxProtocol.parse_status (story R25-vortrax).
 
@@ -1592,18 +1684,26 @@ class AqualinkClient:
         path (``_apply_realtime_envelope``). The legacy method stays
         until story R26 (module split) collapses the dispatch.
         """
-        get_protocol("vortrax").parse_status(self, data, result)
+        _require_protocol("vortrax").parse_status(self, data, result)
 
-    def _update_cyclonext_robot_data(self, data, result):
+    def _update_cyclonext_robot_data(
+        self, data: dict[str, Any], result: dict[str, Any]
+    ) -> None:
         """Update status for cyclonext type robot — delegates to
         CycloNextProtocol.parse_status (story R25-cyclonext).
 
         Stable 2-line seam called by both the polled path
         (``fetch_status``) and the push path (``_apply_realtime_envelope``).
         """
-        get_protocol("cyclonext").parse_status(self, data, result)
+        _require_protocol("cyclonext").parse_status(self, data, result)
 
-    def _calculate_times(self, start_time, duration_minutes, result, robot_data=None):
+    def _calculate_times(
+        self,
+        start_time: datetime.datetime,
+        duration_minutes: int,
+        result: dict[str, Any],
+        robot_data: dict[str, Any] | None = None,
+    ) -> None:
         """Calculate end time and remaining time using stepper-based adjustments."""
         try:
             # Get stepper information for accurate timing calculation
@@ -1698,7 +1798,9 @@ class AqualinkClient:
             result["time_remaining"] = 0
             result["time_remaining_human"] = self._format_time_human(0, 0, 0)
 
-    def add_minutes_to_datetime(self, dt, minutes):
+    def add_minutes_to_datetime(
+        self, dt: datetime.datetime, minutes: int
+    ) -> datetime.datetime:
         """Add minutes to an aware datetime object.
 
         H8: rejects naive datetimes at the boundary so a future regression
@@ -1715,7 +1817,9 @@ class AqualinkClient:
             )
         return dt + datetime.timedelta(minutes=minutes)
 
-    async def send_login(self, data, headers):
+    async def send_login(
+        self, data: str | bytes, headers: dict[str, str]
+    ) -> dict[str, Any]:
         """Post a login request to the iaqualink_robots API.
 
         Surfaces Cognito-side credential rejection as ``AuthFailedError`` so
@@ -1757,13 +1861,17 @@ class AqualinkClient:
                             f"send_login returned non-JSON content type: {content_type}"
                         )
 
-                    return await response.json()
+                    body: dict[str, Any] = await response.json()
+                    return body
         except asyncio.CancelledError:
             if self._debug_mode:
                 _LOGGER.debug("Login request cancelled")
             raise  # Re-raise cancellation to preserve shutdown behavior
+        raise RuntimeError("send_login exited without returning")
 
-    async def get_devices(self, params, headers):
+    async def get_devices(
+        self, params: dict[str, Any], headers: dict[str, str]
+    ) -> list[dict[str, Any]]:
         """Get device list from the iaqualink_robots API.
 
         Implements the spec's Risks-clause mitigation: on HTTP 401, refresh
@@ -1787,13 +1895,15 @@ class AqualinkClient:
                             raise AuthFailedError(
                                 f"401 Unauthorized on {URL_GET_DEVICES} after re-auth retry"
                             )
-                        return await response.json()
+                        body: list[dict[str, Any]] = await response.json()
+                        return body
             except asyncio.CancelledError:
                 if self._debug_mode:
                     _LOGGER.debug("Get devices request cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
+        raise RuntimeError("get_devices exited without returning")
 
-    async def get_device_features(self, url):
+    async def get_device_features(self, url: str) -> dict[str, Any]:
         """Get device features from the iaqualink_robots API.
 
         Implements the spec's one-retry mitigation (see ``get_devices``).
@@ -1814,13 +1924,17 @@ class AqualinkClient:
                             raise AuthFailedError(
                                 f"401 Unauthorized on {url} after re-auth retry"
                             )
-                        return await response.json()
+                        body: dict[str, Any] = await response.json()
+                        return body
             except asyncio.CancelledError:
                 if self._debug_mode:
                     _LOGGER.debug("Get device features request cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
+        raise RuntimeError("get_device_features exited without returning")
 
-    async def get_device_status(self, request):
+    async def get_device_status(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Get device status from the iaqualink_robots API via websocket.
         Uses persistent websocket connection for improved performance and reliability."""
         max_retries = 2
@@ -1839,7 +1953,8 @@ class AqualinkClient:
                 if message.type == aiohttp.WSMsgType.TEXT:
                     # Reset consecutive failures on successful status update
                     self._ws_consecutive_failures = 0
-                    return message.json()
+                    body: dict[str, Any] = message.json()
+                    return body
                 elif message.type == aiohttp.WSMsgType.CLOSED:
                     _LOGGER.debug("Websocket connection closed during device status request")
                     await self._close_websocket()  # Clean up closed connection
@@ -1886,8 +2001,11 @@ class AqualinkClient:
                     await self._close_websocket()
                     # Return None instead of raising to let callers handle gracefully
                     return None
+        return None
 
-    async def post_command_i2d(self, url, request):
+    async def post_command_i2d(
+        self, url: str, request: dict[str, Any]
+    ) -> dict[str, Any]:
         """Send command to i2d robot via the iaqualink_robots API.
 
         Implements the spec's one-retry mitigation (see ``get_devices``).
@@ -1910,16 +2028,20 @@ class AqualinkClient:
                             raise AuthFailedError(
                                 f"401 Unauthorized on {url} after re-auth retry"
                             )
-                        return await response.json()
+                        body: dict[str, Any] = await response.json()
+                        return body
             except asyncio.CancelledError:
                 if self._debug_mode:
                     _LOGGER.debug("Post command i2d request cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
+        raise RuntimeError("post_command_i2d exited without returning")
 
-    async def set_cleaner_state(self, request):
+    async def set_cleaner_state(
+        self, request: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Set cleaner state via the iaqualink_robots API websocket.
         Implements resilient error handling to avoid device status disruption."""
-        response_data = None
+        response_data: dict[str, Any] | None = None
         max_retries = 2
 
         for attempt in range(max_retries):
@@ -1992,10 +2114,11 @@ class AqualinkClient:
         through. Single helper instead of 6 inlined try/except blocks
         also closes M2 (drift hazard if future patches forget one site).
         """
-        if not getattr(self, "_coordinator_callback", None):
+        callback = self._coordinator_callback
+        if callback is None:
             return
         try:
-            await self._coordinator_callback()
+            await callback()
         except asyncio.CancelledError:
             raise
         except ConfigEntryAuthFailed:
@@ -2008,11 +2131,11 @@ class AqualinkClient:
     def _build_state_request(
         self,
         action: str,
-        desired: dict,
+        desired: dict[str, Any],
         *,
         namespace: str | None = None,
         robot_key: str = "robot",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Build a StateController websocket request envelope (story R23).
 
         Collapses 21 near-identical envelope literals across the 11 command
@@ -2056,7 +2179,7 @@ class AqualinkClient:
             "target": self._serial,
         }
 
-    async def start_cleaning(self):
+    async def start_cleaning(self) -> dict[str, Any] | None:
         """Start the vacuum cleaning."""
         if self._device_type == "i2d_robot":
             # R25-i2d: i2d uses HTTP POST not WS. The protocol owns the
@@ -2068,7 +2191,7 @@ class AqualinkClient:
                 "cycle_start_time": now,
                 "activity": "cleaning"
             }
-            i2d = get_protocol("i2d_robot")
+            i2d = _i2d_protocol()
             await asyncio.wait_for(
                 self.post_command_i2d(i2d.i2d_url(self), i2d.start_payload(self)),
                 timeout=800,
@@ -2082,13 +2205,13 @@ class AqualinkClient:
             # a single ``protocol.start_payload(self)`` lookup.
             request = None
             if self._device_type == "vr":
-                request = get_protocol("vr").start_payload(self)
+                request = _require_protocol("vr").start_payload(self)
             elif self._device_type == "vortrax":
-                request = get_protocol("vortrax").start_payload(self)
+                request = _require_protocol("vortrax").start_payload(self)
             elif self._device_type == "cyclobat":
-                request = get_protocol("cyclobat").start_payload(self)
+                request = _require_protocol("cyclobat").start_payload(self)
             elif self._device_type == "cyclonext":
-                request = get_protocol("cyclonext").start_payload(self)
+                request = _require_protocol("cyclonext").start_payload(self)
 
             if request:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2112,8 +2235,9 @@ class AqualinkClient:
                 # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
                 # CancelledError; old inlined except-Exception swallowed reauth.
                 await self._safe_post_command_refresh()
+        return None
 
-    async def clear_desired_state(self):
+    async def clear_desired_state(self) -> None:
         """Clear the desired state to prevent auto-restart after natural cycle completion.
 
         When the robot finishes cleaning naturally, the cloud may still have
@@ -2127,7 +2251,9 @@ class AqualinkClient:
             return
 
         # R25-vr: VRProtocol.clear_desired_payload owns the per-family envelope.
-        request = get_protocol("vr").clear_desired_payload(self)
+        request = _require_protocol("vr").clear_desired_payload(self)
+        if request is None:
+            return
 
         try:
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2135,12 +2261,12 @@ class AqualinkClient:
         except Exception as e:
             _LOGGER.warning(f"Failed to clear desired state: {e}")
 
-    async def stop_cleaning(self):
+    async def stop_cleaning(self) -> dict[str, Any]:
         """Stop the vacuum cleaning."""
         request = None
         if self._device_type == "i2d_robot":
             # R25-i2d: stop_payload + i2d_url helper on the protocol.
-            i2d = get_protocol("i2d_robot")
+            i2d = _i2d_protocol()
             await asyncio.wait_for(
                 self.post_command_i2d(i2d.i2d_url(self), i2d.stop_payload(self)),
                 timeout=800,
@@ -2150,13 +2276,13 @@ class AqualinkClient:
             # R25 series (all 5 families): every branch dispatches through
             # ``get_protocol(<family>).stop_payload``.
             if self._device_type == "vr":
-                request = get_protocol("vr").stop_payload(self)
+                request = _require_protocol("vr").stop_payload(self)
             elif self._device_type == "vortrax":
-                request = get_protocol("vortrax").stop_payload(self)
+                request = _require_protocol("vortrax").stop_payload(self)
             elif self._device_type == "cyclobat":
-                request = get_protocol("cyclobat").stop_payload(self)
+                request = _require_protocol("cyclobat").stop_payload(self)
             elif self._device_type == "cyclonext":
-                request = get_protocol("cyclonext").stop_payload(self)
+                request = _require_protocol("cyclonext").stop_payload(self)
 
         # Create result with reset time values always, regardless of robot type.
         # H8 review follow-up: emit None for the two TIMESTAMP-classed sensors
@@ -2190,7 +2316,7 @@ class AqualinkClient:
 
         return reset_values
 
-    async def pause_cleaning(self):
+    async def pause_cleaning(self) -> dict[str, Any] | None:
         """Pause the vacuum cleaning."""
         if self._device_type == "i2d_robot":
             # i2d robots might not support pause - use stop instead
@@ -2203,31 +2329,33 @@ class AqualinkClient:
             # ``stop_cleaning``.)
             request = None
             if self._device_type == "vr":
-                request = get_protocol("vr").pause_payload(self)
+                request = _require_protocol("vr").pause_payload(self)
             elif self._device_type == "vortrax":
-                request = get_protocol("vortrax").pause_payload(self)
+                request = _require_protocol("vortrax").pause_payload(self)
             elif self._device_type == "cyclobat":
-                request = get_protocol("cyclobat").pause_payload(self)
+                request = _require_protocol("cyclobat").pause_payload(self)
             elif self._device_type == "cyclonext":
-                request = get_protocol("cyclonext").pause_payload(self)
+                request = _require_protocol("cyclonext").pause_payload(self)
 
-            if request:
+            if request is not None:
                 await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
                 # C4-cmd: one awaited refresh (see start_cleaning for rationale).
                 # C4-cmd review F1: helper re-raises ConfigEntryAuthFailed +
                 # CancelledError; old inlined except-Exception swallowed reauth.
                 await self._safe_post_command_refresh()
+        return None
 
-    async def return_to_base(self):
+    async def return_to_base(self) -> None:
         """Set the vacuum cleaner to return to the dock."""
         if self._device_type == "i2d_robot":
             # R25-i2d: return_to_base_payload + i2d_url helper.
-            i2d = get_protocol("i2d_robot")
+            i2d = _i2d_protocol()
+            i2d_request = i2d.return_to_base_payload(self)
+            if i2d_request is None:
+                return
             await asyncio.wait_for(
-                self.post_command_i2d(
-                    i2d.i2d_url(self), i2d.return_to_base_payload(self)
-                ),
+                self.post_command_i2d(i2d.i2d_url(self), i2d_request),
                 timeout=800,
             )
         elif self._device_type in ("vr", "vortrax", "cyclobat"):
@@ -2236,11 +2364,13 @@ class AqualinkClient:
             # instead of the ``setCleaningMode`` + ``main.ctrl`` shape its
             # other commands use) lives inside ``CycloBatProtocol`` now.
             if self._device_type == "vr":
-                request = get_protocol("vr").return_to_base_payload(self)
+                request = _require_protocol("vr").return_to_base_payload(self)
             elif self._device_type == "vortrax":
-                request = get_protocol("vortrax").return_to_base_payload(self)
+                request = _require_protocol("vortrax").return_to_base_payload(self)
             else:  # cyclobat
-                request = get_protocol("cyclobat").return_to_base_payload(self)
+                request = _require_protocol("cyclobat").return_to_base_payload(self)
+            if request is None:
+                return
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
             # C4-cmd: one awaited refresh (see start_cleaning for rationale).
@@ -2248,7 +2378,11 @@ class AqualinkClient:
             # CancelledError; old inlined except-Exception swallowed reauth.
             await self._safe_post_command_refresh()
 
-    def _extract_fan_speed_from_response(self, response_data, requested_fan_speed):
+    def _extract_fan_speed_from_response(
+        self,
+        response_data: dict[str, Any] | None,
+        requested_fan_speed: str,
+    ) -> str | None:
         """Extract current fan speed from a WS response, via the device's
         protocol.
 
@@ -2271,7 +2405,9 @@ class AqualinkClient:
             _LOGGER.debug(f"Error extracting fan speed from response: {e}")
             return None
 
-    async def set_fan_speed(self, fan_speed, fan_speed_list):
+    async def set_fan_speed(
+        self, fan_speed: str, fan_speed_list: list[str]
+    ) -> dict[str, Any] | None:
         """Set fan speed (cleaning mode) for the vacuum cleaner."""
         if fan_speed not in fan_speed_list:
             raise ValueError('Invalid fan speed')
@@ -2281,9 +2417,9 @@ class AqualinkClient:
         else:
             return await self._set_other_fan_speed(fan_speed)
 
-    async def _set_i2d_fan_speed(self, fan_speed):
+    async def _set_i2d_fan_speed(self, fan_speed: str) -> dict[str, Any] | None:
         """Set fan speed for i2d robot — delegates to I2DProtocol (R25-i2d)."""
-        i2d = get_protocol("i2d_robot")
+        i2d = _i2d_protocol()
         request = i2d.set_fan_speed_payload(self, fan_speed)
         if request is None:
             return None
@@ -2299,7 +2435,7 @@ class AqualinkClient:
 
         return {"success": False, "fan_speed": fan_speed}
 
-    async def _set_other_fan_speed(self, fan_speed):
+    async def _set_other_fan_speed(self, fan_speed: str) -> dict[str, Any]:
         """Set fan speed for non-i2d robots."""
         # R23: envelope literals collapsed to `_build_state_request` calls.
         # R25 series (all 4 WS families): every branch dispatches through
@@ -2309,13 +2445,13 @@ class AqualinkClient:
         # ``robot.1`` (str).
         request = None
         if self._device_type == "vr":
-            request = get_protocol("vr").set_fan_speed_payload(self, fan_speed)
+            request = _require_protocol("vr").set_fan_speed_payload(self, fan_speed)
 
         elif self._device_type == "vortrax":
-            request = get_protocol("vortrax").set_fan_speed_payload(self, fan_speed)
+            request = _require_protocol("vortrax").set_fan_speed_payload(self, fan_speed)
 
         elif self._device_type == "cyclobat":
-            request = get_protocol("cyclobat").set_fan_speed_payload(self, fan_speed)
+            request = _require_protocol("cyclobat").set_fan_speed_payload(self, fan_speed)
 
         elif self._device_type == "cyclonext":
             # R25-cyclonext: ``CycloNextProtocol.set_fan_speed_payload`` owns
@@ -2324,7 +2460,7 @@ class AqualinkClient:
             # The translation-key contract issue #76 originally tripped on
             # (display-name keys vs snake_case translation keys) is locked at
             # the protocol layer + by ``tests/protocols/test_cyclonext.py``.
-            request = get_protocol("cyclonext").set_fan_speed_payload(self, fan_speed)
+            request = _require_protocol("cyclonext").set_fan_speed_payload(self, fan_speed)
 
         if request:
             response_data = await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
@@ -2350,21 +2486,23 @@ class AqualinkClient:
 
         return {"success": False, "fan_speed": fan_speed, "error": "No valid request generated"}
 
-    async def _enter_remote_control_mode(self):
+    async def _enter_remote_control_mode(self) -> None:
         """Enter remote control mode by setting robot to pause state (state: 2)."""
         _LOGGER.debug("Entering remote control mode (state: 2)")
         # R23: envelope literal collapsed. state=2 enables remote control on vr/vortrax.
         request = self._build_state_request("setCleanerState", {"state": 2})
         await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
-    async def _exit_remote_control_mode(self):
+    async def _exit_remote_control_mode(self) -> None:
         """Exit remote control mode by setting robot to stopped state (state: 0)."""
         _LOGGER.debug("Exiting remote control mode (state: 0)")
         # R23: envelope literal collapsed. state=0 exits remote control.
         request = self._build_state_request("setCleanerState", {"state": 0})
         await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
 
-    async def _send_remote_command(self, rmt_ctrl_value, command_name="remote"):
+    async def _send_remote_command(
+        self, rmt_ctrl_value: int, command_name: str = "remote"
+    ) -> None:
         """Send a remote control command with optimized timeout."""
         # R23: envelope literal collapsed. Note the action is
         # `setRemoteSteeringControl` (not `setCleanerState`) — the cloud
@@ -2376,7 +2514,7 @@ class AqualinkClient:
         _LOGGER.debug(f"Sending {command_name} command (rmt_ctrl: {rmt_ctrl_value})")
         await asyncio.wait_for(self.set_cleaner_state(request), timeout=15)  # Shorter timeout, no artificial delays
 
-    async def remote_forward(self):
+    async def remote_forward(self) -> None:
         """Send forward command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote forward not supported for device type: {self._device_type}")
@@ -2389,7 +2527,7 @@ class AqualinkClient:
 
         await self._send_remote_command(1, "forward")
 
-    async def remote_backward(self):
+    async def remote_backward(self) -> None:
         """Send backward command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote backward not supported for device type: {self._device_type}")
@@ -2402,7 +2540,7 @@ class AqualinkClient:
 
         await self._send_remote_command(2, "backward")
 
-    async def remote_rotate_left(self):
+    async def remote_rotate_left(self) -> None:
         """Send rotate left command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote rotate left not supported for device type: {self._device_type}")
@@ -2415,7 +2553,7 @@ class AqualinkClient:
 
         await self._send_remote_command(4, "rotate left")
 
-    async def remote_rotate_right(self):
+    async def remote_rotate_right(self) -> None:
         """Send rotate right command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote rotate right not supported for device type: {self._device_type}")
@@ -2428,7 +2566,7 @@ class AqualinkClient:
 
         await self._send_remote_command(3, "rotate right")
 
-    async def remote_stop(self):
+    async def remote_stop(self) -> None:
         """Send stop command for VR and VortraX robots and exit remote control mode."""
         if self._device_type not in ["vr", "vortrax"]:
             _LOGGER.warning(f"Remote stop not supported for device type: {self._device_type}")
@@ -2442,7 +2580,7 @@ class AqualinkClient:
             await self._exit_remote_control_mode()
             self._remote_control_active = False
 
-    async def _adjust_stepper(self, delta_minutes: int) -> dict | None:
+    async def _adjust_stepper(self, delta_minutes: int) -> dict[str, Any] | None:
         """Adjust the stepper by ``delta_minutes`` (R24).
 
         Shared body for :meth:`add_fifteen_minutes` (+15) and
@@ -2484,7 +2622,7 @@ class AqualinkClient:
             }
 
         try:
-            if hasattr(self, "_last_timing_command_time"):
+            if self._last_timing_command_time is not None:
                 time_since_last = time.time() - self._last_timing_command_time
                 if time_since_last < 3:
                     remaining_cooldown = 3 - time_since_last
@@ -2569,11 +2707,11 @@ class AqualinkClient:
                 "message": f"Failed to {verb} {abs_delta} minutes: {str(e)}",
             }
 
-    async def add_fifteen_minutes(self):
+    async def add_fifteen_minutes(self) -> dict[str, Any] | None:
         """Add 15 minutes to cleaning time for VR and VortraX robots."""
         return await self._adjust_stepper(15)
 
-    async def reduce_fifteen_minutes(self):
+    async def reduce_fifteen_minutes(self) -> dict[str, Any] | None:
         """Reduce 15 minutes from cleaning time for VR and VortraX robots."""
         return await self._adjust_stepper(-15)
 
@@ -2581,7 +2719,13 @@ class AqualinkClient:
 class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     """Coordinator to poll AqualinkClient and update data."""
 
-    def __init__(self, hass, client: AqualinkClient, interval: float, debug_mode: bool = False):
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        client: AqualinkClient,
+        interval: float,
+        debug_mode: bool = False,
+    ) -> None:
         super().__init__(
             hass,
             _LOGGER,
@@ -2590,9 +2734,9 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         )
         self.client = client
         self.client.set_hass(hass)  # Set hass reference for translations
-        self._debug_mode = debug_mode
-        self._last_data = {}
-        self._consecutive_failures = 0
+        self._debug_mode: bool = debug_mode
+        self._last_data: dict[str, Any] = {}
+        self._consecutive_failures: int = 0
         # Wall-clock timestamp of the first failure in the current outage
         # streak (story H7). Set on the 0→1 transition of
         # ``_consecutive_failures`` and cleared back to ``None`` whenever
@@ -2601,7 +2745,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         # ``available=False`` — replaces the prior count-based gate which
         # could trigger after as little as 45 s of failures at the fast
         # adaptive polling rate.
-        self._first_failure_at: "datetime | None" = None
+        self._first_failure_at: datetime.datetime | None = None
         # Backs the public ``title`` property; set by ``__init__.py`` from
         # ``entry.title`` so entities and tests can read a stable display
         # name via the public API (story M15). Kept underscored so the
@@ -2610,27 +2754,27 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         # the subclass property here cleanly overrides it without an
         # attribute-shadowing surprise.
         self._title: str | None = None
-        self._setup_complete = False  # Flag to track if initial setup is complete
-        self._last_timing_command = 0  # Timestamp of last timing command for debouncing
+        self._setup_complete: bool = False
+        self._last_timing_command: float = 0
 
         # Adaptive polling for efficiency
-        self._base_interval = interval  # Store original interval (3 seconds)
-        self._fast_interval = 1.5  # Fast interval when robot is active
-        self._slow_interval = 10   # Slow interval when robot is idle
-        self._last_activity_time = 0
+        self._base_interval: float = interval  # Store original interval (3 seconds)
+        self._fast_interval: float = 1.5  # Fast interval when robot is active
+        self._slow_interval: float = 10  # Slow interval when robot is idle
+        self._last_activity_time: float = 0
 
         # Real-time websocket listener for instant updates
-        self._websocket_listener_task = None
+        self._websocket_listener_task: asyncio.Task[None] | None = None
 
         # P10: track every fire-and-forget task scheduled by entities so
         # ``cleanup()`` can cancel them deterministically on unload. Tasks
         # self-deregister via ``add_done_callback`` in ``schedule_task``.
-        self._pending_tasks: "set[asyncio.Task]" = set()
+        self._pending_tasks: set[asyncio.Task[Any]] = set()
 
         # P10 review F4: re-entry guard. ``cleanup()`` may be entered twice
         # under rapid OptionsFlow reload + entry removal; flip this on first
         # entry so the second call short-circuits before re-cancelling.
-        self._cleanup_done = False
+        self._cleanup_done: bool = False
 
         # Set up callback for real-time updates
         self.client.set_coordinator_callback(self._handle_realtime_update)
@@ -2730,7 +2874,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     # Persistent websocket connection provides resilient command execution
     # Automatic retry logic and circuit breaker patterns prevent device unavailability
 
-    async def _handle_realtime_update(self):
+    async def _handle_realtime_update(self) -> None:
         """Handle real-time updates from the websocket listener (story H10).
 
         Pre-H10 this routed through a custom ``_immediate_refresh`` that:
@@ -2769,7 +2913,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.debug(f"Error handling real-time update: {e}")
 
-    async def _apply_realtime_envelope(self, envelope: dict) -> None:
+    async def _apply_realtime_envelope(self, envelope: dict[str, Any]) -> None:
         """Apply a merged shadow envelope to coordinator state without polling (story C4-ws).
 
         Invoked by ``AqualinkClient._websocket_listener`` with the deep-merge of
@@ -2791,7 +2935,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         """
         try:
             client = self.client
-            result: dict = {
+            result: dict[str, Any] = {
                 "serial_number": client.serial,
                 "device_type": client.device_type,
             }
@@ -2880,7 +3024,9 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as e:  # noqa: BLE001 - listener task isolation
             _LOGGER.debug(f"Error applying realtime envelope: {e}")
 
-    def schedule_task(self, coro) -> "asyncio.Task":
+    def schedule_task(
+        self, coro: "Coroutine[Any, Any, Any]"
+    ) -> asyncio.Task[Any]:
         """Schedule a fire-and-forget coroutine and track it for cleanup.
 
         P10: callers that previously used ``asyncio.create_task(coro)`` should
@@ -2892,7 +3038,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         contract — entity classes (``vacuum.py``) consume it across module
         boundaries. Promoted from the private form by the P10 review.
         """
-        task = asyncio.create_task(coro)
+        task: asyncio.Task[Any] = asyncio.create_task(coro)
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
         return task
@@ -2950,7 +3096,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         # Drop any stragglers so the post-state matches the log.
         self._pending_tasks.clear()
 
-    async def _start_websocket_listener(self):
+    async def _start_websocket_listener(self) -> None:
         """Start the websocket listener task for real-time updates."""
         if self._websocket_listener_task and not self._websocket_listener_task.done():
             return  # Already running
@@ -2963,7 +3109,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.warning(f"Failed to start websocket listener: {e}")
 
-    async def _stop_websocket_listener(self):
+    async def _stop_websocket_listener(self) -> None:
         """Stop the websocket listener task.
 
         P10: bounded by a 5 s wait_for so a listener task that has not yet
@@ -2986,7 +3132,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                 )
             _LOGGER.debug("Stopped websocket listener")
 
-    def _update_polling_interval(self, data):
+    def _update_polling_interval(self, data: dict[str, Any]) -> None:
         """Adaptive polling interval based on robot activity to optimize CPU usage."""
         try:
             current_activity = data.get("activity", "idle")
@@ -3015,11 +3161,11 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as e:
             _LOGGER.debug(f"Error updating polling interval: {e}")
 
-    def _mark_recent_activity(self):
+    def _mark_recent_activity(self) -> None:
         """Mark recent activity to trigger faster polling temporarily."""
         self._last_activity_time = time.time()
 
-    async def _async_update_data(self):
+    async def _async_update_data(self) -> dict[str, Any]:
         try:
             # Check if this is the first call (initial setup)
             is_first_call = not hasattr(self, '_setup_complete') or not self._setup_complete
@@ -3146,49 +3292,51 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                     f"over {self._outage_age_seconds():.0f}s: {err}"
                 )
 
-    async def async_start_cleaning(self):
+    async def async_start_cleaning(self) -> None:
         """Start cleaning - centralized business logic."""
         await self.client.start_cleaning()
 
-    async def async_stop_cleaning(self):
+    async def async_stop_cleaning(self) -> None:
         """Stop cleaning - centralized business logic."""
         await self.client.stop_cleaning()
 
-    async def async_return_to_base(self):
+    async def async_return_to_base(self) -> None:
         """Return to base - centralized business logic."""
         await self.client.return_to_base()
 
-    async def _execute_remote_command(self, command_method):
+    async def _execute_remote_command(
+        self, command_method: Callable[[], Awaitable[None]]
+    ) -> None:
         """Execute a remote command with device type checking but no automatic refresh."""
         if self.client.device_type not in {"vr", "vortrax"}:
             return
         await command_method()
         # Remove automatic refresh to improve responsiveness - let normal polling handle updates
 
-    async def async_remote_forward(self):
+    async def async_remote_forward(self) -> None:
         """Send forward command to the robot for remote control - centralized business logic."""
         await self._execute_remote_command(self.client.remote_forward)
 
-    async def async_remote_backward(self):
+    async def async_remote_backward(self) -> None:
         """Send backward command to the robot for remote control - centralized business logic."""
         await self._execute_remote_command(self.client.remote_backward)
 
-    async def async_remote_rotate_left(self):
+    async def async_remote_rotate_left(self) -> None:
         """Send rotate left command to the robot for remote control - centralized business logic."""
         await self._execute_remote_command(self.client.remote_rotate_left)
 
-    async def async_remote_rotate_right(self):
+    async def async_remote_rotate_right(self) -> None:
         """Send rotate right command to the robot for remote control - centralized business logic."""
         await self._execute_remote_command(self.client.remote_rotate_right)
 
-    async def async_remote_stop(self):
+    async def async_remote_stop(self) -> None:
         """Send stop command to the robot for remote control - centralized business logic."""
         await self._execute_remote_command(self.client.remote_stop)
 
     async def _async_adjust_stepper(
         self,
         delta_minutes: int,
-        client_method,
+        client_method: Callable[[], Awaitable[dict[str, Any] | None]],
         success_message_default: str,
         failure_message_default: str,
     ) -> None:
@@ -3279,7 +3427,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
 
         await self.async_request_refresh()
 
-    async def async_add_fifteen_minutes(self):
+    async def async_add_fifteen_minutes(self) -> None:
         """Add 15 minutes to cleaning time - centralized business logic."""
         await self._async_adjust_stepper(
             15,
@@ -3288,7 +3436,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             "Failed to add 15 minutes.",
         )
 
-    async def async_reduce_fifteen_minutes(self):
+    async def async_reduce_fifteen_minutes(self) -> None:
         """Reduce 15 minutes from cleaning time - centralized business logic."""
         await self._async_adjust_stepper(
             -15,
@@ -3297,7 +3445,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             "Failed to reduce 15 minutes.",
         )
 
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         """Clean up resources when coordinator is being unloaded.
 
         P10: cancels the WS listener task (5 s ceiling), cancels every

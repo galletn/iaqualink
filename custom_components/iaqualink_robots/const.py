@@ -1,4 +1,6 @@
 """Constants used by IaqualinkRobots."""
+from __future__ import annotations
+
 from datetime import timedelta
 from typing import Final
 from homeassistant.const import Platform

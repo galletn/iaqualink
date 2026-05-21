@@ -1,9 +1,17 @@
 """Sensor platform for iaqualink_robots integration."""
+from __future__ import annotations
 
 import logging
 
+from typing import Any
+
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .coordinator import AqualinkClient, AqualinkDataUpdateCoordinator
 from .device import build_device_info
 from .types import IaqualinkConfigEntry
 
@@ -85,7 +93,11 @@ ALL_SENSOR_TYPES = [
 ]
 
 
-async def async_setup_entry(hass, entry: IaqualinkConfigEntry, async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: IaqualinkConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
     """Set up sensors for an entry, filtering based on robot type."""
     coordinator = entry.runtime_data.coordinator
     client = coordinator.client
@@ -117,15 +129,21 @@ async def async_setup_entry(hass, entry: IaqualinkConfigEntry, async_add_entitie
     async_add_entities(entities)
 
 
-class AqualinkSensor(CoordinatorEntity, SensorEntity):
+class AqualinkSensor(CoordinatorEntity[AqualinkDataUpdateCoordinator], SensorEntity):
     """Representation of a sensor tied to the vacuum data coordinator."""
 
-    def __init__(self, coordinator, client, key, name):
+    def __init__(
+        self,
+        coordinator: AqualinkDataUpdateCoordinator,
+        client: AqualinkClient,
+        key: str,
+        name: str,
+    ) -> None:
         super().__init__(coordinator)
-        self.coordinator = coordinator
+        self.coordinator: AqualinkDataUpdateCoordinator = coordinator
         self.client = client
         self._key = key
-        self._last_value = None  # Track last value for change detection
+        self._last_value: Any = None  # Track last value for change detection
 
         # Use Home Assistant's translation system for sensor names
         # Don't set _attr_name - let HA translate using translation_key
@@ -149,7 +167,7 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
         self._attr_has_entity_name = True
 
     @property
-    def native_value(self):
+    def native_value(self) -> Any:
         """Return the current value with resilient handling for temporary data unavailability."""
         # Check if we have coordinator data and it's not in an error state
         if self.coordinator.data:
@@ -198,7 +216,7 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
             return getattr(self, '_last_value', None)
 
     @property
-    def available(self):
+    def available(self) -> bool:
         """Sensor stays available across short cloud blips, unavailable on long outage.
 
         H7: pre-rewrite this only checked ``coordinator.data is not None``,
@@ -215,7 +233,7 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
         )
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Expose the ``restored`` flag (H7, AC #3).
 
         ``True`` whenever the sensor's last update came from the
@@ -228,5 +246,5 @@ class AqualinkSensor(CoordinatorEntity, SensorEntity):
         return {"restored": self.coordinator.is_serving_stale_data}
 
     @property
-    def device_info(self):
+    def device_info(self) -> DeviceInfo:
         return build_device_info(self.coordinator)

@@ -1,12 +1,17 @@
 """Button entities for iaqualink_robots integration."""
+from __future__ import annotations
+
 import logging
+
+from typing import Any
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .coordinator import AqualinkDataUpdateCoordinator
+from .coordinator import AqualinkClient, AqualinkDataUpdateCoordinator
 from .device import build_device_info
 from .types import IaqualinkConfigEntry
 
@@ -38,7 +43,7 @@ async def async_setup_entry(
         async_add_entities(buttons)
 
 
-class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
+class AqualinkRemoteButton(CoordinatorEntity[AqualinkDataUpdateCoordinator], ButtonEntity):
     """Button entity for remote control commands."""
 
     # P11: HA 2024+ entity-naming. With these two class attributes plus
@@ -52,7 +57,14 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
     # the button half of the user complaint.
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: AqualinkDataUpdateCoordinator, client, command: str, translation_key: str, icon: str):
+    def __init__(
+        self,
+        coordinator: AqualinkDataUpdateCoordinator,
+        client: AqualinkClient,
+        command: str,
+        translation_key: str,
+        icon: str,
+    ) -> None:
         """Initialize the button."""
         super().__init__(coordinator)
         self._client = client
@@ -71,12 +83,12 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         self._attr_translation_key = translation_key
 
     @property
-    def device_info(self):
+    def device_info(self) -> DeviceInfo:
         """Defer to the shared device-registry hook so all platforms group together."""
         return build_device_info(self.coordinator)
 
     @property
-    def available(self):
+    def available(self) -> bool:
         """Button stays available across short cloud blips, unavailable on long outage.
 
         H7: pre-rewrite this only checked ``coordinator.data is not None``,
@@ -93,7 +105,7 @@ class AqualinkRemoteButton(CoordinatorEntity, ButtonEntity):
         )
 
     @property
-    def extra_state_attributes(self):
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Expose the ``restored`` flag (H7, AC #3).
 
         ``True`` whenever the button's last coordinator update came from

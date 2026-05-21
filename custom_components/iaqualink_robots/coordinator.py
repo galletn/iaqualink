@@ -14,7 +14,7 @@ import time
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, cast
 
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -1085,19 +1085,25 @@ class AqualinkClient:
                     # we apply. ACK / error / heartbeat messages are
                     # recognised + classified above so they don't trip the
                     # "unknown shape" DEBUG log, but they have no payload
-                    # for us to act on here.
+                    # for us to act on here. The runtime ``service`` check
+                    # narrows the value to a state envelope; mypy can't
+                    # prove TypedDict-union narrowing through a ``.get()``
+                    # call so the explicit ``cast`` here documents the
+                    # invariant without a runtime cost (TypedDict is just
+                    # a dict at runtime, ``cast`` is a no-op).
                     if typed_payload.get("service") != "StateStreamer":
                         continue
+                    state_envelope = cast(WSStateEnvelope, typed_payload)
                     # P12 AC #3: top-level field validation — warns once
                     # per missing field per process so cloud-shape drift
                     # surfaces with an actionable log line.
-                    if not validate_state_envelope_fields(typed_payload):
+                    if not validate_state_envelope_fields(state_envelope):
                         continue
                     # AC #1 (original C4-ws intake filter): extract the
                     # reported delta from the typed envelope. ``None`` here
                     # covers StateReported envelopes with no
                     # ``equipment.robot`` content (status-only pings).
-                    inbound_reported = self._parse_ws_state_message(typed_payload)
+                    inbound_reported = self._parse_ws_state_message(state_envelope)
                     if inbound_reported is None:
                         continue
 
@@ -1308,7 +1314,10 @@ class AqualinkClient:
             # No equipment.robot content → nothing to apply. Heartbeats and
             # status-only messages land here.
             return None
-        return reported
+        # ``reported`` is a TypedDict in the WSStateEnvelope path; widen to
+        # the legacy ``dict[str, Any]`` return shape downstream consumers
+        # (``_deep_merge_dict``, ``_apply_realtime_envelope``) expect.
+        return cast(dict[str, Any], reported)
 
     @staticmethod
     def _state_signature(robot_data: dict[str, Any]) -> tuple[Any, ...]:

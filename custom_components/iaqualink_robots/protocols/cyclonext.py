@@ -124,21 +124,19 @@ class CycloNextProtocol(RobotProtocol):
         payload: dict[str, Any],
         requested_fan_speed: str,
     ) -> str | None:
-        try:
-            robot_state = (
-                payload.get("payload", {})
-                .get("robot", {})
-                .get("state", {})
-                .get("reported", {})
-                .get("equipment", {})
-                .get("robot.1", {})
-            )
-            cycle = robot_state.get("cycle")
-            if cycle is None:
-                return None
-            return _CYCLONEXT_CYCLE_TO_FAN_SPEED.get(cycle, requested_fan_speed)
-        except Exception:  # noqa: BLE001
+        """R25-followup P3: coordinator owns the outer try/except."""
+        robot_state = (
+            payload.get("payload", {})
+            .get("robot", {})
+            .get("state", {})
+            .get("reported", {})
+            .get("equipment", {})
+            .get("robot.1", {})
+        )
+        cycle = robot_state.get("cycle")
+        if cycle is None:
             return None
+        return _CYCLONEXT_CYCLE_TO_FAN_SPEED.get(cycle, requested_fan_speed)
 
     # -- Status parser -----------------------------------------------------
 
@@ -191,10 +189,16 @@ class CycloNextProtocol(RobotProtocol):
         except (KeyError, TypeError):
             result["error_state"] = "unknown"
 
+        # R25-followup P7: tighten except scope. ``KeyError`` covers older
+        # models that don't expose ``totRunTime`` (documented pre-existing
+        # behaviour); ``TypeError`` covers ``robot_data`` not being a dict.
+        # Other exceptions (e.g., the field is a string that arithmetic
+        # downstream would choke on) are no longer silently zeroed —
+        # they bubble to the broader parse_status broad-except where
+        # they're logged at DEBUG.
         try:
             result["total_hours"] = robot_data['totRunTime']
-        except Exception:
-            # Not supported by some cyclonext models.
+        except (KeyError, TypeError):
             result["total_hours"] = 0
 
         # H8: aware-UTC datetime objects emitted directly. H8 review

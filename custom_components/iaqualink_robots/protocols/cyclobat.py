@@ -125,22 +125,33 @@ class CycloBatProtocol(RobotProtocol):
         payload: dict[str, Any],
         requested_fan_speed: str,
     ) -> str | None:
-        try:
-            main = (
-                payload.get("payload", {})
-                .get("robot", {})
-                .get("state", {})
-                .get("reported", {})
-                .get("equipment", {})
-                .get("robot", {})
-                .get("main", {})
-            )
-            mode = main.get("mode")
-            if mode is None:
-                return None
-            return _CYCLOBAT_MODE_TO_FAN_SPEED.get(mode, requested_fan_speed)
-        except Exception:  # noqa: BLE001
+        """R25-followup P3: coordinator owns the outer try/except.
+
+        R25-followup P5: coerce ``mode`` to ``int`` before dict lookup.
+        Cyclobat sends string values (``"0"`` – ``"3"``) in
+        ``set_fan_speed_payload`` but the cloud has historically
+        round-tripped the desired value back as an int in the reported
+        state. If firmware ever echoes the string verbatim, the silent
+        fallback to ``requested_fan_speed`` masked the drift; explicit
+        int coercion makes both shapes work.
+        """
+        main = (
+            payload.get("payload", {})
+            .get("robot", {})
+            .get("state", {})
+            .get("reported", {})
+            .get("equipment", {})
+            .get("robot", {})
+            .get("main", {})
+        )
+        mode = main.get("mode")
+        if mode is None:
             return None
+        try:
+            mode = int(mode)
+        except (TypeError, ValueError):
+            pass
+        return _CYCLOBAT_MODE_TO_FAN_SPEED.get(mode, requested_fan_speed)
 
     # -- Status parser -----------------------------------------------------
 
@@ -256,6 +267,15 @@ class CycloBatProtocol(RobotProtocol):
                     cycle_duration = cycles_data['smartTim']['duration']
                 elif cycle_type == 3:  # Waterline
                     cycle_duration = cycles_data['waterlineTim']['duration']
+                else:
+                    # R25-followup P6: log unrecognised endCycleType so a
+                    # future firmware adding e.g. type 4 is observable in
+                    # user-submitted diagnostics rather than silently
+                    # surfacing as a zero-duration cycle.
+                    _LOGGER.warning(
+                        "Unknown cyclobat endCycleType: %s — cycle_duration will be 0",
+                        cycle_type,
+                    )
 
                 if cycle_duration is not None:
                     result["cycle_duration"] = cycle_duration

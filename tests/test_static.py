@@ -35,7 +35,15 @@ PACKAGE = (
     Path(__file__).parent.parent / "custom_components" / "iaqualink_robots"
 )
 
-_ALL_PYTHON_FILES = sorted(PACKAGE.glob("*.py"))
+_ALL_PYTHON_FILES = sorted(
+    p
+    for p in PACKAGE.rglob("*.py")
+    if "__pycache__" not in p.parts
+)
+assert _ALL_PYTHON_FILES, (
+    "Static-grep guards have no files to scan — _ALL_PYTHON_FILES is empty. "
+    "Verify PACKAGE points at the integration directory and that *.py files exist."
+)
 
 # Match ``client._serial`` / ``client._device_type`` / ``self.client._serial`` /
 # ``self._client._serial`` etc. The optional ``_?`` before ``client`` catches

@@ -90,21 +90,19 @@ class VortraxProtocol(RobotProtocol):
         payload: dict[str, Any],
         requested_fan_speed: str,
     ) -> str | None:
-        try:
-            robot_state = (
-                payload.get("payload", {})
-                .get("robot", {})
-                .get("state", {})
-                .get("reported", {})
-                .get("equipment", {})
-                .get("robot", {})
-            )
-            pr_cyc = robot_state.get("prCyc")
-            if pr_cyc is None:
-                return None
-            return _VORTRAX_PRCYC_TO_FAN_SPEED.get(pr_cyc, requested_fan_speed)
-        except Exception:  # noqa: BLE001
+        """R25-followup P3: coordinator owns the outer try/except."""
+        robot_state = (
+            payload.get("payload", {})
+            .get("robot", {})
+            .get("state", {})
+            .get("reported", {})
+            .get("equipment", {})
+            .get("robot", {})
+        )
+        pr_cyc = robot_state.get("prCyc")
+        if pr_cyc is None:
             return None
+        return _VORTRAX_PRCYC_TO_FAN_SPEED.get(pr_cyc, requested_fan_speed)
 
     # -- Status parser -----------------------------------------------------
 

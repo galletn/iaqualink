@@ -247,6 +247,32 @@ def test_parse_payload_tolerates_spaces_in_hex_string() -> None:
     assert frame.time_remaining == 30
 
 
+@pytest.mark.parametrize(
+    "delimiter",
+    [
+        "\t",       # tab
+        "\n",       # newline
+        "\r\n",     # CRLF
+        " \t \n ",  # mixed whitespace
+    ],
+)
+def test_parse_payload_tolerates_arbitrary_whitespace(delimiter: str) -> None:
+    """R25-followup P8: ``parse_i2d_payload`` strips ALL whitespace, not
+    just spaces. Pre-fix the ``hex_str.replace(" ", "")`` shape would
+    silently fail on tabs / newlines / CRLF — surfacing as
+    ``error_state=update_failed`` rather than parsing cleanly. Real-
+    world diagnostic dumps mix in tabs and newlines.
+    """
+    from custom_components.iaqualink_robots.protocols.i2d import parse_i2d_payload
+
+    bytes_str = ["00", "00", "04", "00", "00", "1E", "78", "00", "00",
+                 "88", "13", "00", "AA", "BB", "CC", "11", "22", "33"]
+    hex_with_whitespace = delimiter.join(bytes_str)
+    frame = parse_i2d_payload(hex_with_whitespace)
+    assert frame.state == "Actively cleaning"
+    assert frame.time_remaining == 30
+
+
 def test_parse_payload_wrong_length_raises_value_error() -> None:
     """Spec AC #5: malformed hex → clean exception."""
     from custom_components.iaqualink_robots.protocols.i2d import parse_i2d_payload

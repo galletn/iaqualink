@@ -181,7 +181,11 @@ def parse_i2d_payload(hex_str: str) -> ParsedI2DFrame:
     Each parsed field is documented inline against the 18 byte
     positions in the cloud's response shape.
     """
-    hex_str = hex_str.replace(" ", "")
+    # R25-followup P8: strip ALL whitespace (tabs, newlines, etc.), not
+    # just spaces. Real-world cloud diagnostic dumps mix in tabs and
+    # newlines; pre-fix these tripped ``bytes.fromhex`` and surfaced as
+    # update_failed instead of being normalised silently like spaces.
+    hex_str = "".join(hex_str.split())
     if len(hex_str) != I2D_PAYLOAD_HEX_LENGTH:
         raise ValueError(
             f"Expected {I2D_PAYLOAD_HEX_LENGTH} hex characters; "
@@ -334,10 +338,18 @@ class I2DProtocol(RobotProtocol):
         vacuum entity's enum mirror.
 
         The ``error → activity`` mapping is unique to i2d: a non-zero
-        ``error_code`` flips activity to ``"error"`` (the only family
-        that does this — VR/Vortrax/cyclobat/cyclonext route errors
-        through their ``error_state`` field but keep activity at
-        idle/cleaning/returning).
+        ``error_code`` *combined with non-cleaning state_code* flips
+        activity to ``"error"`` (the only family that does this —
+        VR/Vortrax/cyclobat/cyclonext route errors through their
+        ``error_state`` field but keep activity at idle/cleaning/
+        returning).
+
+        **State wins over error**: if ``state_code in (0x02, 0x04)``
+        (cleaning) AND ``error_code != 0x00`` simultaneously, the
+        activity branch resolves to ``"cleaning"`` — the cleaning
+        check is evaluated first. This matches pre-R25 inline
+        behaviour exactly. R25-followup P11 corrects an earlier
+        docstring claim that said error was always-wins.
         """
         # Seed default-not-set keys so the caller always sees a
         # well-formed result even on parse failure.
@@ -346,13 +358,18 @@ class I2DProtocol(RobotProtocol):
         result.setdefault("status", "offline")
 
         try:
+            # R25-followup P10: a non-status request response (e.g.
+            # a fan-speed-set ACK) still means we reached the cloud,
+            # so promote ``status`` to ``"connected"`` BEFORE the
+            # bail-out. Pre-fix the seeded ``"offline"`` survived the
+            # bail and surfaced an offline-status entity even though
+            # the device was responsive.
+            if data.get("command") is not None:
+                result["status"] = "connected"
             if data.get("command", {}).get("request") != "OA11":
                 # Not a status response — the caller asked for a
-                # non-status command (e.g. a fan-speed set ACK).
-                # Nothing to parse out of the body.
+                # non-status command. Nothing to parse out of the body.
                 return
-
-            result["status"] = "connected"
             debug = data.get("command", {}).get("response", "")
             result["debug"] = str(debug) if client._debug_mode else ""
 
@@ -406,7 +423,15 @@ class I2DProtocol(RobotProtocol):
                     frame.time_remaining // 60, frame.time_remaining % 60, 0
                 )
 
-        except Exception as e:
+        except (ValueError, KeyError, AttributeError, TypeError) as e:
+            # R25-followup P9: narrowed from bare ``except Exception``.
+            # The realistic failure modes for the body above are
+            # ``ValueError`` (from ``parse_i2d_payload`` on malformed
+            # hex), ``KeyError`` (unexpected response shape), and
+            # ``AttributeError`` / ``TypeError`` (``data`` is not a dict).
+            # Catching ``BaseException``-shaped surprises (``CancelledError``
+            # on HA shutdown) was both unnecessary and harmful — they
+            # need to propagate.
             if client._debug_mode:
                 _LOGGER.error(f"Error updating i2d robot status: {e}")
             if isinstance(data, dict) and data.get("status") == "500":

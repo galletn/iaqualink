@@ -83,21 +83,23 @@ class VRProtocol(RobotProtocol):
         payload: dict[str, Any],
         requested_fan_speed: str,
     ) -> str | None:
-        try:
-            robot_state = (
-                payload.get("payload", {})
-                .get("robot", {})
-                .get("state", {})
-                .get("reported", {})
-                .get("equipment", {})
-                .get("robot", {})
-            )
-            pr_cyc = robot_state.get("prCyc")
-            if pr_cyc is None:
-                return None
-            return _VR_PRCYC_TO_FAN_SPEED.get(pr_cyc, requested_fan_speed)
-        except Exception:  # noqa: BLE001 — cloud response shape may drift
+        """R25-followup P3: removed protocol-side ``try/except Exception``.
+        Single source-of-truth try/except now lives at the coordinator's
+        ``_extract_fan_speed_from_response`` wrapper — double-swallow
+        previously masked cloud-shape drift.
+        """
+        robot_state = (
+            payload.get("payload", {})
+            .get("robot", {})
+            .get("state", {})
+            .get("reported", {})
+            .get("equipment", {})
+            .get("robot", {})
+        )
+        pr_cyc = robot_state.get("prCyc")
+        if pr_cyc is None:
             return None
+        return _VR_PRCYC_TO_FAN_SPEED.get(pr_cyc, requested_fan_speed)
 
     # -- Status parser -----------------------------------------------------
 

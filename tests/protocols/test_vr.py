@@ -104,6 +104,30 @@ def test_dispatch_returns_vr_protocol_for_vr() -> None:
     assert protocol.namespace == "vr"
 
 
+def test_dispatch_returns_vr_protocol_for_cyclonext_vr() -> None:
+    """R25-followup D1: ``cyclonext_vr`` is a VR-family variant per
+    R25-vr story spec line 21 ("vr + cyclonext_vr variants — they share
+    most of the protocol") and must dispatch to the same ``VRProtocol``
+    instance. The R25-vr implementation initially dropped this; the
+    follow-up registers it defensively. If a future audit identifies
+    real cyclonext_vr behavioural divergence from VR, swap this entry
+    for a dedicated CycloNextVRProtocol subclass.
+    """
+    from custom_components.iaqualink_robots.protocols import (
+        VRProtocol,
+        get_protocol,
+    )
+
+    cyclonext_vr_protocol = get_protocol("cyclonext_vr")
+    vr_protocol = get_protocol("vr")
+    assert cyclonext_vr_protocol is not None
+    assert isinstance(cyclonext_vr_protocol, VRProtocol)
+    # Same singleton — both keys point to the SAME instance so any future
+    # in-place mutation (none expected today; protocols are stateless)
+    # would propagate to both.
+    assert cyclonext_vr_protocol is vr_protocol
+
+
 def test_dispatch_returns_none_for_unknown_device_type() -> None:
     """Defence-in-depth: ``get_protocol`` returns ``None`` for an
     unrecognised ``device_type`` string. Post-Epic-9 every known

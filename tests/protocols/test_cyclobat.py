@@ -268,6 +268,48 @@ def test_extract_fan_speed_returns_none_when_main_missing() -> None:
     assert decoded is None
 
 
+@pytest.mark.parametrize(
+    "mode_value,expected_key",
+    [
+        # R25-followup P5: cyclobat's ``set_fan_speed_payload`` sends string
+        # values ("0"-"3"); the cloud has historically round-tripped as int
+        # in the reported state, but if firmware ever echoes the string
+        # verbatim the decoder must still work. Without the int-coerce in
+        # ``extract_fan_speed_from_response`` these would silently fall
+        # back to the requested_fan_speed default.
+        ("0", "floor_only"),
+        ("1", "floor_and_walls"),
+        ("2", "smart_floor_and_walls"),
+        ("3", "wall_only"),
+    ],
+)
+def test_extract_fan_speed_coerces_string_mode_to_int(
+    mode_value: str, expected_key: str
+) -> None:
+    """R25-followup P5: string ``mode`` values are coerced to int before
+    the dict lookup. Pre-fix the cloud could echo ``"3"`` and the decoder
+    would mis-translate it as ``requested_fan_speed`` instead of
+    ``wall_only`` — silent fan-speed-drift on the polled path.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    response_data = {
+        "payload": {
+            "robot": {
+                "state": {
+                    "reported": {
+                        "equipment": {"robot": {"main": {"mode": mode_value}}},
+                    },
+                },
+            },
+        },
+    }
+    decoded = get_protocol("cyclobat").extract_fan_speed_from_response(
+        response_data, requested_fan_speed="floor_only"
+    )
+    assert decoded == expected_key
+
+
 # ---------------------------------------------------------------------------
 # parse_status — cyclobat has rich nested state (battery / stats /
 # lastCycle / cycles).
@@ -432,6 +474,41 @@ def test_parse_status_cycle_duration_picks_correct_slot(
         client, _cyclobat_payload(end_cycle_type=end_cycle_type), result
     )
     assert result["cycle_duration"] == expected_duration
+
+
+def test_parse_status_unknown_end_cycle_type_logs_warning(caplog) -> None:
+    """R25-followup P6: a firmware upgrade introducing an
+    ``endCycleType`` outside the documented 0/1/2/3 quartet (e.g. ``4``)
+    silently fell through to ``cycle_duration=0`` pre-fix — the user saw
+    a never-cleaned-looking entity even though ``cycleStartTime > 0``.
+    Now the parser logs a WARNING so the value surfaces in user-submitted
+    diagnostics.
+    """
+    import logging
+
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    caplog.set_level(
+        logging.WARNING,
+        logger="custom_components.iaqualink_robots.protocols.cyclobat",
+    )
+    get_protocol("cyclobat").parse_status(
+        client, _cyclobat_payload(end_cycle_type=4), result
+    )
+    # cycle_duration still falls back to 0 (no behaviour change for
+    # downstream sensors), but the operator can see the warning in the
+    # log.
+    assert result["cycle_duration"] == 0
+    warning_records = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "Unknown cyclobat endCycleType" in r.message
+    ]
+    assert warning_records, (
+        "Expected WARNING about unknown cyclobat endCycleType=4; got: "
+        f"{[r.message for r in caplog.records]}"
+    )
 
 
 def test_parse_status_never_cleaned() -> None:

@@ -2076,9 +2076,10 @@ class AqualinkClient:
             return result  # Return the time values to be used in the coordinator's update
         else:
             # R23: envelope literals collapsed to `_build_state_request` calls.
-            # R25-vr / R25-vortrax: vr and vortrax route through their
-            # protocol's start_payload. Cyclobat and cyclonext stay inline
-            # until their R25 story lands.
+            # R25 series (all 5 families): every branch dispatches through
+            # ``get_protocol(<family>)``; the if/elif here is the remaining
+            # device-type dispatch that R26 (module split) will collapse to
+            # a single ``protocol.start_payload(self)`` lookup.
             request = None
             if self._device_type == "vr":
                 request = get_protocol("vr").start_payload(self)
@@ -2146,7 +2147,8 @@ class AqualinkClient:
             )
         else:
             # R23: envelope literals collapsed to `_build_state_request` calls.
-            # R25-vr / R25-vortrax: both route through their protocol.
+            # R25 series (all 5 families): every branch dispatches through
+            # ``get_protocol(<family>).stop_payload``.
             if self._device_type == "vr":
                 request = get_protocol("vr").stop_payload(self)
             elif self._device_type == "vortrax":
@@ -2195,7 +2197,10 @@ class AqualinkClient:
             return await self.stop_cleaning()
         else:
             # R23: envelope literals collapsed to `_build_state_request` calls.
-            # R25-vr / R25-vortrax: both route through their protocol.
+            # R25 series (all 4 WS families): every branch dispatches through
+            # ``get_protocol(<family>).pause_payload``. (i2d's pause shares
+            # the stop body and is handled above by delegating to
+            # ``stop_cleaning``.)
             request = None
             if self._device_type == "vr":
                 request = get_protocol("vr").pause_payload(self)
@@ -2297,11 +2302,11 @@ class AqualinkClient:
     async def _set_other_fan_speed(self, fan_speed):
         """Set fan speed for non-i2d robots."""
         # R23: envelope literals collapsed to `_build_state_request` calls.
-        # R25-vr: vr routes through VRProtocol.set_fan_speed_payload; vortrax
-        # / cyclobat / cyclonext stay inline until their R25 stories land.
-        # Per-device fields preserved exactly: vr/vortrax use `prCyc` (int),
-        # cyclobat uses `main.mode` (str), cyclonext uses `cycle` under
-        # `robot.1` (str).
+        # R25 series (all 4 WS families): every branch dispatches through
+        # ``get_protocol(<family>).set_fan_speed_payload``. Per-family fields
+        # remain distinct inside each protocol: vr/vortrax use ``prCyc`` (int),
+        # cyclobat uses ``main.mode`` (str), cyclonext uses ``cycle`` under
+        # ``robot.1`` (str).
         request = None
         if self._device_type == "vr":
             request = get_protocol("vr").set_fan_speed_payload(self, fan_speed)

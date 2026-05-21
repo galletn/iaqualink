@@ -241,7 +241,7 @@ class I2DProtocol(RobotProtocol):
         uses HTTP POST instead of the WebSocket shadow stream.
         """
         return (
-            f"https://r-api.iaqualink.net/v2/devices/{client._serial}/control.json"
+            f"https://r-api.iaqualink.net/v2/devices/{client.serial}/control.json"
         )
 
     # -- Envelope builders (HTTP-body dicts, not WS envelopes) -----------
@@ -353,8 +353,8 @@ class I2DProtocol(RobotProtocol):
         """
         # Seed default-not-set keys so the caller always sees a
         # well-formed result even on parse failure.
-        result.setdefault("serial_number", str(client._serial))
-        result.setdefault("device_type", str(client._device_type))
+        result.setdefault("serial_number", str(client.serial))
+        result.setdefault("device_type", str(client.device_type))
         result.setdefault("status", "offline")
 
         try:

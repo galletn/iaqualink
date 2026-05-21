@@ -528,9 +528,16 @@ def test_parse_status_just_started_cleaning_counts_as_cleaning() -> None:
 
 def test_parse_status_non_status_request_returns_without_parsing() -> None:
     """When the response is from a non-status request (e.g. a
-    fan-speed set command), parse_status bails after seeding the
+    fan-speed-set command), parse_status bails after seeding the
     default keys. The body isn't a status hex frame so it can't be
     parsed.
+
+    R25-followup P10 (2026-05-21): the bail now flips ``status`` to
+    ``"connected"`` BEFORE returning, because the cloud DID respond to
+    the non-status request — the device is reachable, just not the
+    OA11 status response we'd parse. Pre-fix the seeded ``"offline"``
+    default leaked through and surfaced a falsely-offline device card
+    on every fan-speed change.
     """
     from custom_components.iaqualink_robots.protocols import get_protocol
 
@@ -541,7 +548,11 @@ def test_parse_status_non_status_request_returns_without_parsing() -> None:
         {"command": {"request": "0A1240", "response": "ack"}},
         result,
     )
-    assert result["status"] == "offline"
+    # Non-status request → cloud was reachable → connected.
+    assert result["status"] == "connected"
+    # But still no parsed body fields (no activity, no state, no error).
+    assert "activity" not in result
+    assert "state_code" not in result
     assert "activity" not in result
 
 

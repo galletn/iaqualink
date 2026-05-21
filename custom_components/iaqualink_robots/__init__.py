@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections.abc
 import logging
 from typing import Any
 
@@ -20,8 +21,8 @@ from .const import (
     PLATFORMS,
 )
 from .repairs import (
-    LEGACY_SERVICE_REPAIR_FLAG,
     LEGACY_SERVICE_REPAIR_ISSUE_ID,
+    async_is_legacy_service_dismissed,
 )
 from .types import IaqualinkConfigEntry, IaqualinkData
 
@@ -76,12 +77,14 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     P8 AC #4 — future cleanup: the next-major-version migration block
     should call ``ir.async_delete_issue(hass, DOMAIN,
-    LEGACY_SERVICE_REPAIR_ISSUE_ID)`` and strip the
-    ``LEGACY_SERVICE_REPAIR_FLAG`` from ``entry.data`` so the one-time
-    "service behaviour change" notification is cleared for everyone who
-    upgraded through 3.0. The infrastructure (flag in entry.data, issue
-    registered against the domain) is in place from P8; only the cleanup
-    step lands with whatever story bumps the schema next.
+    LEGACY_SERVICE_REPAIR_ISSUE_ID)`` and remove the per-installation
+    dismissal Store via ``Store(hass, _LEGACY_SERVICE_STORAGE_VERSION,
+    _LEGACY_SERVICE_STORAGE_KEY).async_remove()`` so the one-time "service
+    behaviour change" notification is cleared for everyone who upgraded
+    through 3.0. The infrastructure (Store key + helper APIs in
+    repairs.py, issue registered against the domain) is in place from
+    P8; only the cleanup step lands with whatever story bumps the
+    schema next.
 
     M19 AC#10: each version block is wrapped in try/except so a failure
     leaves the entry at its previous version and returns False, signalling
@@ -264,11 +267,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) ->
     # their configs. `async_at_started` runs the callback immediately if
     # HA is already started (e.g. when the user adds the integration at
     # runtime), or queues it for the started event otherwise. The helper
-    # awaits coroutine return values, so the lambda just builds and hands
-    # back the coroutine rather than wrapping it in a task ourselves.
-    async_at_started(
-        hass,
-        lambda _hass: _async_check_legacy_service_repair(hass, entry),
+    # awaits coroutine return values, so the lambda hands back the
+    # coroutine rather than wrapping it in a task ourselves. The unsub
+    # callable is registered with ``entry.async_on_unload`` so the
+    # listener is torn down if the entry is unloaded before HA finishes
+    # starting (review HIGH #2).
+    entry.async_on_unload(
+        async_at_started(
+            hass,
+            lambda _hass: _async_check_legacy_service_repair(hass),
+        )
     )
 
     return True
@@ -286,11 +294,14 @@ def _contains_legacy_service_ref(node: Any) -> bool:
 
     HA 2024+ accepts both ``service: domain.name`` (classic) and
     ``action: domain.name`` (new keyword) inside action blocks; we match
-    either. Lists and nested dicts (``choose``, ``parallel``, ``if`` /
+    either. Lists and nested mappings (``choose``, ``parallel``, ``if`` /
     ``then`` / ``else``, etc.) are walked recursively so the scan works
-    on any depth of nesting.
+    on any depth of nesting. Uses ``collections.abc.Mapping`` (not bare
+    ``dict``) so ``MappingProxyType`` subtrees — which HA core wraps
+    config-entry data and many sub-blocks in — are also walked (review
+    MED).
     """
-    if isinstance(node, dict):
+    if isinstance(node, collections.abc.Mapping):
         for key in ("service", "action"):
             value = node.get(key)
             if isinstance(value, str) and value in _P8_LEGACY_SERVICE_FQNS:
@@ -313,22 +324,27 @@ def _scan_for_legacy_service_calls(hass: HomeAssistant) -> bool:
     when the automation / script components are not loaded or their
     entity data cannot be enumerated — we prefer no notification over a
     false positive that would spam every user, regardless of whether they
-    use the integration's services).
+    use the integration's services). Scan failures are surfaced at
+    WARNING level (review MED) so HA-core regressions in the
+    automation/script component storage become visible in user logs.
     """
     for component_domain in ("automation", "script"):
         component = hass.data.get(component_domain)
         if component is None:
             continue
-        entities_iter = getattr(component, "entities", None)
-        if entities_iter is None:
-            continue
+        # ``EntityComponent.entities`` is a property; access it inside
+        # the try so a non-AttributeError raised by the getter doesn't
+        # propagate (review MED).
         try:
+            entities_iter = getattr(component, "entities", None)
+            if entities_iter is None:
+                continue
             for entity in entities_iter:
                 raw_config = getattr(entity, "raw_config", None)
                 if raw_config and _contains_legacy_service_ref(raw_config):
                     return True
         except Exception:  # noqa: BLE001
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "P8: scan of %s entities raised; treating as no-match",
                 component_domain,
                 exc_info=True,
@@ -337,19 +353,21 @@ def _scan_for_legacy_service_calls(hass: HomeAssistant) -> bool:
     return False
 
 
-async def _async_check_legacy_service_repair(
-    hass: HomeAssistant, entry: ConfigEntry
-) -> None:
+async def _async_check_legacy_service_repair(hass: HomeAssistant) -> None:
     """P8 entry point: detect legacy-service references in user configs
     and raise the Repairs issue on first encounter.
 
-    Gated on the ``LEGACY_SERVICE_REPAIR_FLAG`` in ``entry.data`` so the
+    Gated on (a) the persistent dismissal flag in the dedicated Store
+    (see ``repairs.async_is_legacy_service_dismissed``) so the
     notification does not re-fire on HA restart after the user dismisses
-    it. Multi-entry users only see one issue (HA's issue registry is keyed
-    on domain + issue_id) and the per-entry flag is set once any entry has
-    seen the notification through.
+    it, and (b) the presence of the issue in HA's issue registry so a
+    multi-entry user (the callback fires once per entry from
+    ``async_setup_entry``) only walks the scan once per HA startup
+    (review MED: scan-dedupe).
     """
-    if entry.data.get(LEGACY_SERVICE_REPAIR_FLAG):
+    if await async_is_legacy_service_dismissed(hass):
+        return
+    if ir.async_get(hass).async_get_issue(DOMAIN, LEGACY_SERVICE_REPAIR_ISSUE_ID):
         return
     if not _scan_for_legacy_service_calls(hass):
         return

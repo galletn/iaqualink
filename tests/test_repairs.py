@@ -43,10 +43,11 @@ from custom_components.iaqualink_robots import (
 )
 from custom_components.iaqualink_robots.const import DOMAIN
 from custom_components.iaqualink_robots.repairs import (
-    LEGACY_SERVICE_REPAIR_FLAG,
     LEGACY_SERVICE_REPAIR_ISSUE_ID,
     LegacyServiceBehaviorChangeFixFlow,
     async_create_fix_flow,
+    async_is_legacy_service_dismissed,
+    async_mark_legacy_service_dismissed,
 )
 
 from tests.const import MOCK_ENTRY_DATA, MOCK_NAME
@@ -293,14 +294,19 @@ async def test_scan_tolerates_entity_iteration_failure(hass: HomeAssistant) -> N
 
 # ---------------------------------------------------------------------------
 # Issue-raising tests — exercise the full async flow including the
-# entry.data gate and the issue-registry effect.
+# Store-based dismissal gate and the issue-registry effect.
 # ---------------------------------------------------------------------------
 
 
-def _make_entry(hass: HomeAssistant, *, notified: bool = False) -> MockConfigEntry:
+def _make_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Build a domain config entry attached to ``hass``.
+
+    Post-review the P8 dismissal flag lives in a dedicated Store (per the
+    HIGH #1 fix), not in ``entry.data``. To pre-mark dismissal in a test,
+    ``await async_mark_legacy_service_dismissed(hass)`` BEFORE invoking
+    the check rather than passing a ``notified=True`` flag here.
+    """
     data = dict(MOCK_ENTRY_DATA)
-    if notified:
-        data[LEGACY_SERVICE_REPAIR_FLAG] = True
     entry = MockConfigEntry(
         domain=DOMAIN,
         data=data,
@@ -314,11 +320,11 @@ def _make_entry(hass: HomeAssistant, *, notified: bool = False) -> MockConfigEnt
 async def test_issue_raised_when_automation_references_legacy_service(
     hass: HomeAssistant,
 ) -> None:
-    """AC #1: legacy service reference + unset flag => issue is created."""
-    entry = _make_entry(hass)
+    """AC #1: legacy service reference + Store unset => issue is created."""
+    _make_entry(hass)
     _install_fake_automations(hass, [_legacy_automation_config()])
 
-    await _async_check_legacy_service_repair(hass, entry)
+    await _async_check_legacy_service_repair(hass)
 
     issue = ir.async_get(hass).async_get_issue(DOMAIN, LEGACY_SERVICE_REPAIR_ISSUE_ID)
     assert issue is not None
@@ -333,12 +339,12 @@ async def test_issue_raised_when_script_references_legacy_service(
     """AC #1: a script (not just an automation) calling a legacy service
     also triggers the issue.
     """
-    entry = _make_entry(hass)
+    _make_entry(hass)
     _install_fake_scripts(
         hass, [{"sequence": [{"service": f"{DOMAIN}.add_fifteen_minutes"}]}]
     )
 
-    await _async_check_legacy_service_repair(hass, entry)
+    await _async_check_legacy_service_repair(hass)
 
     assert (
         ir.async_get(hass).async_get_issue(DOMAIN, LEGACY_SERVICE_REPAIR_ISSUE_ID)
@@ -350,12 +356,12 @@ async def test_issue_raised_when_action_keyword_used_instead_of_service(
     hass: HomeAssistant,
 ) -> None:
     """AC #1: HA 2024+ ``action: domain.name`` form is equivalent."""
-    entry = _make_entry(hass)
+    _make_entry(hass)
     _install_fake_automations(
         hass, [_legacy_automation_config_action_keyword()]
     )
 
-    await _async_check_legacy_service_repair(hass, entry)
+    await _async_check_legacy_service_repair(hass)
 
     assert (
         ir.async_get(hass).async_get_issue(DOMAIN, LEGACY_SERVICE_REPAIR_ISSUE_ID)
@@ -365,11 +371,11 @@ async def test_issue_raised_when_action_keyword_used_instead_of_service(
 
 async def test_no_issue_when_no_automations(hass: HomeAssistant) -> None:
     """AC #3: no automation / script component loaded => no issue."""
-    entry = _make_entry(hass)
+    _make_entry(hass)
     hass.data.pop("automation", None)
     hass.data.pop("script", None)
 
-    await _async_check_legacy_service_repair(hass, entry)
+    await _async_check_legacy_service_repair(hass)
 
     assert (
         ir.async_get(hass).async_get_issue(DOMAIN, LEGACY_SERVICE_REPAIR_ISSUE_ID)
@@ -381,12 +387,12 @@ async def test_no_issue_when_unrelated_service_referenced(
     hass: HomeAssistant,
 ) -> None:
     """AC #3: automations exist but none reference our services => no issue."""
-    entry = _make_entry(hass)
+    _make_entry(hass)
     _install_fake_automations(
         hass, [{"action": [{"service": "vacuum.start"}]}]
     )
 
-    await _async_check_legacy_service_repair(hass, entry)
+    await _async_check_legacy_service_repair(hass)
 
     assert (
         ir.async_get(hass).async_get_issue(DOMAIN, LEGACY_SERVICE_REPAIR_ISSUE_ID)
@@ -394,19 +400,59 @@ async def test_no_issue_when_unrelated_service_referenced(
     )
 
 
-async def test_issue_not_raised_after_flag_set(hass: HomeAssistant) -> None:
-    """AC #2 (gate): a previously-notified entry never re-fires the issue
-    even when the user re-adds an automation calling a legacy service —
-    the flag is sticky until the next-major-version migration clears it.
+async def test_issue_not_raised_after_store_dismissed(hass: HomeAssistant) -> None:
+    """AC #2 (gate): once dismissal is recorded in the Store, the check
+    never re-fires the issue even when the user re-adds an automation
+    calling a legacy service — the dismissal is sticky until the
+    next-major-version migration clears the Store.
     """
-    entry = _make_entry(hass, notified=True)
+    _make_entry(hass)
+    await async_mark_legacy_service_dismissed(hass)
     _install_fake_automations(hass, [_legacy_automation_config()])
 
-    await _async_check_legacy_service_repair(hass, entry)
+    await _async_check_legacy_service_repair(hass)
 
     assert (
         ir.async_get(hass).async_get_issue(DOMAIN, LEGACY_SERVICE_REPAIR_ISSUE_ID)
         is None
+    )
+
+
+async def test_issue_check_skips_scan_when_already_raised(
+    hass: HomeAssistant,
+) -> None:
+    """MED dedupe: a multi-entry user has the check fire once per entry
+    from ``async_setup_entry``. The second + later calls must short-
+    circuit on the issue-registry presence so the (expensive) scan only
+    walks once per HA startup.
+    """
+    _make_entry(hass)
+    # Pre-create the issue as if a previous entry's check already raised it.
+    ir.async_create_issue(
+        hass, DOMAIN, LEGACY_SERVICE_REPAIR_ISSUE_ID,
+        is_fixable=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=LEGACY_SERVICE_REPAIR_ISSUE_ID,
+    )
+
+    # Install a sentinel component whose .entities raises on iteration —
+    # the scan would surface it as a WARNING log. The check short-
+    # circuiting on the issue-already-raised gate means the scan is never
+    # walked, so no exception is raised here.
+
+    class _SentinelComponent:
+        @property
+        def entities(self) -> Any:
+            raise RuntimeError("scan should not have been invoked")
+
+    hass.data["automation"] = _SentinelComponent()
+    hass.data.pop("script", None)
+
+    await _async_check_legacy_service_repair(hass)
+    # If the gate worked, the issue is still there and no exception fired.
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, LEGACY_SERVICE_REPAIR_ISSUE_ID)
+        is not None
     )
 
 
@@ -433,13 +479,12 @@ async def test_async_create_fix_flow_raises_for_unknown_issue(
         await async_create_fix_flow(hass, "some-other-issue", data=None)
 
 
-async def test_fix_flow_marks_notified_flag_and_finishes(hass: HomeAssistant) -> None:
-    """AC #2: completing the fix flow flips the entry-data flag (so the
-    issue does not re-fire on next restart) and returns a create-entry
-    result (which lets HA auto-delete the issue from the dashboard).
+async def test_fix_flow_marks_store_dismissed_and_finishes(hass: HomeAssistant) -> None:
+    """AC #2: completing the fix flow records dismissal in the Store
+    (NOT in ``entry.data``) and returns a create-entry result which lets
+    HA auto-delete the issue from the dashboard.
     """
-    entry = _make_entry(hass)
-    assert entry.data.get(LEGACY_SERVICE_REPAIR_FLAG) is not True
+    assert await async_is_legacy_service_dismissed(hass) is False
 
     flow = LegacyServiceBehaviorChangeFixFlow()
     flow.hass = hass
@@ -453,18 +498,40 @@ async def test_fix_flow_marks_notified_flag_and_finishes(hass: HomeAssistant) ->
     result = await flow.async_step_confirm(user_input={})
     assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
 
-    # The entry flag is now set; future checks will short-circuit.
-    assert entry.data.get(LEGACY_SERVICE_REPAIR_FLAG) is True
+    # Store now records the dismissal; future checks will short-circuit.
+    assert await async_is_legacy_service_dismissed(hass) is True
 
 
-async def test_fix_flow_marks_every_entry_when_user_has_multiple_robots(
+async def test_fix_flow_does_not_mutate_entry_data(hass: HomeAssistant) -> None:
+    """HIGH #1 regression guard: dismissal MUST NOT write to
+    ``entry.data``.
+
+    Pre-review the flow wrote a flag into each entry's data, which fired
+    the ``_async_update_options`` listener registered in ``async_setup_entry``
+    and reloaded every iaqualink config entry — causing a cloud re-auth +
+    websocket reconnect cascade on every Submit click. The fix moves the
+    dismissal to a dedicated Store. This test asserts the contract.
+    """
+    entry = _make_entry(hass)
+    pre_data = dict(entry.data)
+
+    flow = LegacyServiceBehaviorChangeFixFlow()
+    flow.hass = hass
+    await flow.async_step_confirm(user_input={})
+
+    # ``entry.data`` is byte-identical to before — no reload cascade
+    # could be triggered.
+    assert dict(entry.data) == pre_data
+
+
+async def test_fix_flow_dismissal_is_global_not_per_entry(
     hass: HomeAssistant,
 ) -> None:
     """Multi-entry users see ONE shared issue (HA's registry is keyed
-    on domain + issue_id). The flow flips the flag on every entry so a
-    future setup of any of them does not re-fire.
+    on domain + issue_id). Post-review the dismissal is keyed at the
+    installation level — one Store flip dismisses for all entries.
     """
-    e1 = _make_entry(hass)
+    _make_entry(hass)
     e2 = MockConfigEntry(
         domain=DOMAIN,
         data={**MOCK_ENTRY_DATA, "serial_number": "R23X87654321"},
@@ -477,8 +544,8 @@ async def test_fix_flow_marks_every_entry_when_user_has_multiple_robots(
     flow.hass = hass
     await flow.async_step_confirm(user_input={})
 
-    assert e1.data.get(LEGACY_SERVICE_REPAIR_FLAG) is True
-    assert e2.data.get(LEGACY_SERVICE_REPAIR_FLAG) is True
+    # The Store-level dismissal applies to every entry by construction.
+    assert await async_is_legacy_service_dismissed(hass) is True
 
 
 # ---------------------------------------------------------------------------
@@ -488,9 +555,13 @@ async def test_fix_flow_marks_every_entry_when_user_has_multiple_robots(
 
 def test_constants_are_stable() -> None:
     """AC #4: the next-major-version migration block in
-    ``async_migrate_entry`` will import these constants to delete the
-    issue and strip the flag. Renaming them silently is a behaviour
-    change for any user who never dismissed the issue — pin both names.
+    ``async_migrate_entry`` will import this constant to delete the
+    issue. Renaming it silently is a behaviour change for any user who
+    never dismissed the issue — pin the name.
+
+    The Store key + version are intentionally private to ``repairs.py``
+    (the public surface is the ``async_is_legacy_service_dismissed`` /
+    ``async_mark_legacy_service_dismissed`` API); the cleanup migration
+    imports those helpers, not the underlying storage details.
     """
     assert LEGACY_SERVICE_REPAIR_ISSUE_ID == "legacy_service_behavior_change"
-    assert LEGACY_SERVICE_REPAIR_FLAG == "p8_legacy_service_notified"

@@ -43,10 +43,18 @@ def _i2d_protocol() -> I2DProtocol:
     Centralises the cast at one call-site so the coordinator's i2d code
     paths can call ``i2d_url`` (an I2D-only method, absent from the
     ``RobotProtocol`` base) without each site repeating the cast.
+
+    Uses an explicit ``isinstance``-guard + ``raise`` (NOT an ``assert``)
+    so the type narrowing survives ``python -O`` — assertions are
+    stripped under optimisation and the helper would silently return
+    whatever ``get_protocol`` returned, defeating the whole point of
+    centralising the cast (review MED).
     """
     protocol = get_protocol("i2d_robot")
-    assert isinstance(protocol, I2DProtocol), \
-        "i2d_robot protocol must be I2DProtocol"
+    if not isinstance(protocol, I2DProtocol):
+        raise RuntimeError(
+            f"i2d_robot protocol must be I2DProtocol, got {type(protocol).__name__}"
+        )
     return protocol
 
 
@@ -440,8 +448,20 @@ class AqualinkClient:
 
     @property
     def robot_name(self) -> str:
-        # Use provided title if available
-        return getattr(self, "_title", f"{self._device_type}_{self._serial}")
+        """Human-readable robot name for log messages.
+
+        Prefers the user-typed config-entry title (set on the coordinator
+        and exposed via ``coordinator.title``) so log lines render
+        "Add 15 minutes command sent to Pool Robot" instead of the
+        synthetic "vr_R23X12345678" fallback. Pre-review this looked at
+        ``getattr(self, "_title", ...)`` — but ``_title`` lives on the
+        coordinator, NOT the client, so the getattr always fell through
+        to the synthetic.
+        """
+        coordinator = self._coordinator_ref
+        if coordinator is not None and coordinator.title:
+            return coordinator.title
+        return f"{self._device_type}_{self._serial}"
 
     def _is_token_expired(self) -> bool:
         """Check if authentication token is expired.
@@ -3168,7 +3188,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             # Check if this is the first call (initial setup)
-            is_first_call = not hasattr(self, '_setup_complete') or not self._setup_complete
+            is_first_call = not self._setup_complete
 
             if is_first_call:
                 # Use quick setup for faster initial loading

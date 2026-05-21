@@ -306,39 +306,67 @@ def test_no_type_ignore_in_production_code() -> None:
 
     Each one historically masked either a missing HA-side stub or a real
     typing bug. The whole point of the P6 ratchet is to surface those at
-    lint time, not hide them. If you genuinely need a new one (e.g., an
-    HA-internal API that still lacks types), add it with a comment that
-    links the upstream issue and add it to an allowlist here.
+    lint time, not hide them. If a future site genuinely needs one (e.g.
+    an HA-internal API that still lacks types), the fix is to address the
+    underlying typing gap — there is intentionally no allowlist here.
+
+    Unlike the other ``_scan``-based guards in this file, this check
+    deliberately DOES NOT skip comment-only lines: a standalone
+    ``# type: ignore`` on its own line is still a real mypy pragma and
+    must be caught. The standard ``_scan`` helper skips ``#``-prefixed
+    lines, so we inline a tighter loop here instead of using it.
     """
-    hits = _scan(_TYPE_IGNORE, _ALL_PYTHON_FILES)
+    hits: list[tuple[Path, int, str]] = []
+    for path in _ALL_PYTHON_FILES:
+        for line_no, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if _TYPE_IGNORE.search(line):
+                hits.append((path, line_no, line.rstrip()))
     assert not hits, (
         "``# type: ignore`` reappeared in production code. Each one either "
         "masks a real typing bug or a missing HA stub — fix the underlying "
-        "issue, or if it genuinely needs to stay add a comment that links "
-        "the upstream issue and update this allowlist:\n"
+        "issue rather than reintroducing the pragma:\n"
         + "\n".join(f"  {p.name}:{n}: {line}" for p, n, line in hits)
     )
 
 
-def test_every_module_imports_future_annotations() -> None:
-    """P6 AC#2: every ``.py`` module starts with ``from __future__ import annotations``.
+# Number of leading source lines to scan for the ``from __future__`` import.
+# Generous enough to clear a multi-line module docstring (rare but real —
+# ``coordinator.py``'s pre-P6 docstring spanned ~40 lines), tight enough to
+# catch a regression where the import is removed but a stray reference to it
+# survives as a comment further down the file.
+_FUTURE_ANNOTATIONS_SCAN_LIMIT = 60
 
-    Empty ``__init__.py`` files are excluded — they have nothing to annotate.
-    The check looks only at the first ~5 non-blank, non-docstring lines so a
-    long module-level docstring doesn't trip it. ``py.typed`` is a marker
-    file (not Python source) and lives outside the glob.
+
+def test_every_module_imports_future_annotations() -> None:
+    """P6 AC#2: every ``.py`` module declares ``from __future__ import annotations``
+    near the top.
+
+    The check scans only the first :data:`_FUTURE_ANNOTATIONS_SCAN_LIMIT`
+    lines so a comment like ``# from __future__ import annotations was
+    here once`` 200 lines down the file can't spuriously satisfy the
+    guard — a real regression where the import is removed but a comment
+    about it survives would silently pass a substring search.
+
+    Empty ``__init__.py`` files are excluded; they have nothing to
+    annotate. ``py.typed`` is a marker file (not Python source) and
+    lives outside the glob.
     """
+    needle = "from __future__ import annotations"
     missing: list[Path] = []
     for path in _ALL_PYTHON_FILES:
         text = path.read_text(encoding="utf-8")
         if not text.strip():
-            continue  # empty file
-        if "from __future__ import annotations" not in text:
+            continue
+        head = "\n".join(text.splitlines()[:_FUTURE_ANNOTATIONS_SCAN_LIMIT])
+        if needle not in head:
             missing.append(path)
 
     assert not missing, (
         "P6 AC#2: every module must declare ``from __future__ import "
-        "annotations`` at the top. Missing in:\n"
+        f"annotations`` within the first {_FUTURE_ANNOTATIONS_SCAN_LIMIT} "
+        "lines. Missing in:\n"
         + "\n".join(f"  {p.relative_to(PACKAGE.parent.parent)}" for p in missing)
     )
 

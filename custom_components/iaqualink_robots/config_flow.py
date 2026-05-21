@@ -337,9 +337,16 @@ class IaqualinkOptionsFlow(config_entries.OptionsFlow):
     """
 
     def __init__(self, config_entry: ConfigEntry) -> None:
-        # OptionsFlow.config_entry is read-only on HA 2024+; instantiate the
-        # base class normally and assign our own copy through the
-        # name-mangled slot HA reserves for subclass storage.
+        # HA 2024+ defines ``OptionsFlow.config_entry`` as a read-only
+        # @property — assigning to it directly raises AttributeError.
+        # We store the entry on a private slot and expose it through our
+        # own getter that shadows the base property; the read site (HA's
+        # flow runner, our ``async_step_init``) only ever READs
+        # ``self.config_entry``, never writes, so no setter is required.
+        # ``super().__init__()`` is called defensively in case a future
+        # HA release adds initialisation to ``OptionsFlow.__init__`` (it
+        # is currently ``object.__init__``, a no-op).
+        super().__init__()
         self._config_entry: ConfigEntry = config_entry
 
     @property

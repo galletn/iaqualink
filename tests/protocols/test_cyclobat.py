@@ -95,12 +95,14 @@ def test_dispatch_returns_cyclobat_protocol() -> None:
     assert protocol.namespace == "cyclobat"
 
 
-def test_dispatch_still_returns_none_for_remaining_families() -> None:
-    """Cyclonext / i2d remain inline-encoded post-R25-cyclobat."""
+def test_dispatch_returns_none_for_unknown_device_type() -> None:
+    """Defence-in-depth: ``get_protocol`` returns ``None`` for an
+    unrecognised ``device_type`` (post-Epic-9 every known family
+    has a protocol).
+    """
     from custom_components.iaqualink_robots.protocols import get_protocol
 
-    for family in ("cyclonext", "i2d_robot"):
-        assert get_protocol(family) is None
+    assert get_protocol("not_a_real_family") is None
 
 
 # ---------------------------------------------------------------------------
@@ -495,12 +497,17 @@ def _coordinator_method_source(method_name: str) -> str:
         ("pause_cleaning", "get_protocol('cyclobat').pause_payload"),
         ("return_to_base", "get_protocol('cyclobat').return_to_base_payload"),
         ("_set_other_fan_speed", "get_protocol('cyclobat').set_fan_speed_payload"),
-        ("_extract_fan_speed_from_response", "get_protocol('cyclobat').extract_fan_speed_from_response"),
     ],
 )
 def test_coordinator_cyclobat_branch_routes_through_protocol(
     method_name: str, protocol_call: str
 ) -> None:
+    """Each cyclobat command-method branch must dispatch through the
+    protocol. ``_extract_fan_speed_from_response`` is NOT in this list
+    because R25-i2d collapsed it to a generic dispatch (single
+    ``get_protocol(self._device_type)`` call serving all 5 families) —
+    that contract has its own structural test below.
+    """
     source = _coordinator_method_source(method_name)
     assert protocol_call in source, (
         f"AqualinkClient.{method_name}'s cyclobat branch must call "

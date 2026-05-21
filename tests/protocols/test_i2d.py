@@ -610,6 +610,50 @@ def test_coordinator_i2d_branch_routes_through_protocol(
     )
 
 
+def test_extract_fan_speed_from_response_uses_generic_dispatch() -> None:
+    """Post-R25-i2d "bonus cleanup": ``_extract_fan_speed_from_response``
+    is no longer a 4-branch if/elif over device_type — every family
+    now has a protocol, so the method dispatches generically via
+    ``get_protocol(self._device_type)``. This test locks the cleanup
+    so a future PR can't accidentally re-introduce the per-family
+    inline branches.
+    """
+    coordinator_path = (
+        Path(__file__).parent.parent.parent
+        / "custom_components"
+        / "iaqualink_robots"
+        / "coordinator.py"
+    )
+    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    method_body = None
+    for class_node in ast.walk(tree):
+        if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":
+            continue
+        for method in class_node.body:
+            if (
+                isinstance(method, ast.FunctionDef)
+                and method.name == "_extract_fan_speed_from_response"
+            ):
+                method_body = method
+                break
+    assert method_body is not None
+    source = ast.unparse(method_body)
+    # The generic dispatch pattern: get_protocol(self._device_type)
+    # NOT get_protocol('vr') / get_protocol('vortrax') / etc.
+    assert "get_protocol(self._device_type)" in source, (
+        "_extract_fan_speed_from_response must use generic dispatch "
+        "via get_protocol(self._device_type) — the per-family if/elif "
+        "branches were collapsed when R25-i2d landed."
+    )
+    # And explicitly forbid the family-specific literals coming back.
+    for family in ("'vr'", "'vortrax'", "'cyclobat'", "'cyclonext'", "'i2d_robot'"):
+        assert f"get_protocol({family})" not in source, (
+            f"_extract_fan_speed_from_response must NOT inline-dispatch "
+            f"for {family} — use the generic get_protocol(self._device_type) "
+            f"pattern instead."
+        )
+
+
 def test_update_i2d_robot_reduced_to_under_30_statements() -> None:
     """Spec AC #2: ``_update_i2d_robot`` must be ≤ 30 lines (HTTP
     fetch + delegate to protocol). Pre-R25-i2d was 138 lines including

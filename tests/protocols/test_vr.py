@@ -104,20 +104,18 @@ def test_dispatch_returns_vr_protocol_for_vr() -> None:
     assert protocol.namespace == "vr"
 
 
-def test_dispatch_returns_none_for_unmigrated_families() -> None:
-    """Until the matching R25 story lands, other families return ``None``.
-
-    Locks the "fall through to inline branch" contract — if a future PR
-    populated this table for vortrax/cyclobat/cyclonext/i2d without also
-    migrating coordinator.py, that PR's matching test below catches the
-    drift.
+def test_dispatch_returns_none_for_unknown_device_type() -> None:
+    """Defence-in-depth: ``get_protocol`` returns ``None`` for an
+    unrecognised ``device_type`` string. Post-Epic-9 every known
+    family has a protocol; the ``None`` return path now only fires
+    for a cloud bug that surfaces an unrecognised device type.
     """
     from custom_components.iaqualink_robots.protocols import get_protocol
 
-    for family in ("vortrax", "cyclobat", "cyclonext", "i2d_robot"):
-        assert get_protocol(family) is None, (
-            f"R25-{family} hasn't shipped yet — dispatch must return None "
-            f"and coordinator.py must keep the inline branch for now"
+    for bogus in ("not_a_real_family", "", "VR"):  # case-sensitive
+        assert get_protocol(bogus) is None, (
+            f"get_protocol({bogus!r}) must return None for an "
+            f"unrecognised device type"
         )
 
 

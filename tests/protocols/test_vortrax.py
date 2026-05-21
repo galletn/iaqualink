@@ -85,16 +85,14 @@ def test_dispatch_returns_vortrax_protocol_for_vortrax() -> None:
     assert protocol.namespace == "vortrax"
 
 
-def test_dispatch_still_returns_none_for_remaining_families() -> None:
-    """Cyclobat / cyclonext / i2d remain inline-encoded; their R25 stories
-    have not landed. Locks the "fall through to inline" contract.
+def test_dispatch_returns_none_for_unknown_device_type() -> None:
+    """Defence-in-depth: ``get_protocol`` returns ``None`` for an
+    unrecognised ``device_type`` (post-Epic-9 every known family has
+    a protocol, so the None branch is reserved for cloud-side anomalies).
     """
     from custom_components.iaqualink_robots.protocols import get_protocol
 
-    for family in ("cyclobat", "cyclonext", "i2d_robot"):
-        assert get_protocol(family) is None, (
-            f"R25-{family} hasn't shipped yet — dispatch must return None"
-        )
+    assert get_protocol("not_a_real_family") is None
 
 
 # ---------------------------------------------------------------------------

@@ -80,11 +80,14 @@ def test_dispatch_returns_cyclonext_protocol() -> None:
     assert protocol.namespace == "cyclonext"
 
 
-def test_dispatch_still_returns_none_for_i2d() -> None:
-    """i2d_robot is the last family pending extraction (R25-i2d)."""
+def test_dispatch_returns_none_for_unknown_device_type() -> None:
+    """Defence-in-depth: ``get_protocol`` returns ``None`` for an
+    unrecognised ``device_type`` (post-Epic-9 every known family
+    has a protocol).
+    """
     from custom_components.iaqualink_robots.protocols import get_protocol
 
-    assert get_protocol("i2d_robot") is None
+    assert get_protocol("not_a_real_family") is None
 
 
 # ---------------------------------------------------------------------------
@@ -443,15 +446,16 @@ def _coordinator_method_source(method_name: str) -> str:
         ("stop_cleaning", "get_protocol('cyclonext').stop_payload"),
         ("pause_cleaning", "get_protocol('cyclonext').pause_payload"),
         ("_set_other_fan_speed", "get_protocol('cyclonext').set_fan_speed_payload"),
-        (
-            "_extract_fan_speed_from_response",
-            "get_protocol('cyclonext').extract_fan_speed_from_response",
-        ),
     ],
 )
 def test_coordinator_cyclonext_branch_routes_through_protocol(
     method_name: str, protocol_call: str
 ) -> None:
+    """Each cyclonext command-method branch must dispatch through the
+    protocol. ``_extract_fan_speed_from_response`` is NOT in this list
+    because R25-i2d collapsed it to a generic dispatch (single
+    ``get_protocol(self._device_type)`` call serving all 5 families).
+    """
     source = _coordinator_method_source(method_name)
     assert protocol_call in source, (
         f"AqualinkClient.{method_name}'s cyclonext branch must call "

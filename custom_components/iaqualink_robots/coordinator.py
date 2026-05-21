@@ -35,6 +35,12 @@ from .const import (
     LONG_OUTAGE_THRESHOLD_SECONDS,
 )
 from .protocols import I2DProtocol, RobotProtocol, get_protocol
+from .ws_envelope import (
+    WSStateEnvelope,
+    parse_ws_message,
+    reset_drift_warnings,
+    validate_state_envelope_fields,
+)
 
 
 def _i2d_protocol() -> I2DProtocol:
@@ -1067,11 +1073,31 @@ class AqualinkClient:
                         _LOGGER.debug(f"Could not JSON-decode websocket message: {parse_err}")
                         continue
 
-                    # AC #1: intake filter. ``None`` covers heartbeats, ACKs,
-                    # foreign-service messages, and StateReported envelopes with
-                    # no ``equipment.robot`` content. Nothing more happens for
-                    # those — no callback, no refresh, no fan-out.
-                    inbound_reported = self._parse_ws_state_message(message_json)
+                    # P12 AC #1 + AC #2: typed classifier. ``parse_ws_message``
+                    # narrows the raw dict into ``WSStateEnvelope`` /
+                    # ``WSAck`` / ``WSError`` / ``WSHeartbeat``, or returns
+                    # None (logging DEBUG on truly unknown shapes,
+                    # rate-limited so a chatty cloud session doesn't spam).
+                    typed_payload = parse_ws_message(message_json)
+                    if typed_payload is None:
+                        continue
+                    # Only StateStreamer envelopes carry the reported delta
+                    # we apply. ACK / error / heartbeat messages are
+                    # recognised + classified above so they don't trip the
+                    # "unknown shape" DEBUG log, but they have no payload
+                    # for us to act on here.
+                    if typed_payload.get("service") != "StateStreamer":
+                        continue
+                    # P12 AC #3: top-level field validation — warns once
+                    # per missing field per process so cloud-shape drift
+                    # surfaces with an actionable log line.
+                    if not validate_state_envelope_fields(typed_payload):
+                        continue
+                    # AC #1 (original C4-ws intake filter): extract the
+                    # reported delta from the typed envelope. ``None`` here
+                    # covers StateReported envelopes with no
+                    # ``equipment.robot`` content (status-only pings).
+                    inbound_reported = self._parse_ws_state_message(typed_payload)
                     if inbound_reported is None:
                         continue
 
@@ -1132,6 +1158,11 @@ class AqualinkClient:
                             # Defensive fallback if push wasn't wired (shouldn't
                             # happen post-C4-ws, but keep behaviour intact).
                             await self._coordinator_callback()
+                        # P12: clear the drift-warning sets on each
+                        # successful push so a transient partial-payload
+                        # phase doesn't permanently silence the WARNING /
+                        # DEBUG diagnostics.
+                        reset_drift_warnings()
                     except asyncio.CancelledError:
                         raise
                     except ConfigEntryAuthFailed:
@@ -1234,7 +1265,7 @@ class AqualinkClient:
 
     @staticmethod
     def _parse_ws_state_message(
-        message_json: dict[str, Any],
+        message_json: WSStateEnvelope | dict[str, Any],
     ) -> dict[str, Any] | None:
         """Extract the ``reported`` shadow document from an inbound WS message.
 
@@ -1245,6 +1276,11 @@ class AqualinkClient:
 
         Pure function: no I/O, no instance state. Lifted out of the listener
         body so the AC #1 filter is independently testable.
+
+        P12: accepts ``WSStateEnvelope`` (the classified-typed shape from
+        ``parse_ws_message``) in addition to the raw ``dict[str, Any]`` —
+        the runtime ``isinstance`` + ``service`` / ``event`` guards stay
+        because callers in test fixtures may pass raw dicts directly.
         """
         if not isinstance(message_json, dict):
             return None

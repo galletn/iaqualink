@@ -178,6 +178,20 @@
     },
     "vacuum": {}
   },
+  "issues": {
+    "legacy_service_behavior_change": {
+      "title": "iAqualink Robots: service-gedrag is gewijzigd",
+      "description": "De `remote_*` en `*_fifteen_minutes` services van deze integratie waren gedeclareerd in de manifest maar niet geregistreerd in versies vóór 3.0. Automatiseringen die ze aanriepen faalden voorheen stilzwijgend met `ServiceNotFound`; ze werken nu zoals gedocumenteerd en bewegen de robot daadwerkelijk. Controleer uw automatiseringen om er zeker van te zijn dat ze nog steeds doen wat u bedoelde.",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Bevestig gewijzigd service-gedrag",
+            "description": "Open uw automatiseringen en scripts en controleer alle die `iaqualink_robots.remote_forward`, `remote_backward`, `remote_rotate_left`, `remote_rotate_right`, `remote_stop`, `add_fifteen_minutes` of `reduce_fifteen_minutes` aanroepen. Deze services bewegen nu de robot echt in plaats van stilzwijgend te falen. Klik op Verzenden zodra u ze heeft gecontroleerd — deze melding zal niet opnieuw verschijnen."
+          }
+        }
+      }
+    }
+  },
   "services": {
     "remote_forward": {
       "name": "Afstandsbediening Vooruit",

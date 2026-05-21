@@ -178,6 +178,20 @@
     },
     "vacuum": {}
   },
+  "issues": {
+    "legacy_service_behavior_change": {
+      "title": "iAqualink Robots: service behaviour changed",
+      "description": "The integration's `remote_*` and `*_fifteen_minutes` services were declared in the manifest but never registered in versions before 3.0. Automations calling them used to fail silently with `ServiceNotFound`; they now work as documented and actually move the robot. Please verify your automations still do what you intended.",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Confirm service behaviour change",
+            "description": "Open your automations and scripts and check any that call `iaqualink_robots.remote_forward`, `remote_backward`, `remote_rotate_left`, `remote_rotate_right`, `remote_stop`, `add_fifteen_minutes`, or `reduce_fifteen_minutes`. These services now actually move the robot instead of silently failing. Click Submit once you have reviewed them — this issue will not re-appear."
+          }
+        }
+      }
+    }
+  },
   "services": {
     "remote_forward": {
       "name": "Telecomando Avanti",

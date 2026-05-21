@@ -5,7 +5,12 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers import (
+    config_validation as cv,
+    entity_registry as er,
+    issue_registry as ir,
+)
+from homeassistant.helpers.start import async_at_started
 
 from .const import (
     API_KEY,
@@ -13,6 +18,10 @@ from .const import (
     DEFAULT_INCLUDE_SECONDS_REMAINING,
     DOMAIN,
     PLATFORMS,
+)
+from .repairs import (
+    LEGACY_SERVICE_REPAIR_FLAG,
+    LEGACY_SERVICE_REPAIR_ISSUE_ID,
 )
 from .types import IaqualinkConfigEntry, IaqualinkData
 
@@ -22,6 +31,21 @@ _LOGGER = logging.getLogger(__name__)
 # CONFIG_SCHEMA. This integration is config-entry-only (no YAML), so the
 # helper `cv.config_entry_only_config_schema` is the HA-recommended shape.
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+# P8: services that were declared in services.yaml but never registered
+# pre-C1a. Story C1a wired them up so automations actually move the robot
+# now; the Repairs notification flags this behaviour change. The set of
+# fully-qualified names is what we scan automation / script configs for.
+_P8_LEGACY_SERVICES = (
+    "remote_forward",
+    "remote_backward",
+    "remote_rotate_left",
+    "remote_rotate_right",
+    "remote_stop",
+    "add_fifteen_minutes",
+    "reduce_fifteen_minutes",
+)
+_P8_LEGACY_SERVICE_FQNS = frozenset(f"{DOMAIN}.{name}" for name in _P8_LEGACY_SERVICES)
 
 # Commands previously used to suffix button unique_ids. Kept here (not imported
 # from button.py) so the migration is self-contained and doesn't break if
@@ -49,6 +73,15 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 broke on rename) to serial-based. See story-M12.
         2 -> 3  (M17) Drop the dead `api_key` field from entry.data; the
                 integration uses the const API_KEY directly. See story-M17.
+
+    P8 AC #4 — future cleanup: the next-major-version migration block
+    should call ``ir.async_delete_issue(hass, DOMAIN,
+    LEGACY_SERVICE_REPAIR_ISSUE_ID)`` and strip the
+    ``LEGACY_SERVICE_REPAIR_FLAG`` from ``entry.data`` so the one-time
+    "service behaviour change" notification is cleared for everyone who
+    upgraded through 3.0. The infrastructure (flag in entry.data, issue
+    registered against the domain) is in place from P8; only the cleanup
+    step lands with whatever story bumps the schema next.
 
     M19 AC#10: each version block is wrapped in try/except so a failure
     leaves the entry at its previous version and returns False, signalling
@@ -226,12 +259,108 @@ async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) ->
     # so the coordinator picks up the new value without an HA restart.
     entry.async_on_unload(entry.add_update_listener(_async_update_options))
 
+    # P8: schedule the legacy-service Repairs check for after HA finishes
+    # starting so the automation / script components have already loaded
+    # their configs. `async_at_started` runs the callback immediately if
+    # HA is already started (e.g. when the user adds the integration at
+    # runtime), or queues it for the started event otherwise. The helper
+    # awaits coroutine return values, so the lambda just builds and hands
+    # back the coroutine rather than wrapping it in a task ourselves.
+    async_at_started(
+        hass,
+        lambda _hass: _async_check_legacy_service_repair(hass, entry),
+    )
+
     return True
 
 
 async def _async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the integration when an OptionsFlow value changes."""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+def _contains_legacy_service_ref(node: Any) -> bool:
+    """Recursively walk an automation / script config looking for a
+    ``service:`` or ``action:`` key whose value is one of our legacy
+    fully-qualified service names. Returns True as soon as one is found.
+
+    HA 2024+ accepts both ``service: domain.name`` (classic) and
+    ``action: domain.name`` (new keyword) inside action blocks; we match
+    either. Lists and nested dicts (``choose``, ``parallel``, ``if`` /
+    ``then`` / ``else``, etc.) are walked recursively so the scan works
+    on any depth of nesting.
+    """
+    if isinstance(node, dict):
+        for key in ("service", "action"):
+            value = node.get(key)
+            if isinstance(value, str) and value in _P8_LEGACY_SERVICE_FQNS:
+                return True
+        for v in node.values():
+            if _contains_legacy_service_ref(v):
+                return True
+    elif isinstance(node, list):
+        for item in node:
+            if _contains_legacy_service_ref(item):
+                return True
+    return False
+
+
+def _scan_for_legacy_service_calls(hass: HomeAssistant) -> bool:
+    """Best-effort scan of the loaded automation and script entities for
+    references to any of the seven legacy ``iaqualink_robots.*`` services.
+
+    Returns True if any reference is found; False otherwise (including
+    when the automation / script components are not loaded or their
+    entity data cannot be enumerated — we prefer no notification over a
+    false positive that would spam every user, regardless of whether they
+    use the integration's services).
+    """
+    for component_domain in ("automation", "script"):
+        component = hass.data.get(component_domain)
+        if component is None:
+            continue
+        entities_iter = getattr(component, "entities", None)
+        if entities_iter is None:
+            continue
+        try:
+            for entity in entities_iter:
+                raw_config = getattr(entity, "raw_config", None)
+                if raw_config and _contains_legacy_service_ref(raw_config):
+                    return True
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "P8: scan of %s entities raised; treating as no-match",
+                component_domain,
+                exc_info=True,
+            )
+            continue
+    return False
+
+
+async def _async_check_legacy_service_repair(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """P8 entry point: detect legacy-service references in user configs
+    and raise the Repairs issue on first encounter.
+
+    Gated on the ``LEGACY_SERVICE_REPAIR_FLAG`` in ``entry.data`` so the
+    notification does not re-fire on HA restart after the user dismisses
+    it. Multi-entry users only see one issue (HA's issue registry is keyed
+    on domain + issue_id) and the per-entry flag is set once any entry has
+    seen the notification through.
+    """
+    if entry.data.get(LEGACY_SERVICE_REPAIR_FLAG):
+        return
+    if not _scan_for_legacy_service_calls(hass):
+        return
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        LEGACY_SERVICE_REPAIR_ISSUE_ID,
+        is_fixable=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=LEGACY_SERVICE_REPAIR_ISSUE_ID,
+    )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) -> bool:

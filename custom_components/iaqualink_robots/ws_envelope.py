@@ -316,7 +316,7 @@ def validate_state_envelope_fields(
 
     Parameter is typed ``WSStateEnvelope | dict[str, Any]`` to match
     ``_parse_ws_state_message``'s widened signature — tests pass plain
-    dicts directly and the type union avoids forcing ``# type: ignore``
+    dicts directly and the union avoids forcing a type-ignore pragma
     at every call site (review LOW).
     """
     missing = [field for field in required if envelope.get(field) is None]

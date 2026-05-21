@@ -569,11 +569,11 @@ def _coordinator_method_source(method_name: str) -> str:
 @pytest.mark.parametrize(
     "method_name,protocol_call",
     [
-        ("start_cleaning", "get_protocol('cyclobat').start_payload"),
-        ("stop_cleaning", "get_protocol('cyclobat').stop_payload"),
-        ("pause_cleaning", "get_protocol('cyclobat').pause_payload"),
-        ("return_to_base", "get_protocol('cyclobat').return_to_base_payload"),
-        ("_set_other_fan_speed", "get_protocol('cyclobat').set_fan_speed_payload"),
+        ("start_cleaning", "_require_protocol('cyclobat').start_payload"),
+        ("stop_cleaning", "_require_protocol('cyclobat').stop_payload"),
+        ("pause_cleaning", "_require_protocol('cyclobat').pause_payload"),
+        ("return_to_base", "_require_protocol('cyclobat').return_to_base_payload"),
+        ("_set_other_fan_speed", "_require_protocol('cyclobat').set_fan_speed_payload"),
     ],
 )
 def test_coordinator_cyclobat_branch_routes_through_protocol(
@@ -617,4 +617,4 @@ def test_update_cyclobat_robot_data_delegates_to_protocol_parse_status() -> None
         f"statements post-R25-cyclobat; expected <=3."
     )
     source = ast.unparse(method_body)
-    assert "get_protocol('cyclobat').parse_status" in source
+    assert "_require_protocol('cyclobat').parse_status" in source

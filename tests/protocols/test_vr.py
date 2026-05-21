@@ -552,12 +552,12 @@ def _coordinator_method_calls(method_name: str) -> str:
 @pytest.mark.parametrize(
     "method_name,protocol_call",
     [
-        ("start_cleaning", "get_protocol('vr').start_payload"),
-        ("stop_cleaning", "get_protocol('vr').stop_payload"),
-        ("pause_cleaning", "get_protocol('vr').pause_payload"),
-        ("return_to_base", "get_protocol('vr').return_to_base_payload"),
-        ("clear_desired_state", "get_protocol('vr').clear_desired_payload"),
-        ("_set_other_fan_speed", "get_protocol('vr').set_fan_speed_payload"),
+        ("start_cleaning", "_require_protocol('vr').start_payload"),
+        ("stop_cleaning", "_require_protocol('vr').stop_payload"),
+        ("pause_cleaning", "_require_protocol('vr').pause_payload"),
+        ("return_to_base", "_require_protocol('vr').return_to_base_payload"),
+        ("clear_desired_state", "_require_protocol('vr').clear_desired_payload"),
+        ("_set_other_fan_speed", "_require_protocol('vr').set_fan_speed_payload"),
     ],
 )
 def test_coordinator_vr_branch_routes_through_protocol(
@@ -614,6 +614,6 @@ def test_update_vr_robot_data_delegates_to_protocol_parse_status() -> None:
         f"regression re-inline the parser body?"
     )
     source = ast.unparse(method_body)
-    assert "get_protocol('vr').parse_status" in source, (
-        "_update_vr_robot_data must delegate to get_protocol('vr').parse_status"
+    assert "_require_protocol('vr').parse_status" in source, (
+        "_update_vr_robot_data must delegate to _require_protocol('vr').parse_status"
     )

@@ -434,11 +434,11 @@ def _coordinator_method_source(method_name: str) -> str:
 @pytest.mark.parametrize(
     "method_name,protocol_call",
     [
-        ("start_cleaning", "get_protocol('vortrax').start_payload"),
-        ("stop_cleaning", "get_protocol('vortrax').stop_payload"),
-        ("pause_cleaning", "get_protocol('vortrax').pause_payload"),
-        ("return_to_base", "get_protocol('vortrax').return_to_base_payload"),
-        ("_set_other_fan_speed", "get_protocol('vortrax').set_fan_speed_payload"),
+        ("start_cleaning", "_require_protocol('vortrax').start_payload"),
+        ("stop_cleaning", "_require_protocol('vortrax').stop_payload"),
+        ("pause_cleaning", "_require_protocol('vortrax').pause_payload"),
+        ("return_to_base", "_require_protocol('vortrax').return_to_base_payload"),
+        ("_set_other_fan_speed", "_require_protocol('vortrax').set_fan_speed_payload"),
     ],
 )
 def test_coordinator_vortrax_branch_routes_through_protocol(
@@ -483,4 +483,4 @@ def test_update_vortrax_robot_data_delegates_to_protocol_parse_status() -> None:
         f"statements post-R25-vortrax; expected <=3 (docstring + delegate)."
     )
     source = ast.unparse(method_body)
-    assert "get_protocol('vortrax').parse_status" in source
+    assert "_require_protocol('vortrax').parse_status" in source

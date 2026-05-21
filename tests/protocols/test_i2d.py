@@ -630,16 +630,18 @@ def _coordinator_method_source(method_name: str) -> str:
 def test_coordinator_i2d_branch_routes_through_protocol(
     method_name: str, protocol_method: str
 ) -> None:
-    """Each i2d command method must reference both ``get_protocol(
-    'i2d_robot')`` and the matching protocol method. The coordinator
-    pattern is ``i2d = get_protocol(...); i2d.<method>(self)`` rather
-    than the inline single-call form the WS families use, so the
-    check verifies both halves appear in the same method body.
+    """Each i2d command method must reference both ``_i2d_protocol()``
+    (the P6 typed-singleton helper that replaces ``get_protocol('i2d_robot')``)
+    and the matching protocol method. The coordinator pattern is
+    ``i2d = _i2d_protocol(); i2d.<method>(self)`` rather than the inline
+    single-call form the WS families use, so the check verifies both halves
+    appear in the same method body.
     """
     source = _coordinator_method_source(method_name)
-    assert "get_protocol('i2d_robot')" in source, (
+    assert "_i2d_protocol()" in source, (
         f"AqualinkClient.{method_name}'s i2d branch must reference "
-        f"get_protocol('i2d_robot')"
+        f"_i2d_protocol() (P6 typed-singleton helper, replaces the "
+        f"pre-P6 get_protocol('i2d_robot') form)"
     )
     assert f".{protocol_method}(" in source, (
         f"AqualinkClient.{method_name}'s i2d branch must call "

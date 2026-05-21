@@ -442,10 +442,10 @@ def _coordinator_method_source(method_name: str) -> str:
 @pytest.mark.parametrize(
     "method_name,protocol_call",
     [
-        ("start_cleaning", "get_protocol('cyclonext').start_payload"),
-        ("stop_cleaning", "get_protocol('cyclonext').stop_payload"),
-        ("pause_cleaning", "get_protocol('cyclonext').pause_payload"),
-        ("_set_other_fan_speed", "get_protocol('cyclonext').set_fan_speed_payload"),
+        ("start_cleaning", "_require_protocol('cyclonext').start_payload"),
+        ("stop_cleaning", "_require_protocol('cyclonext').stop_payload"),
+        ("pause_cleaning", "_require_protocol('cyclonext').pause_payload"),
+        ("_set_other_fan_speed", "_require_protocol('cyclonext').set_fan_speed_payload"),
     ],
 )
 def test_coordinator_cyclonext_branch_routes_through_protocol(
@@ -488,4 +488,4 @@ def test_update_cyclonext_robot_data_delegates_to_protocol() -> None:
         f"statements post-R25-cyclonext; expected <=3."
     )
     source = ast.unparse(method_body)
-    assert "get_protocol('cyclonext').parse_status" in source
+    assert "_require_protocol('cyclonext').parse_status" in source

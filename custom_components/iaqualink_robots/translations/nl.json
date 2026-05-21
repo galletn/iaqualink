@@ -181,7 +181,6 @@
   "issues": {
     "legacy_service_behavior_change": {
       "title": "iAqualink Robots: service-gedrag is gewijzigd",
-      "description": "De `remote_*` en `*_fifteen_minutes` services van deze integratie waren gedeclareerd in de manifest maar niet geregistreerd in versies vóór 3.0. Automatiseringen die ze aanriepen faalden voorheen stilzwijgend met `ServiceNotFound`; ze werken nu zoals gedocumenteerd en bewegen de robot daadwerkelijk. Controleer uw automatiseringen om er zeker van te zijn dat ze nog steeds doen wat u bedoelde.",
       "fix_flow": {
         "step": {
           "confirm": {

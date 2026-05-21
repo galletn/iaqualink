@@ -50,8 +50,10 @@ jobs:
       - run: flake8 custom_components/iaqualink_robots
 
   # ---------------------------------------------------------------------------
-  # mypy — bootstrap config has every module on `ignore_errors = True`.
-  # Story P6 ratchets modules off one by one.
+  # mypy — bootstrap config flipped every module to `ignore_errors = False`
+  # in story P6. mypy needs to resolve `from homeassistant ...` imports, so
+  # we install `homeassistant` alongside mypy — without it every HA import
+  # surfaces as `import-not-found` and the strict pass fails on every line.
   # ---------------------------------------------------------------------------
   mypy:
     name: mypy --strict
@@ -62,7 +64,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: pip install mypy
+      - run: pip install mypy homeassistant voluptuous aiohttp
       - run: mypy --config-file=mypy.ini custom_components/iaqualink_robots
 
   # ---------------------------------------------------------------------------

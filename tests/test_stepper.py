@@ -75,6 +75,11 @@ def _build_stepper_client(
     client.fetch_status = AsyncMock(return_value={"stepper": current_stepper})
     client._coordinator_callback = AsyncMock()
     client._coordinator_ref = MagicMock()
+    # P6: `_adjust_stepper` reads `self._last_timing_command_time is not None`
+    # for rate-limit gating (pre-P6 it used hasattr, so unset attribute was
+    # graceful; P6 requires the attribute to exist with a sentinel value).
+    # Tests bypass __init__ via __new__, so wire the sentinel explicitly.
+    client._last_timing_command_time = None
     return client
 
 

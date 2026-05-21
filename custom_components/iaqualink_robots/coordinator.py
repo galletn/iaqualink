@@ -1317,6 +1317,15 @@ class AqualinkClient:
         # ``reported`` is a TypedDict in the WSStateEnvelope path; widen to
         # the legacy ``dict[str, Any]`` return shape downstream consumers
         # (``_deep_merge_dict``, ``_apply_realtime_envelope``) expect.
+        # Runtime ``isinstance`` guard (review MED) before the cast so a
+        # drifted ``reported`` value (string, scalar, list — possible if
+        # the cloud emits a partial-render shape) surfaces as ``None`` —
+        # the listener's per-message ``continue`` handles None gracefully.
+        # Without this guard the cast would type-promise a dict and the
+        # next call (``_deep_merge_dict``) would hit AttributeError mid-
+        # merge, defeating P12's "surface drift, don't swallow it" goal.
+        if not isinstance(reported, dict):
+            return None
         return cast(dict[str, Any], reported)
 
     @staticmethod

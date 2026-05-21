@@ -155,19 +155,41 @@ WSPayload = WSStateEnvelope | WSAck | WSError | WSHeartbeat
 
 _warned_missing_fields: set[str] = set()
 _warned_unknown_shapes: set[tuple[str, ...]] = set()
+_warned_non_dict_types: set[str] = set()
+# Dirty flag: True once any drift warning has been logged since the last
+# reset. Gates ``reset_drift_warnings()`` so a healthy WS stream that
+# emits hundreds of successful pushes between two drift events doesn't
+# wipe the rate-limit state between them — pre-review-fix the reset
+# fired unconditionally on every push, so the same field re-warned on
+# every drift recurrence (the rate-limit was effectively absent on any
+# stream where healthy pushes outnumber drift events, i.e. all real
+# streams). See P12 review HIGH #3.
+_drift_warnings_logged: bool = False
 
 
 def reset_drift_warnings() -> None:
     """Clear the per-process shape-drift warning sets.
 
     Called by the listener after a successful state push so the next
-    round of missing fields / unknown shapes fires fresh diagnostics.
-    Without this guard a transient cloud-side partial-payload phase
-    would permanently silence the warnings — the rate-limit is a noise
-    filter, not a once-and-forget switch.
+    round of missing fields / unknown shapes fires fresh diagnostics
+    after a transient cloud-side partial-payload phase resolves. The
+    rate-limit is a noise filter, not a once-and-forget switch.
+
+    No-op when no drift warning has been logged since the last reset
+    (dirty-flag gate). Without this gate a healthy stream emitting one
+    successful push every few seconds would clear the rate-limit
+    constantly, so any drifted message between two healthy pushes would
+    re-log every time — defeating the rate-limit's purpose. With the
+    gate, drift logs once per "drift cluster" (run of drifted messages),
+    not once per drifted message inside a cluster.
     """
+    global _drift_warnings_logged
+    if not _drift_warnings_logged:
+        return
     _warned_missing_fields.clear()
     _warned_unknown_shapes.clear()
+    _warned_non_dict_types.clear()
+    _drift_warnings_logged = False
 
 
 # ---------------------------------------------------------------------------
@@ -190,31 +212,42 @@ def parse_ws_message(raw: object) -> WSPayload | None:
     add per-message CPU cost on a hot loop. Callers that need stronger
     guarantees should call ``validate_state_envelope_fields()`` on the
     returned envelope.
+
+    Match order (review HIGH #1): state push → ACK → heartbeat → error
+    → unknown. ACK detection runs BEFORE the error fallback so a
+    success acknowledgement carrying a status ``code: 200`` (the
+    dominant cloud success convention) is correctly classified as
+    ``WSAck`` rather than swallowed as ``WSError``.
     """
     if not isinstance(raw, dict):
-        _debug_log_unknown_shape(("<not-a-dict>", type(raw).__name__))
+        _debug_log_non_dict(type(raw).__name__)
         return None
 
     # State pushes — the only shape the parser actually consumes.
     if raw.get("service") == "StateStreamer" and raw.get("event") == "StateReported":
         return cast(WSStateEnvelope, raw)
 
-    # Server-side error response — ``error`` OR ``code`` at top level.
-    if raw.get("error") is not None or "code" in raw:
-        return cast(WSError, raw)
-
-    # JSON-encoded heartbeat (rare — aiohttp normally handles these as
-    # transport-layer frames).
-    if raw.get("type") == "heartbeat":
-        return cast(WSHeartbeat, raw)
-
-    # Subscribe / command acknowledgement.
+    # Subscribe / command acknowledgement — checked BEFORE error so a
+    # success ACK with ``code: 200`` doesn't fall through to the error
+    # fallback (review HIGH #1).
     if (
         raw.get("action") in ("subscribe", "subscribe_ack")
         or raw.get("event") in ("Subscribed", "CommandAccepted")
         or raw.get("service") in ("Authorization", "StateController")
     ):
         return cast(WSAck, raw)
+
+    # JSON-encoded heartbeat (rare — aiohttp normally handles these as
+    # transport-layer frames).
+    if raw.get("type") == "heartbeat":
+        return cast(WSHeartbeat, raw)
+
+    # Server-side error response — ``error`` OR ``code``-only fallback
+    # for the case where the cloud emits a numeric error with no
+    # ``error`` key. ACKs have already been ruled out above so this
+    # branch doesn't capture success codes.
+    if raw.get("error") is not None or "code" in raw:
+        return cast(WSError, raw)
 
     _debug_log_unknown_shape(tuple(sorted(raw.keys())))
     return None
@@ -224,10 +257,29 @@ def _debug_log_unknown_shape(key_tuple: tuple[str, ...]) -> None:
     """Emit a DEBUG line for an unknown payload shape, rate-limited so
     the same shape doesn't log on every message.
     """
+    global _drift_warnings_logged
     if key_tuple in _warned_unknown_shapes:
         return
     _warned_unknown_shapes.add(key_tuple)
+    _drift_warnings_logged = True
     _LOGGER.debug("Unknown WS payload shape: keys=%s", list(key_tuple))
+
+
+def _debug_log_non_dict(type_name: str) -> None:
+    """Emit a DEBUG line for a non-dict payload, rate-limited per type.
+
+    Kept in a dedicated namespace (``_warned_non_dict_types: set[str]``)
+    separate from ``_warned_unknown_shapes`` so the sentinel for a
+    non-dict input can't collide with a real dict whose sorted-key tuple
+    happens to share the same shape (review MED — sentinel namespace
+    collision).
+    """
+    global _drift_warnings_logged
+    if type_name in _warned_non_dict_types:
+        return
+    _warned_non_dict_types.add(type_name)
+    _drift_warnings_logged = True
+    _LOGGER.debug("Unknown WS payload: not a dict, got %s", type_name)
 
 
 # ---------------------------------------------------------------------------
@@ -242,22 +294,39 @@ _STATE_ENVELOPE_REQUIRED_FIELDS: tuple[str, ...] = ("service", "event", "payload
 
 
 def validate_state_envelope_fields(
-    envelope: WSStateEnvelope,
+    envelope: WSStateEnvelope | dict[str, Any],
     required: tuple[str, ...] = _STATE_ENVELOPE_REQUIRED_FIELDS,
 ) -> bool:
     """Check that ``envelope`` carries the required top-level fields.
 
     AC #3: each missing field fires a single WARNING per process — the
     rate-limit prevents one cloud-shape drift from blowing up the log.
-    Returns True if every required field is present; False otherwise
-    (callers can short-circuit further parsing on False).
+    Returns True if every required field is present **with a non-None
+    value**; False otherwise (callers can short-circuit further parsing
+    on False).
+
+    A field with a ``None`` value is treated as missing because the
+    cloud sometimes emits ``{"payload": null}`` during a partial-render
+    drift phase — pre-review the membership check (``field not in
+    envelope``) considered that valid, so the WARNING never fired on
+    the exact case P12 was built to surface (review HIGH #2). The
+    ``envelope.get(field) is None`` check fires the WARNING for both
+    truly-missing and null-valued required fields, which is the user-
+    facing signal the spec promised.
+
+    Parameter is typed ``WSStateEnvelope | dict[str, Any]`` to match
+    ``_parse_ws_state_message``'s widened signature — tests pass plain
+    dicts directly and the type union avoids forcing ``# type: ignore``
+    at every call site (review LOW).
     """
-    missing = [field for field in required if field not in envelope]
+    missing = [field for field in required if envelope.get(field) is None]
     if not missing:
         return True
+    global _drift_warnings_logged
     for field in missing:
         if field in _warned_missing_fields:
             continue
         _warned_missing_fields.add(field)
+        _drift_warnings_logged = True
         _LOGGER.warning("WS state envelope missing field: %s", field)
     return False

@@ -153,9 +153,12 @@ def test_error_classified_by_code_alone() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unknown_shape_returns_none(caplog: pytest.LogCaptureFixture) -> None:
+def test_unknown_shape_logs_debug(caplog: pytest.LogCaptureFixture) -> None:
     """AC #2: a payload with no recognised marker returns ``None`` and
     logs a single DEBUG line listing the sorted keys.
+
+    Renamed from ``test_unknown_shape_returns_none`` to match the
+    spec's literal test-name (review LOW).
     """
     caplog.set_level(logging.DEBUG, logger="custom_components.iaqualink_robots.ws_envelope")
     result = parse_ws_message({"foo": "bar", "baz": 42})
@@ -208,16 +211,19 @@ def test_different_unknown_shapes_each_log_once(
 # ---------------------------------------------------------------------------
 
 
-def test_state_envelope_missing_field_warns_once(
+def test_missing_field_warns_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """AC #3: when a state envelope is missing a required top-level
     field, ``validate_state_envelope_fields`` returns ``False`` and
     fires a single WARNING per field per process.
+
+    Renamed from ``test_state_envelope_missing_field_warns_once`` to
+    match the spec's literal test-name (review LOW).
     """
     caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.ws_envelope")
     incomplete = {"service": "StateStreamer", "event": "StateReported"}  # no payload
-    assert validate_state_envelope_fields(incomplete) is False  # type: ignore[arg-type]
+    assert validate_state_envelope_fields(incomplete) is False
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1
     assert "payload" in warnings[0].message
@@ -231,9 +237,9 @@ def test_state_envelope_missing_field_does_not_re_warn(
     """
     caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.ws_envelope")
     incomplete = {"service": "StateStreamer", "event": "StateReported"}
-    validate_state_envelope_fields(incomplete)  # type: ignore[arg-type]
-    validate_state_envelope_fields(incomplete)  # type: ignore[arg-type]
-    validate_state_envelope_fields(incomplete)  # type: ignore[arg-type]
+    validate_state_envelope_fields(incomplete)
+    validate_state_envelope_fields(incomplete)
+    validate_state_envelope_fields(incomplete)
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1
 
@@ -247,9 +253,9 @@ def test_validate_resets_after_reset_drift_warnings(
     """
     caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.ws_envelope")
     incomplete = {"service": "StateStreamer", "event": "StateReported"}
-    validate_state_envelope_fields(incomplete)  # type: ignore[arg-type]
+    validate_state_envelope_fields(incomplete)
     reset_drift_warnings()
-    validate_state_envelope_fields(incomplete)  # type: ignore[arg-type]
+    validate_state_envelope_fields(incomplete)
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 2
 
@@ -259,7 +265,7 @@ def test_validate_well_formed_envelope_returns_true_no_warning(
 ) -> None:
     """A complete envelope returns True and fires zero WARNINGs."""
     caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.ws_envelope")
-    assert validate_state_envelope_fields(_state_envelope()) is True  # type: ignore[arg-type]
+    assert validate_state_envelope_fields(_state_envelope()) is True
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert warnings == []
 
@@ -270,7 +276,7 @@ def test_validate_each_missing_field_warns_independently(
     """If two distinct fields are missing, each fires one WARNING."""
     caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.ws_envelope")
     incomplete = {"service": "StateStreamer"}  # missing event AND payload
-    validate_state_envelope_fields(incomplete)  # type: ignore[arg-type]
+    validate_state_envelope_fields(incomplete)
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     missing_fields = {
         r.message.rsplit(": ", 1)[-1].strip() for r in warnings
@@ -327,7 +333,7 @@ def test_state_envelope_with_only_marker_keys_still_classifies() -> None:
     result = parse_ws_message(minimal)
     assert result is not None
     # And the validator catches the missing field.
-    assert validate_state_envelope_fields(result) is False  # type: ignore[arg-type]
+    assert validate_state_envelope_fields(result) is False
 
 
 # ---------------------------------------------------------------------------
@@ -367,3 +373,194 @@ def test_known_action_classifies_even_with_foreign_service() -> None:
     result = parse_ws_message({"service": "OtherService", "action": "subscribe"})
     assert result is not None
     assert result.get("action") == "subscribe"
+
+
+# ---------------------------------------------------------------------------
+# Review HIGH #1 regression — success-ACKs with status `code: 200` must
+# classify as WSAck, not WSError. Pre-review the error branch ran BEFORE
+# the ACK branch and matched on any `code in raw`, so a `{"service":
+# "StateController", "event": "CommandAccepted", "code": 200}` got
+# swallowed as a server error. Post-review the ACK branch runs first.
+# ---------------------------------------------------------------------------
+
+
+def test_success_ack_with_code_classifies_as_ack_not_error() -> None:
+    """HIGH #1: a success ACK carrying ``code: 200`` (the dominant cloud
+    convention for command acknowledgements) classifies as WSAck. The
+    listener's `service != "StateStreamer"` check passes the message
+    through harmlessly either way, but the typed-shape contract is what
+    consumers will branch on — and they must see WSAck, not WSError.
+    """
+    success_ack = {
+        "service": "StateController",
+        "event": "CommandAccepted",
+        "code": 200,
+        "target": "R23X12345678",
+    }
+    result = parse_ws_message(success_ack)
+    assert result is not None
+    # The result has the ACK markers, not the error markers, so a
+    # consumer doing `match payload: case {"event": "CommandAccepted"}`
+    # routes through the ACK branch.
+    assert result.get("event") == "CommandAccepted"
+    assert result.get("service") == "StateController"
+
+
+def test_subscribe_ack_with_code_classifies_as_ack() -> None:
+    """HIGH #1: same contract for the subscribe-ACK variant — a
+    ``{"service": "Authorization", "action": "subscribe", "code": 200}``
+    must classify as WSAck.
+    """
+    subscribe_ack = {
+        "service": "Authorization",
+        "action": "subscribe",
+        "code": 200,
+        "target": "R23X12345678",
+    }
+    result = parse_ws_message(subscribe_ack)
+    assert result is not None
+    assert result.get("action") == "subscribe"
+
+
+def test_code_only_error_still_classifies_as_error() -> None:
+    """HIGH #1 corollary: the ``code``-only error fallback still works
+    when no ACK markers are present. ``{"code": 503}`` (no `error`
+    field, no service, no event) falls through ACK and matches the
+    error branch.
+    """
+    result = parse_ws_message({"code": 503, "message": "service unavailable"})
+    assert result is not None
+    assert "code" in result
+
+
+# ---------------------------------------------------------------------------
+# Review HIGH #2 regression — null-valued required fields must trigger
+# the WARNING. Pre-review the validator used `field not in envelope`
+# which considered a key with `None` value as present, silently
+# swallowing the exact drift case the spec was built to surface.
+# ---------------------------------------------------------------------------
+
+
+def test_null_valued_payload_triggers_missing_field_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """HIGH #2: ``{"service": "StateStreamer", "event": "StateReported",
+    "payload": null}`` — all keys present, but ``payload`` is null. The
+    validator must treat null-valued required fields as missing and fire
+    the WARNING.
+    """
+    caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.ws_envelope")
+    null_payload = {
+        "service": "StateStreamer",
+        "event": "StateReported",
+        "payload": None,
+    }
+    assert validate_state_envelope_fields(null_payload) is False
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "payload" in warnings[0].message
+
+
+def test_multiple_null_valued_fields_each_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """HIGH #2 extension: each null-valued required field gets its own
+    WARNING — the validator doesn't short-circuit on the first one.
+    """
+    caplog.set_level(logging.WARNING, logger="custom_components.iaqualink_robots.ws_envelope")
+    null_two = {"service": None, "event": "StateReported", "payload": None}
+    assert validate_state_envelope_fields(null_two) is False
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    missing = {r.message.rsplit(": ", 1)[-1].strip() for r in warnings}
+    assert missing == {"service", "payload"}
+
+
+# ---------------------------------------------------------------------------
+# Review HIGH #3 regression — reset_drift_warnings() is dirty-flag-gated
+# so a healthy stream emitting hundreds of successful pushes between two
+# drift events doesn't constantly wipe the rate-limit. Drift now logs
+# once per "drift cluster" (run of drifted messages), not once per push.
+# ---------------------------------------------------------------------------
+
+
+def test_reset_is_noop_when_no_drift_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """HIGH #3: calling ``reset_drift_warnings()`` repeatedly on a clean
+    state is a no-op — no logging side-effect, no state mutation.
+    Healthy streams that emit many successful pushes between drift
+    events don't have to pay for the reset's set-clearing.
+    """
+    caplog.set_level(logging.DEBUG, logger="custom_components.iaqualink_robots.ws_envelope")
+    # Multiple resets on clean state.
+    for _ in range(10):
+        reset_drift_warnings()
+    # No drift was logged → no log records from these calls.
+    drift_records = [
+        r for r in caplog.records
+        if "Unknown WS payload" in r.message or "missing field" in r.message
+    ]
+    assert drift_records == []
+
+
+def test_drift_logs_once_per_cluster_not_once_per_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """HIGH #3: the rate-limit promise is "once per drift cluster", not
+    "once per process forever". Drift inside a cluster doesn't re-warn,
+    but a fresh drift event AFTER a healthy push resets the rate-limit
+    and the next drift logs again. This matches the spec's intent
+    ("transient drift doesn't permanently silence") while fixing the
+    pre-review behaviour where healthy-push-between-drift wiped the
+    rate-limit on every drift, defeating the rate-limit entirely.
+    """
+    caplog.set_level(logging.DEBUG, logger="custom_components.iaqualink_robots.ws_envelope")
+    drifted = {"foo": "bar", "baz": 42}
+    # First drift cluster: 3 identical drifted messages → 1 DEBUG line.
+    for _ in range(3):
+        assert parse_ws_message(drifted) is None
+    debug_lines = [
+        r for r in caplog.records
+        if "Unknown WS payload shape" in r.message
+    ]
+    assert len(debug_lines) == 1, "first drift cluster should log once"
+
+    # Simulated successful push between drift events.
+    reset_drift_warnings()
+
+    # Second drift cluster (same shape): should re-warn now that the
+    # cluster boundary is crossed.
+    caplog.clear()
+    assert parse_ws_message(drifted) is None
+    debug_lines = [
+        r for r in caplog.records
+        if "Unknown WS payload shape" in r.message
+    ]
+    assert len(debug_lines) == 1, "second drift cluster should re-warn"
+
+
+# ---------------------------------------------------------------------------
+# Review LOW (AC #5 sub-finding) — partial-but-corrupt nested payload.
+# A dict that classifies as a StateEnvelope and passes top-level field
+# validation may still have garbage nested values (e.g. payload is a
+# string). The listener's downstream extraction must degrade gracefully
+# without raising.
+# ---------------------------------------------------------------------------
+
+
+def test_envelope_with_corrupt_nested_payload_does_not_raise() -> None:
+    """AC #5 sub-finding: ``{"service": "StateStreamer", "event":
+    "StateReported", "payload": "not-a-dict"}`` classifies (top-level
+    shape is valid) and passes ``validate_state_envelope_fields`` (all
+    keys present, non-None values). The downstream parser must degrade
+    gracefully — the listener's per-message handling continues past
+    None/garbage without raising.
+    """
+    nested_corrupt = {
+        "service": "StateStreamer",
+        "event": "StateReported",
+        "payload": "not-a-dict",
+    }
+    # Classifies.
+    classified = parse_ws_message(nested_corrupt)
+    assert classified is not None
+    # Top-level validation passes (payload key is present, non-None).
+    assert validate_state_envelope_fields(classified) is True

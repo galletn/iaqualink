@@ -451,24 +451,28 @@ def test_cloud_sites_routed_through_cloud_session() -> None:
     Every other ClientSession() construction must route via
     ``self._cloud_session()`` (story L19).
     """
-    coordinator_src = (
+    # R26: the 4 construction sites + the 3 marker methods moved from
+    # ``coordinator.py`` to ``client.py`` when ``AqualinkClient`` was split
+    # out. The contract this test enforces is unchanged — only the source
+    # file changed.
+    client_src = (
         Path(__file__).parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     ).read_text(encoding="utf-8")
 
     # Find every line that constructs an aiohttp.ClientSession() (any args).
     # Skip comment lines so docstring/comment references don't trip the guard.
     pattern = re.compile(r"^\s*[^#\n]*aiohttp\.ClientSession\s*\(", re.MULTILINE)
-    matches = pattern.findall(coordinator_src)
+    matches = pattern.findall(client_src)
 
     # Pre-L19 there were 6 construction sites: WS + 4 cloud + scraper.
     # Post-L19 (with cookie-jar isolation) only 4 are permitted: WS +
     # scraper + helper's two branches (shared-wrapper + ephemeral fallback).
     # The exact count locks in the contract.
     assert len(matches) == 4, (
-        f"expected exactly 4 direct aiohttp.ClientSession constructions in coordinator.py "
+        f"expected exactly 4 direct aiohttp.ClientSession constructions in client.py "
         f"(_cloud_session shared-wrapper + _cloud_session fallback + websocket + scraper), "
         f"found {len(matches)}: {matches}. "
         f"New cloud REST sites must route through self._cloud_session() — see story L19."
@@ -482,7 +486,7 @@ def test_cloud_sites_routed_through_cloud_session() -> None:
         "async def _ensure_websocket_connection",
         "async def _get_vortrax_model_from_web",
     ):
-        assert marker in coordinator_src, (
+        assert marker in client_src, (
             f"expected method marker {marker!r} not found — was the method renamed? "
             f"Update this test alongside the rename."
         )

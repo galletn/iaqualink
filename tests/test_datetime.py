@@ -4,11 +4,11 @@ Locks in the contract that every datetime the integration produces is
 timezone-aware (UTC), so HA renders timestamps correctly in the user's local
 timezone and remaining-time arithmetic is smooth across DST boundaries.
 
-The helpers under test are pure-Python (the JWT decoder is module-level; the
-client methods are bypassed via ``__new__`` per the established
-``tests/test_set_fan_speed.py`` and ``tests/test_coordinator.py`` convention).
-No HA event loop is required for the helper tests; only the integration tests
-that go through ``_calculate_times`` need the client wiring.
+The helpers under test are pure-Python (the JWT decoder lives module-level
+on ``client.py``; the date/time helpers — ``add_minutes_to_datetime`` /
+``calculate_times`` — live as free functions on ``parsing.py`` post-R26 and
+take an ``AqualinkClient`` only where they need to read its
+``_include_seconds_remaining`` / ``_debug_mode`` flags).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import json
 
 import pytest
 
+from custom_components.iaqualink_robots import parsing
 from custom_components.iaqualink_robots.client import (
     AqualinkClient,
     _TOKEN_EXP_SAFETY_MARGIN_S,
@@ -44,9 +45,11 @@ def _make_jwt(payload: dict) -> str:
 def _build_client() -> AqualinkClient:
     """Build a bare AqualinkClient bypassing __init__ (mirrors test_set_fan_speed).
 
-    Sets just enough state for `_calculate_times` / `add_minutes_to_datetime`
-    to run without hitting AttributeError. `_hass = None` makes
-    `_format_time_human` take its no-translation fallback branch.
+    Sets just enough state for ``parsing.calculate_times(client, ...)`` to
+    read the two client flags it consults — ``_include_seconds_remaining``
+    (gates seconds in the human-readable string) and ``_debug_mode``
+    (verbose error-branch logging). The other attrs are kept around so
+    the token-expiry tests in this module can use the same fixture.
     """
     client = AqualinkClient.__new__(AqualinkClient)
     client._device_type = "vr"
@@ -167,19 +170,17 @@ def test_add_minutes_to_datetime_rejects_naive_input() -> None:
     `python -O` / `PYTHONOPTIMIZE=1`, which would have defeated the
     fail-fast goal in optimized builds.
     """
-    client = _build_client()
     naive = datetime.datetime(2026, 5, 15, 12, 0, 0)  # no tzinfo
 
     with pytest.raises(TypeError, match="tz-aware"):
-        client.add_minutes_to_datetime(naive, 15)
+        parsing.add_minutes_to_datetime(naive, 15)
 
 
 def test_add_minutes_to_datetime_preserves_utc_tzinfo() -> None:
     """Aware-UTC input produces aware-UTC output."""
-    client = _build_client()
     aware = datetime.datetime(2026, 5, 15, 12, 0, 0, tzinfo=UTC)
 
-    result = client.add_minutes_to_datetime(aware, 15)
+    result = parsing.add_minutes_to_datetime(aware, 15)
 
     assert result.tzinfo is not None
     assert result.utcoffset() == datetime.timedelta(0)
@@ -187,7 +188,7 @@ def test_add_minutes_to_datetime_preserves_utc_tzinfo() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _calculate_times — produces aware datetimes; remaining-time math works.
+# parsing.calculate_times — produces aware datetimes; remaining-time math works.
 # ---------------------------------------------------------------------------
 
 
@@ -203,7 +204,7 @@ def test_calculate_times_emits_aware_datetime_objects() -> None:
     duration = 60  # minutes
     result: dict = {"activity": "cleaning"}
 
-    client._calculate_times(start, duration, result, robot_data=None)
+    parsing.calculate_times(client, start, duration, result, robot_data=None)
 
     assert isinstance(result["cycle_end_time"], datetime.datetime)
     assert result["cycle_end_time"].tzinfo is not None
@@ -219,7 +220,7 @@ def test_calculate_times_remaining_works_with_aware_inputs() -> None:
     duration = 60
     result: dict = {"activity": "cleaning"}
 
-    client._calculate_times(start, duration, result, robot_data=None)
+    parsing.calculate_times(client, start, duration, result, robot_data=None)
 
     assert "time_remaining" in result
     assert 0 < result["time_remaining"] <= 30
@@ -236,7 +237,7 @@ def test_dst_boundary_remaining_time_continuous(monkeypatch) -> None:
 
     Constructs a cycle starting just before a Northern-hemisphere spring-forward
     instant and monkeypatches ``dt_util.utcnow`` to return three samples
-    bracketing the 01:59:59 / 02:00:00 local boundary. Since `_calculate_times`
+    bracketing the 01:59:59 / 02:00:00 local boundary. Since ``calculate_times``
     runs on aware-UTC throughout, no DST transition exists internally and the
     `time_remaining` delta between successive samples should be exactly 1
     minute, not ~60 (which would indicate a naive-local DST jump leaked in).
@@ -245,9 +246,13 @@ def test_dst_boundary_remaining_time_continuous(monkeypatch) -> None:
     so the three samples used real wall-clock and trivially differed by ~1
     minute regardless of whether DST math was broken. This test now
     structurally exercises the DST boundary.
-    """
-    from custom_components.iaqualink_robots import client as coord_mod
 
+    R26 note: ``calculate_times`` now lives in ``parsing.py`` with its own
+    ``from homeassistant.util import dt as dt_util`` import; patch the
+    parsing module's ``dt_util`` attribute. ``monkeypatch.setattr`` mutates
+    the dt_util module object itself, but binding by attribute on
+    ``parsing`` keeps the intent explicit at the call site.
+    """
     client = _build_client()
     # In Europe/Paris on 2026-03-29, 02:00 local jumps to 03:00. That's
     # 01:00 UTC. Build a cycle that starts at 00:30 UTC and runs 2 hours,
@@ -263,9 +268,9 @@ def test_dst_boundary_remaining_time_continuous(monkeypatch) -> None:
 
     samples = []
     for fake_now in sample_nows:
-        monkeypatch.setattr(coord_mod.dt_util, "utcnow", lambda fn=fake_now: fn)
+        monkeypatch.setattr(parsing.dt_util, "utcnow", lambda fn=fake_now: fn)
         result: dict = {"activity": "cleaning"}
-        client._calculate_times(start, duration, result, robot_data=None)
+        parsing.calculate_times(client, start, duration, result, robot_data=None)
         samples.append(result.get("time_remaining", 0))
 
     # With aware-UTC math, the three samples are 0.5s apart in real time
@@ -279,5 +284,5 @@ def test_dst_boundary_remaining_time_continuous(monkeypatch) -> None:
     # Sanity: at least one of the three samples must be > 0 (cycle is
     # active across all three sample points).
     assert any(s > 0 for s in samples), (
-        f"all samples 0 — _calculate_times not exercising the cleaning branch: {samples}"
+        f"all samples 0 — calculate_times not exercising the cleaning branch: {samples}"
     )

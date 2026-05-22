@@ -179,25 +179,13 @@ async def test_clear_desired_state_failure_does_not_crash(coordinator_factory) -
 # `cycle_duration = 0` in the except branch), but the failure was silent
 # and the operator had no debug breadcrumb.
 #
-# C5 extracts the lookup into a named helper `_resolve_cycle_duration` on
-# `AqualinkClient` with explicit bounds-checking and a DEBUG-log breadcrumb
-# for out-of-range cycle codes. Behavior on the success path is unchanged
-# (positional values lookup, because the cloud-side key names for the
-# `durations` sub-dict are not documented and the team review explicitly
-# downgraded "switch to named keys" out of scope until we have a sample).
-
-
-def _build_client_for_resolve() -> object:
-    """Build an AqualinkClient with just enough state for ``_resolve_cycle_duration``.
-
-    Bypasses ``__init__`` (which reaches into aiohttp for header defaults
-    and instantiates an asyncio.Lock) -- the helper under test only reads
-    its arguments, so an empty shell is sufficient. Mirrors the pattern in
-    ``tests/test_set_fan_speed.py``.
-    """
-    from custom_components.iaqualink_robots.client import AqualinkClient
-
-    return AqualinkClient.__new__(AqualinkClient)
+# C5 extracts the lookup into a named helper ``resolve_cycle_duration`` with
+# explicit bounds-checking and a DEBUG-log breadcrumb for out-of-range cycle
+# codes. R26 moved the helper out of ``AqualinkClient`` and into ``parsing``
+# as a free function. Behavior on the success path is unchanged (positional
+# values lookup, because the cloud-side key names for the ``durations``
+# sub-dict are not documented and the team review explicitly downgraded
+# "switch to named keys" out of scope until we have a sample).
 
 
 def test_resolve_cycle_duration_returns_correct_value_for_each_valid_code() -> None:
@@ -209,17 +197,18 @@ def test_resolve_cycle_duration_returns_correct_value_for_each_valid_code() -> N
     helper to use a sorted iteration or wraps the values in a different
     container, can't silently shift the mapping.
     """
-    client = _build_client_for_resolve()
+    from custom_components.iaqualink_robots import parsing
+
     durations = {
         "wallOnly": 30,
         "floorOnly": 60,
         "smart": 90,
         "floorAndWalls": 120,
     }
-    assert client._resolve_cycle_duration(durations, 0) == 30
-    assert client._resolve_cycle_duration(durations, 1) == 60
-    assert client._resolve_cycle_duration(durations, 2) == 90
-    assert client._resolve_cycle_duration(durations, 3) == 120
+    assert parsing.resolve_cycle_duration(durations, 0) == 30
+    assert parsing.resolve_cycle_duration(durations, 1) == 60
+    assert parsing.resolve_cycle_duration(durations, 2) == 90
+    assert parsing.resolve_cycle_duration(durations, 3) == 120
 
 
 def test_resolve_cycle_duration_out_of_range_returns_zero() -> None:
@@ -231,10 +220,11 @@ def test_resolve_cycle_duration_out_of_range_returns_zero() -> None:
     in the except branch, which is what the user-visible time-remaining
     sensor renders as "0 Hour(s) 0 Minute(s) 0 Second(s)").
     """
-    client = _build_client_for_resolve()
+    from custom_components.iaqualink_robots import parsing
+
     durations = {"a": 30, "b": 60, "c": 90, "d": 120}
-    assert client._resolve_cycle_duration(durations, 99) == 0
-    assert client._resolve_cycle_duration(durations, -1) == 0
+    assert parsing.resolve_cycle_duration(durations, 99) == 0
+    assert parsing.resolve_cycle_duration(durations, -1) == 0
 
 
 def test_resolve_cycle_duration_non_int_cycle_returns_zero() -> None:
@@ -242,10 +232,11 @@ def test_resolve_cycle_duration_non_int_cycle_returns_zero() -> None:
 
     Cloud occasionally serialises integer fields as strings; defensive.
     """
-    client = _build_client_for_resolve()
+    from custom_components.iaqualink_robots import parsing
+
     durations = {"a": 30, "b": 60, "c": 90, "d": 120}
-    assert client._resolve_cycle_duration(durations, "1") == 0
-    assert client._resolve_cycle_duration(durations, None) == 0
+    assert parsing.resolve_cycle_duration(durations, "1") == 0
+    assert parsing.resolve_cycle_duration(durations, None) == 0
 
 
 def test_resolve_cycle_duration_bool_cycle_rejected_despite_int_subclassing() -> None:
@@ -257,17 +248,19 @@ def test_resolve_cycle_duration_bool_cycle_rejected_despite_int_subclassing() ->
     resolve to index 0. Neither is a valid cycle code; treat as the
     "unexpected" path so the DEBUG breadcrumb fires.
     """
-    client = _build_client_for_resolve()
+    from custom_components.iaqualink_robots import parsing
+
     durations = {"a": 30, "b": 60, "c": 90, "d": 120}
-    assert client._resolve_cycle_duration(durations, True) == 0
-    assert client._resolve_cycle_duration(durations, False) == 0
+    assert parsing.resolve_cycle_duration(durations, True) == 0
+    assert parsing.resolve_cycle_duration(durations, False) == 0
 
 
 def test_resolve_cycle_duration_empty_durations_returns_zero() -> None:
     """An empty or missing durations dict falls back cleanly."""
-    client = _build_client_for_resolve()
-    assert client._resolve_cycle_duration({}, 0) == 0
-    assert client._resolve_cycle_duration({"a": 30}, 3) == 0  # in-range cycle, undersized dict
+    from custom_components.iaqualink_robots import parsing
+
+    assert parsing.resolve_cycle_duration({}, 0) == 0
+    assert parsing.resolve_cycle_duration({"a": 30}, 3) == 0  # in-range cycle, undersized dict
 
 
 # ----------------------------------------------------------------------------
@@ -310,7 +303,8 @@ def _build_client_for_pending_stop_reset() -> object:
     Bypasses `__init__` (which reaches into aiohttp + asyncio.Lock) — the
     helper under test only reads `_pending_stop_reset`, `_pending_stop_reset_at`,
     the imported constant `PENDING_STOP_RESET_MAX_AGE_SECONDS`, and
-    `dt_util.utcnow()`. Mirrors `_build_client_for_resolve` above.
+    `dt_util.utcnow()`. Mirrors the ``AqualinkClient.__new__`` shell-client
+    pattern used in ``tests/test_set_fan_speed.py``.
     """
     from custom_components.iaqualink_robots.client import AqualinkClient
 
@@ -1691,9 +1685,6 @@ async def test_apply_realtime_envelope_pushes_via_async_set_updated_data(
     client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
     client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
     client._pending_stop_reset = None
-    client._format_time_human = AqualinkClient._format_time_human.__get__(client)
-    client._resolve_cycle_duration = AqualinkClient._resolve_cycle_duration.__get__(client)
-    client._calculate_times = AqualinkClient._calculate_times.__get__(client)
     client._include_seconds_remaining = True
     client._stepper_adj_time = 15
     client._activity = None
@@ -1757,9 +1748,6 @@ async def test_apply_realtime_envelope_does_not_call_async_request_refresh(
     client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
     client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
     client._pending_stop_reset = None
-    client._format_time_human = AqualinkClient._format_time_human.__get__(client)
-    client._resolve_cycle_duration = AqualinkClient._resolve_cycle_duration.__get__(client)
-    client._calculate_times = AqualinkClient._calculate_times.__get__(client)
     client._include_seconds_remaining = True
     client._stepper_adj_time = 15
     client._activity = None
@@ -1830,9 +1818,6 @@ async def test_apply_realtime_envelope_clears_desired_state_on_natural_completio
     client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
     client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
     client._pending_stop_reset = None
-    client._format_time_human = AqualinkClient._format_time_human.__get__(client)
-    client._resolve_cycle_duration = AqualinkClient._resolve_cycle_duration.__get__(client)
-    client._calculate_times = AqualinkClient._calculate_times.__get__(client)
     client._include_seconds_remaining = True
     client._stepper_adj_time = 15
     client._activity = None

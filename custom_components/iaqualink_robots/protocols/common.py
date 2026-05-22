@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.vacuum import VacuumActivity
 
 if TYPE_CHECKING:
-    from ..coordinator import AqualinkClient
+    from ..client import AqualinkClient
 
 
 _LOGGER = logging.getLogger(__name__)

@@ -49,12 +49,13 @@ def _make_client() -> Any:
 
     Uses ``__new__`` to bypass ``__init__`` (which reaches into aiohttp
     + asyncio). The envelope helpers only read four ``str`` attributes
-    plus ``_device_type``; the parse helpers additionally need the
+    plus ``_device_type``; the parse helpers additionally read the
     instance attributes the legacy parser mutated (``_activity``,
-    ``_fan_speed``) and the helper methods it called
-    (``_resolve_cycle_duration``, ``_calculate_times``,
-    ``_format_time_human``). The real methods are bound by class so
-    they work via ``__new__``-constructed instances.
+    ``_fan_speed``) plus the two flags ``calculate_times`` consults
+    (``_include_seconds_remaining`` / ``_debug_mode``). The date/time
+    helpers themselves live as free functions in ``parsing.py`` post-R26
+    and the VR protocol imports them directly, so no method-binding on
+    the shell client is required.
     """
     from custom_components.iaqualink_robots.client import AqualinkClient
 
@@ -492,7 +493,8 @@ def test_parse_status_never_cleaned_robot_emits_none() -> None:
     from custom_components.iaqualink_robots.protocols import get_protocol
 
     client = _make_client()
-    # client._format_time_human is the real bound method; works via __new__.
+    # parsing.format_time_human is a free function the VR parser imports
+    # directly; the shell client doesn't need any method bound.
     result: dict[str, Any] = {}
     payload = _full_vr_payload(cycleStartTime=0)
     get_protocol("vr").parse_status(client, payload, result)

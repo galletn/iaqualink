@@ -12,7 +12,8 @@ encoding (``setCleaningMode`` + ``prCyc`` 0–3). They differ in:
   from the abstract base default.
 * Vortrax has no stepper UI (no ±15-minute buttons), so the parser
   doesn't read ``stepper`` / ``stepperAdjTime`` and the time math uses
-  the simpler stepper-less path on ``_calculate_times``.
+  the simpler stepper-less path on ``parsing.calculate_times`` (the
+  helper lives as a free function post-R26).
 
 These tests lock the byte-identical-envelope contract (AC #4) and the
 post-common-refactor parser behaviour. The shared helper

@@ -402,20 +402,45 @@ def test_py_typed_marker_exists() -> None:
 
 
 def test_module_split_files_exist() -> None:
-    """R26 AC#1: post-split layout — client.py, coordinator.py, parsing.py
-    are all present in the package.
+    """R26 AC#1: post-split layout is fully present in the package.
 
-    The story spec calls these out explicitly. Without this guard, a
-    refactor that re-merges client into coordinator (or drops parsing
-    back into client) would slip past CI because the legacy
-    ``from .coordinator import AqualinkClient`` import would still work
-    via a re-export.
+    Locks both halves of the story spec's layout:
+
+    * The three split-target files — ``client.py`` (HTTP+WS+auth),
+      ``coordinator.py`` (HA glue), ``parsing.py`` (pure date/time
+      helpers).
+    * The ``protocols/`` subpackage with ``base.py`` (the
+      ``RobotProtocol`` ABC), ``common.py`` (shared VR/Vortrax field
+      parser from R29-fold), and the five concrete device families
+      (``vr.py``, ``vortrax.py``, ``cyclobat.py``, ``cyclonext.py``,
+      ``i2d.py``) — every family the integration supports must have
+      its own module so the per-device dispatch contract stays
+      discoverable.
+
+    Without this guard, a refactor that re-merges client into
+    coordinator (or drops parsing back into client, or folds two
+    protocol families into one file) would slip past CI because the
+    pre-R26 imports still work via re-exports.
     """
-    expected = ["client.py", "coordinator.py", "parsing.py"]
+    expected = [
+        "client.py",
+        "coordinator.py",
+        "parsing.py",
+        "protocols/__init__.py",
+        "protocols/base.py",
+        "protocols/common.py",
+        "protocols/vr.py",
+        "protocols/vortrax.py",
+        "protocols/cyclobat.py",
+        "protocols/cyclonext.py",
+        "protocols/i2d.py",
+    ]
     missing = [name for name in expected if not (PACKAGE / name).exists()]
     assert not missing, (
         f"R26 AC#1 layout regression — missing: {missing}. The post-split "
-        "package must contain client.py + coordinator.py + parsing.py."
+        "package must contain client.py + coordinator.py + parsing.py plus "
+        "the protocols/ subpackage with base.py + common.py + one file per "
+        "device family (vr/vortrax/cyclobat/cyclonext/i2d)."
     )
 
 
@@ -475,30 +500,84 @@ def test_module_sizes_stay_under_ceiling() -> None:
 
 
 def test_package_imports_without_circular_dependency() -> None:
-    """R26 testing-clause: ``import custom_components.iaqualink_robots``
-    must complete without ImportError or RecursionError.
+    """R26 testing-clause: every package submodule must import cleanly
+    from a cold cache, i.e. with no peer module pre-loaded.
 
     Catches the classic post-split failure mode where client.py imports
     AqualinkDataUpdateCoordinator at module scope and coordinator.py
     imports AqualinkClient at module scope — a cycle that resolves at
-    runtime only because ``from __future__ import annotations`` defers
-    annotation evaluation, but blows up the moment the typing pragma is
-    removed or a non-TYPE_CHECKING import is added.
+    runtime today only because:
 
-    Importing the package walks every ``__init__.py`` and re-imports
-    each submodule the bootstrap loads, so a cycle would surface here.
+    * ``from __future__ import annotations`` defers annotation evaluation, AND
+    * the TYPE_CHECKING imports in client/coordinator never execute at runtime.
+
+    Remove either of those properties (e.g. a future patch that flips
+    a TYPE_CHECKING import to runtime) and the cycle deadlocks on a
+    fresh ``python -c "import custom_components.iaqualink_robots.client"``.
+
+    The naive shape — ``importlib.import_module(name)`` after the
+    package was already pulled into ``sys.modules`` by conftest — is a
+    cache hit that never re-executes module bodies. Even
+    ``importlib.reload(mod)`` doesn't surface a cycle because every
+    peer is already cached and satisfies the partial-module lookup.
+
+    This guard snapshots ``sys.modules``, **pops** every package entry
+    so the cache is genuinely cold for the package's namespace, then
+    imports each submodule. If any has a fresh-process cycle, the
+    import raises ``ImportError`` / ``RecursionError`` here. The
+    snapshot is restored at the end so other tests' bindings
+    (``AqualinkClient`` class identity, ``_JWT_EXP_FALLBACK_WARNED``,
+    etc.) keep pointing at the original module objects.
+
+    Walks: the package, the 3 split-target modules (client/coordinator/
+    parsing), and every concrete file in the ``protocols/`` subpackage
+    (R26 introduced a protocols → parsing dependency that the
+    pre-R26 single-file layout didn't have, so a cycle
+    protocol → parsing → client → protocol is a fresh risk vector).
     """
     import importlib
+    import sys
 
-    # Use importlib.reload to force a fresh import even if a prior test
-    # already loaded the module (the integration package is not exposing
-    # a clean teardown hook). If any submodule has a circular import, the
-    # ImportError surfaces here.
-    pkg = importlib.import_module("custom_components.iaqualink_robots")
-    importlib.reload(pkg)
+    PREFIX = "custom_components.iaqualink_robots"
+    submodules = (
+        PREFIX,
+        f"{PREFIX}.client",
+        f"{PREFIX}.coordinator",
+        f"{PREFIX}.parsing",
+        f"{PREFIX}.protocols",
+        f"{PREFIX}.protocols.base",
+        f"{PREFIX}.protocols.common",
+        f"{PREFIX}.protocols.vr",
+        f"{PREFIX}.protocols.vortrax",
+        f"{PREFIX}.protocols.cyclobat",
+        f"{PREFIX}.protocols.cyclonext",
+        f"{PREFIX}.protocols.i2d",
+    )
 
-    # Walk submodules to ensure each can be imported standalone too —
-    # catches the "module A only imports cleanly because module B was
-    # already loaded" failure mode.
-    for submodule in ("client", "coordinator", "parsing"):
-        importlib.import_module(f"custom_components.iaqualink_robots.{submodule}")
+    # Snapshot every cached entry under the package prefix so we can
+    # restore them at the end. Other tests in the suite have already
+    # imported these modules and hold name bindings into them; restoring
+    # the snapshot keeps those bindings live.
+    saved = {
+        name: sys.modules.get(name)
+        for name in list(sys.modules)
+        if name == PREFIX or name.startswith(PREFIX + ".")
+    }
+
+    try:
+        # Cold-cache the package namespace so each import_module below
+        # re-executes the module body. If any top-level cycle was
+        # introduced (e.g. a runtime ``from .coordinator import X`` in
+        # client.py), partial-module-resolution surfaces it here.
+        for name in saved:
+            sys.modules.pop(name, None)
+
+        for name in submodules:
+            importlib.import_module(name)
+    finally:
+        # Restore the original module objects. Other tests' name
+        # bindings (e.g. ``from .client import AqualinkClient``,
+        # ``_JWT_EXP_FALLBACK_WARNED`` writes) resolve against these.
+        for name, mod in saved.items():
+            if mod is not None:
+                sys.modules[name] = mod

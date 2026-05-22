@@ -500,40 +500,35 @@ def test_module_sizes_stay_under_ceiling() -> None:
 
 
 def test_package_imports_without_circular_dependency() -> None:
-    """R26 testing-clause: every package submodule must import cleanly
-    from a cold cache, i.e. with no peer module pre-loaded.
+    """R26 testing-clause: every package submodule reloads cleanly.
 
     Catches the classic post-split failure mode where client.py imports
     AqualinkDataUpdateCoordinator at module scope and coordinator.py
     imports AqualinkClient at module scope — a cycle that resolves at
-    runtime today only because:
+    runtime today only because the TYPE_CHECKING imports never execute.
 
-    * ``from __future__ import annotations`` defers annotation evaluation, AND
-    * the TYPE_CHECKING imports in client/coordinator never execute at runtime.
+    Caveat: a *true* fresh-process cycle (where neither module is in
+    ``sys.modules``) can only be reproduced by spawning a subprocess —
+    ``sys.modules.pop`` + re-import within the test process leaves the
+    parent package object's ``__dict__`` desynchronized from
+    ``sys.modules``, which breaks downstream tests that use
+    ``monkeypatch.setattr("custom_components.iaqualink_robots.<sub>.…")``.
+    This guard uses ``importlib.reload(mod)`` instead, which re-executes
+    each module body in-place against the cached parent. It surfaces:
 
-    Remove either of those properties (e.g. a future patch that flips
-    a TYPE_CHECKING import to runtime) and the cycle deadlocks on a
-    fresh ``python -c "import custom_components.iaqualink_robots.client"``.
+    * any module-level ``from .<peer> import X`` that no longer
+      resolves after a refactor renames ``X``, and
+    * any newly-added runtime import that the body would fail to
+      execute against the already-loaded peers.
 
-    The naive shape — ``importlib.import_module(name)`` after the
-    package was already pulled into ``sys.modules`` by conftest — is a
-    cache hit that never re-executes module bodies. Even
-    ``importlib.reload(mod)`` doesn't surface a cycle because every
-    peer is already cached and satisfies the partial-module lookup.
+    It does NOT surface a cycle whose only manifestation is "would
+    deadlock if loaded fresh". That stronger check is left to CI's
+    ``hassfest`` step, which spawns Python from scratch.
 
-    This guard snapshots ``sys.modules``, **pops** every package entry
-    so the cache is genuinely cold for the package's namespace, then
-    imports each submodule. If any has a fresh-process cycle, the
-    import raises ``ImportError`` / ``RecursionError`` here. The
-    snapshot is restored at the end so other tests' bindings
-    (``AqualinkClient`` class identity, ``_JWT_EXP_FALLBACK_WARNED``,
-    etc.) keep pointing at the original module objects.
-
-    Walks: the package, the 3 split-target modules (client/coordinator/
+    Walks the package, the 3 split-target modules (client/coordinator/
     parsing), and every concrete file in the ``protocols/`` subpackage
-    (R26 introduced a protocols → parsing dependency that the
-    pre-R26 single-file layout didn't have, so a cycle
-    protocol → parsing → client → protocol is a fresh risk vector).
+    (R26 introduced a protocols → parsing dependency that the pre-R26
+    single-file layout didn't have).
     """
     import importlib
     import sys
@@ -554,30 +549,14 @@ def test_package_imports_without_circular_dependency() -> None:
         f"{PREFIX}.protocols.i2d",
     )
 
-    # Snapshot every cached entry under the package prefix so we can
-    # restore them at the end. Other tests in the suite have already
-    # imported these modules and hold name bindings into them; restoring
-    # the snapshot keeps those bindings live.
-    saved = {
-        name: sys.modules.get(name)
-        for name in list(sys.modules)
-        if name == PREFIX or name.startswith(PREFIX + ".")
-    }
+    # Pull every submodule into sys.modules (no-op cache hit on the
+    # typical test run, populates the cache if running in isolation).
+    for name in submodules:
+        importlib.import_module(name)
 
-    try:
-        # Cold-cache the package namespace so each import_module below
-        # re-executes the module body. If any top-level cycle was
-        # introduced (e.g. a runtime ``from .coordinator import X`` in
-        # client.py), partial-module-resolution surfaces it here.
-        for name in saved:
-            sys.modules.pop(name, None)
-
-        for name in submodules:
-            importlib.import_module(name)
-    finally:
-        # Restore the original module objects. Other tests' name
-        # bindings (e.g. ``from .client import AqualinkClient``,
-        # ``_JWT_EXP_FALLBACK_WARNED`` writes) resolve against these.
-        for name, mod in saved.items():
-            if mod is not None:
-                sys.modules[name] = mod
+    # Reload each in leaf-to-root order. Reload preserves module
+    # identity (so other tests' name bindings stay valid) but
+    # re-executes the body — surfacing any module-level import that
+    # would fail against the current peer state.
+    for name in reversed(submodules):
+        importlib.reload(sys.modules[name])

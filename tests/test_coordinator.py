@@ -1099,13 +1099,14 @@ def test_no_fire_and_forget_callback_create_task_in_command_methods() -> None:
         "add_fifteen_minutes",
         "reduce_fifteen_minutes",
     }
-    coordinator_path = (
+    # R26: AqualinkClient moved from coordinator.py to client.py
+    client_path = (
         Path(__file__).parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     )
-    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    tree = ast.parse(client_path.read_text(encoding="utf-8"))
 
     offenders: list[str] = []
     for class_node in ast.walk(tree):
@@ -1265,13 +1266,15 @@ def test_all_command_sites_use_safe_post_command_refresh() -> None:
     import ast
     from pathlib import Path
 
-    coordinator_path = (
+    # R26: AqualinkClient (which owns these 6 command methods) moved
+    # from coordinator.py to client.py.
+    client_path = (
         Path(__file__).parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     )
-    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    tree = ast.parse(client_path.read_text(encoding="utf-8"))
 
     target_methods = {
         "start_cleaning",
@@ -2014,13 +2017,15 @@ def test_websocket_listener_no_fire_and_forget_create_task() -> None:
     import ast
     from pathlib import Path
 
-    coordinator_path = (
+    # R26: AqualinkClient._websocket_listener moved with the class
+    # from coordinator.py to client.py.
+    client_path = (
         Path(__file__).parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     )
-    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    tree = ast.parse(client_path.read_text(encoding="utf-8"))
 
     offenders: list[str] = []
     for class_node in ast.walk(tree):

@@ -193,17 +193,19 @@ def test_string_match_removed() -> None:
     """
     import re
 
-    coordinator_src = (
+    # R26: the H9b 401-wrapper code moved with AqualinkClient from
+    # coordinator.py to client.py.
+    client_src = (
         Path(__file__).parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     ).read_text(encoding="utf-8")
 
     # Matches: "401" in <expr>, '401' in <expr>, "401" in str(...), etc.
     # The bracket character class catches both quote styles in one pattern.
     pattern = re.compile(r"""['"]401['"]\s+in\s+""")
-    matches = pattern.findall(coordinator_src)
+    matches = pattern.findall(client_src)
     assert not matches, (
         "Substring match on '401' was reintroduced — H9b AC#3 requires the typed "
         "aiohttp.WSServerHandshakeError(status=401) check instead. "

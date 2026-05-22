@@ -188,15 +188,28 @@ async def test_add_at_high_value_does_not_clamp() -> None:
 # ---------------------------------------------------------------------------
 
 
+_CLASS_FILE = {
+    # R26 split: AqualinkClient owns the HTTP/WS surface in client.py;
+    # AqualinkDataUpdateCoordinator owns the HA glue in coordinator.py.
+    "AqualinkClient": "client.py",
+    "AqualinkDataUpdateCoordinator": "coordinator.py",
+}
+
+
 def _method_node(class_name: str, method_name: str) -> ast.AsyncFunctionDef:
-    """Find the AST node for a method on a class in coordinator.py."""
-    coordinator_path = (
+    """Find the AST node for a method on a class in client.py or coordinator.py."""
+    file_name = _CLASS_FILE.get(class_name)
+    if file_name is None:
+        raise AssertionError(
+            f"unknown class name {class_name!r} — extend _CLASS_FILE in this file"
+        )
+    source_path = (
         Path(__file__).parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / file_name
     )
-    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
     for class_node in ast.walk(tree):
         if (
             isinstance(class_node, ast.ClassDef)
@@ -208,7 +221,7 @@ def _method_node(class_name: str, method_name: str) -> ast.AsyncFunctionDef:
                     and method.name == method_name
                 ):
                     return method
-    raise AssertionError(f"{class_name}.{method_name} not found in coordinator.py")
+    raise AssertionError(f"{class_name}.{method_name} not found in {file_name}")
 
 
 def _calls_self_method(method_node: ast.AsyncFunctionDef, target: str) -> bool:

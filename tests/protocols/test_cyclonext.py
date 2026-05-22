@@ -420,13 +420,13 @@ def test_parse_status_never_cleaned() -> None:
 
 
 def _coordinator_method_source(method_name: str) -> str:
-    coordinator_path = (
+    client_path = (
         Path(__file__).parent.parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     )
-    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    tree = ast.parse(client_path.read_text(encoding="utf-8"))
     for class_node in ast.walk(tree):
         if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":
             continue
@@ -436,7 +436,7 @@ def _coordinator_method_source(method_name: str) -> str:
                 and method.name == method_name
             ):
                 return ast.unparse(method)
-    raise AssertionError(f"AqualinkClient.{method_name} not found")
+    raise AssertionError(f"AqualinkClient.{method_name} not found in client.py")
 
 
 @pytest.mark.parametrize(
@@ -464,13 +464,13 @@ def test_coordinator_cyclonext_branch_routes_through_protocol(
 
 
 def test_update_cyclonext_robot_data_delegates_to_protocol() -> None:
-    coordinator_path = (
+    client_path = (
         Path(__file__).parent.parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     )
-    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    tree = ast.parse(client_path.read_text(encoding="utf-8"))
     method_body = None
     for class_node in ast.walk(tree):
         if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":

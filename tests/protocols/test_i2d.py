@@ -599,13 +599,13 @@ def test_parse_status_estimated_end_time_set_only_when_cleaning() -> None:
 
 
 def _coordinator_method_source(method_name: str) -> str:
-    coordinator_path = (
+    client_path = (
         Path(__file__).parent.parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     )
-    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    tree = ast.parse(client_path.read_text(encoding="utf-8"))
     for class_node in ast.walk(tree):
         if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":
             continue
@@ -615,7 +615,7 @@ def _coordinator_method_source(method_name: str) -> str:
                 and method.name == method_name
             ):
                 return ast.unparse(method)
-    raise AssertionError(f"AqualinkClient.{method_name} not found")
+    raise AssertionError(f"AqualinkClient.{method_name} not found in client.py")
 
 
 @pytest.mark.parametrize(
@@ -657,13 +657,13 @@ def test_extract_fan_speed_from_response_uses_generic_dispatch() -> None:
     so a future PR can't accidentally re-introduce the per-family
     inline branches.
     """
-    coordinator_path = (
+    client_path = (
         Path(__file__).parent.parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     )
-    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    tree = ast.parse(client_path.read_text(encoding="utf-8"))
     method_body = None
     for class_node in ast.walk(tree):
         if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":
@@ -698,13 +698,13 @@ def test_update_i2d_robot_reduced_to_under_30_statements() -> None:
     fetch + delegate to protocol). Pre-R25-i2d was 138 lines including
     the inline lookup tables.
     """
-    coordinator_path = (
+    client_path = (
         Path(__file__).parent.parent.parent
         / "custom_components"
         / "iaqualink_robots"
-        / "coordinator.py"
+        / "client.py"
     )
-    tree = ast.parse(coordinator_path.read_text(encoding="utf-8"))
+    tree = ast.parse(client_path.read_text(encoding="utf-8"))
     method_body = None
     for class_node in ast.walk(tree):
         if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":

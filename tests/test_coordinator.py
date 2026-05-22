@@ -195,7 +195,7 @@ def _build_client_for_resolve() -> object:
     its arguments, so an empty shell is sufficient. Mirrors the pattern in
     ``tests/test_set_fan_speed.py``.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     return AqualinkClient.__new__(AqualinkClient)
 
@@ -312,7 +312,7 @@ def _build_client_for_pending_stop_reset() -> object:
     the imported constant `PENDING_STOP_RESET_MAX_AGE_SECONDS`, and
     `dt_util.utcnow()`. Mirrors `_build_client_for_resolve` above.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     return AqualinkClient.__new__(AqualinkClient)
 
@@ -953,7 +953,7 @@ def _build_client_for_command() -> object:
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient.__new__(AqualinkClient)
     client._device_type = "vr"
@@ -1072,7 +1072,7 @@ def test_delayed_callback_helper_removed() -> None:
     out "Audit the `_delayed_refresh` helper — if it becomes orphaned after
     this change, delete it."
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     assert not hasattr(AqualinkClient, "_delayed_callback"), (
         "`_delayed_callback` should be removed in C4-cmd; the 6 client "
@@ -1178,7 +1178,7 @@ async def test_safe_post_command_refresh_propagates_config_entry_auth_failed() -
     Pre-fix, the inlined `except Exception` at each of the 6 command sites
     silently demoted this to DEBUG and the user never saw the reauth prompt.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient(username="u", password="p", api_key="k")
 
@@ -1199,7 +1199,7 @@ async def test_safe_post_command_refresh_propagates_cancelled_error() -> None:
     but the helper has an explicit `raise` for clarity — this test pins
     the contract regardless of CancelledError's superclass evolution.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient(username="u", password="p", api_key="k")
 
@@ -1220,7 +1220,7 @@ async def test_safe_post_command_refresh_swallows_transient_exception(caplog) ->
     """
     import logging
 
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient(username="u", password="p", api_key="k")
 
@@ -1229,7 +1229,7 @@ async def test_safe_post_command_refresh_swallows_transient_exception(caplog) ->
 
     client._coordinator_callback = transient_failure_callback
 
-    caplog.set_level(logging.DEBUG, logger="custom_components.iaqualink_robots.coordinator")
+    caplog.set_level(logging.DEBUG, logger="custom_components.iaqualink_robots.client")
     # Should NOT raise.
     await client._safe_post_command_refresh()
 
@@ -1250,7 +1250,7 @@ async def test_safe_post_command_refresh_no_callback_is_noop() -> None:
     the pre-existing `hasattr` guard at each call site, which the helper
     replaced.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient(username="u", password="p", api_key="k")
     # _coordinator_callback is None by default (see AqualinkClient.__init__).
@@ -1353,7 +1353,7 @@ def _build_client_for_ws() -> object:
     `_state_signature`) are staticmethods on the class — they need no
     instance fields.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient.__new__(AqualinkClient)
     client._serial = "TEST-SERIAL"
@@ -1420,7 +1420,7 @@ def test_parse_ws_state_message_returns_none_for_heartbeat() -> None:
     `_parse_ws_state_message` must return None so the listener short-circuits
     before any callback fires (AC #1).
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     assert AqualinkClient._parse_ws_state_message({}) is None
     assert AqualinkClient._parse_ws_state_message({"event": "Heartbeat"}) is None
@@ -1430,7 +1430,7 @@ def test_parse_ws_state_message_returns_none_for_foreign_service() -> None:
     """A message from a different service (e.g. Authorization ACK) is
     irrelevant. Must return None (AC #1).
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     msg = {
         "service": "Authorization",
@@ -1444,7 +1444,7 @@ def test_parse_ws_state_message_returns_none_when_robot_block_empty() -> None:
     """StateReported with no `equipment.robot` content is a status-only
     envelope (we already have it via polling). No-op (AC #1).
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     msg = {
         "service": "StateStreamer",
@@ -1458,7 +1458,7 @@ def test_parse_ws_state_message_returns_reported_for_real_state_change() -> None
     """A canonical StateReported with equipment.robot content returns the
     `reported` dict so the listener can merge it onto the cached baseline.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     msg = {
         "service": "StateStreamer",
@@ -1489,7 +1489,7 @@ def test_deep_merge_dict_overlays_overlay_onto_base() -> None:
     or other cached fields. Used by `_websocket_listener` to maintain the
     cached baseline envelope across incremental pushes.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     base = {
         "a": {"b": 1, "c": 2, "nested": {"x": 10, "y": 20}},
@@ -1510,7 +1510,7 @@ def test_deep_merge_dict_replaces_scalars_and_lists() -> None:
     """List values are replaced wholesale (AWS IoT shadow semantics), not
     concatenated. Scalars in overlay overwrite scalars in base.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     base = {"list": [1, 2, 3], "scalar": "old"}
     overlay = {"list": [9], "scalar": "new"}
@@ -1528,7 +1528,7 @@ def test_state_signature_stable_for_unchanged_robot_data() -> None:
     if the cloud emits redundant StateReported events, the signature catches
     them before we burn a coordinator update on no-op data.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     robot = {"state": 1, "errorState": 0, "prCyc": 2, "cycleStartTime": 1700000000, "stepper": 5}
     assert AqualinkClient._state_signature(robot) == AqualinkClient._state_signature(robot)
@@ -1536,7 +1536,7 @@ def test_state_signature_stable_for_unchanged_robot_data() -> None:
 
 def test_state_signature_changes_when_state_changes() -> None:
     """Any of the user-visible fields shifting must change the signature."""
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     a = {"state": 1, "errorState": 0, "prCyc": 2, "cycleStartTime": 0, "stepper": 0}
     b = {**a, "state": 3}
@@ -1549,7 +1549,7 @@ def test_state_signature_includes_cyclobat_nested_fields() -> None:
     otherwise the dedup would silently drop battery/cleaning updates for
     the cyclobat family.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     a = {"main": {"state": 1, "cycleStartTime": 0}, "battery": {"userChargePerc": "80"}}
     b = {"main": {"state": 1, "cycleStartTime": 0}, "battery": {"userChargePerc": "60"}}
@@ -1567,7 +1567,7 @@ def test_state_signature_distinguishes_cyclonext_mode_changes() -> None:
     This test pins that two distinct cyclonext deltas now produce
     distinct signatures so the dedup doesn't drop real changes.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     cyclonext_idle = {"mode": 0, "cycle": 1, "cycleStartTime": 0, "errors": {"code": "0"}}
     cyclonext_cleaning = {"mode": 1, "cycle": 1, "cycleStartTime": 1700000000, "errors": {"code": "0"}}
@@ -1594,7 +1594,7 @@ def test_state_signature_handles_cyclonext_missing_errors_dict() -> None:
     missing dict — otherwise the broad-except at the listener would
     silently drop pushes from healthy cyclonext robots.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     # No `errors` key at all.
     sig = AqualinkClient._state_signature({"mode": 1, "cycle": 1})
@@ -1610,7 +1610,7 @@ def test_parse_ws_state_message_accepts_cyclonext_robot_dot_one_key() -> None:
     `equipment.robot` (vr/vortrax/cyclobat). Before F2, cyclonext
     pushes hit the empty-robot check and were unconditionally dropped,
     forcing cyclonext owners to rely entirely on polled refreshes."""
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     cyclonext_message = {
         "service": "StateStreamer",
@@ -1649,7 +1649,7 @@ def test_parse_ws_state_message_still_rejects_truly_empty_robot() -> None:
     both) is still a heartbeat / status-only push that should be
     filtered out before any push work.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     empty_robot_message = {
         "service": "StateStreamer",
@@ -1681,7 +1681,7 @@ async def test_apply_realtime_envelope_pushes_via_async_set_updated_data(
     # client a real one from the class. ``_build_mock_client`` uses
     # MagicMock so the per-device-type parsers are MagicMock by default;
     # rebind to the real function.
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     # M15: production code reads `client.serial` (public property) — mock must
     # set the public name, not `_serial`, or the parser builds a result dict
@@ -1747,7 +1747,7 @@ async def test_apply_realtime_envelope_does_not_call_async_request_refresh(
 
     coord, client = coordinator_factory(device_type="vr", last_data={"activity": "idle"})
 
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     # M15: production code reads `client.serial` (public property) — mock must
     # set the public name, not `_serial`, or the parser builds a result dict
@@ -1820,7 +1820,7 @@ async def test_apply_realtime_envelope_clears_desired_state_on_natural_completio
         last_data={"activity": "cleaning", "model": "RA"},
     )
 
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     # M15: production code reads `client.serial` (public property) — mock must
     # set the public name, not `_serial`, or the parser builds a result dict
@@ -2108,7 +2108,7 @@ async def test_websocket_listener_propagates_config_entry_auth_failed() -> None:
     pre-patch broad-except wrapping the whole listener would swallow
     this as a WARNING.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient(username="u", password="p", api_key="k")
     client._serial = "T"
@@ -2197,7 +2197,7 @@ async def test_close_websocket_clears_baseline_and_signature() -> None:
     Locks the contract — a future change that re-introduces stale-
     baseline-after-reconnect would fail this test loudly.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient(username="u", password="p", api_key="k")
 

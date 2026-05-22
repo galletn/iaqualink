@@ -56,7 +56,7 @@ def _make_client() -> Any:
     ``_format_time_human``). The real methods are bound by class so
     they work via ``__new__``-constructed instances.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient.__new__(AqualinkClient)
     client._id = _ID

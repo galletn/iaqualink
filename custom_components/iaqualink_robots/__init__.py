@@ -185,7 +185,8 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) -> bool:
-    from .coordinator import AqualinkClient, AqualinkDataUpdateCoordinator
+    from .client import AqualinkClient
+    from .coordinator import AqualinkDataUpdateCoordinator
     from .const import SCAN_INTERVAL
 
     # M19 AC#8: stray api_key cleanup. The M17 migration drops the dead

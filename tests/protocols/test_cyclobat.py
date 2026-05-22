@@ -44,7 +44,7 @@ def _make_client() -> Any:
     fixture stamps each one to match the constructor defaults so the
     method works on a ``__new__``-built instance.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     c = AqualinkClient.__new__(AqualinkClient)
     c._id = _ID

@@ -21,11 +21,12 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
+from ..parsing import calculate_times, format_time_human, resolve_cycle_duration
 from .base import RobotProtocol
 from .common import apply_common_robot_fields
 
 if TYPE_CHECKING:
-    from ..coordinator import AqualinkClient
+    from ..client import AqualinkClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,11 +118,11 @@ class VRProtocol(RobotProtocol):
         Behaviour is byte-identical with pre-R25; ``test_vr.py`` runs the
         full set of fixture payloads through both code paths and diffs.
 
-        The helper methods this calls — ``_resolve_cycle_duration``,
-        ``_calculate_times``, ``_format_time_human``, plus the cached
-        ``_activity`` / ``_fan_speed`` attributes — live on the client.
-        Routing through ``client.<helper>`` instead of moving them keeps
-        the R25-vr diff localised to envelope + parse extraction.
+        The time / duration helpers — ``resolve_cycle_duration``,
+        ``calculate_times``, ``format_time_human`` — live in
+        ``parsing.py`` (R26 module split) and are imported directly. The
+        cached ``_activity`` / ``_fan_speed`` attributes still live on the
+        client and the parser writes back to them via ``client.<attr>``.
         """
         # Ensure we have valid data structure before proceeding.
         if not data or 'payload' not in data:
@@ -176,12 +177,12 @@ class VRProtocol(RobotProtocol):
                 cycle_start_time = dt_util.utc_from_timestamp(timestamp)
                 result["cycle_start_time"] = cycle_start_time
 
-                cycle_duration = client._resolve_cycle_duration(
+                cycle_duration = resolve_cycle_duration(
                     robot_data['durations'], result["cycle"]
                 )
                 result["cycle_duration"] = cycle_duration
 
-                client._calculate_times(cycle_start_time, cycle_duration, result, robot_data)
+                calculate_times(client, cycle_start_time, cycle_duration, result, robot_data)
             else:
                 # Never-cleaned robot — emit None instead of a 1970 epoch render.
                 result["cycle_start_time"] = None
@@ -189,7 +190,7 @@ class VRProtocol(RobotProtocol):
                 result["estimated_end_time"] = None
                 result["cycle_duration"] = 0
                 result["time_remaining"] = 0
-                result["time_remaining_human"] = client._format_time_human(0, 0, 0)
+                result["time_remaining_human"] = format_time_human(0, 0, 0)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for VR robot: {e}")
             result["cycle_start_time"] = None
@@ -197,4 +198,4 @@ class VRProtocol(RobotProtocol):
             result["estimated_end_time"] = None
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
-            result["time_remaining_human"] = client._format_time_human(0, 0, 0)
+            result["time_remaining_human"] = format_time_human(0, 0, 0)

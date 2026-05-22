@@ -32,11 +32,11 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 
-from custom_components.iaqualink_robots.coordinator import (
+from custom_components.iaqualink_robots.client import (
     AqualinkClient,
-    AqualinkDataUpdateCoordinator,
     AuthFailedError,
 )
+from custom_components.iaqualink_robots.coordinator import AqualinkDataUpdateCoordinator
 
 
 def _make_jwt(payload: dict) -> str:
@@ -259,7 +259,7 @@ async def test_send_login_401_raises_auth_failed(monkeypatch) -> None:
             return None
 
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        "custom_components.iaqualink_robots.client.aiohttp.ClientSession",
         _FakeSession,
     )
 
@@ -306,7 +306,7 @@ async def test_send_login_403_raises_auth_failed(monkeypatch) -> None:
             return None
 
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        "custom_components.iaqualink_robots.client.aiohttp.ClientSession",
         _FakeSession,
     )
 
@@ -447,7 +447,7 @@ def test_jwt_exp_warn_rate_limited(caplog) -> None:
     DEBUG. Stops a persistently-malformed Cognito response from flooding the
     operator log every hour.
     """
-    from custom_components.iaqualink_robots import coordinator as coord_mod
+    from custom_components.iaqualink_robots import client as coord_mod
 
     # Reset the module-level flag so this test is deterministic regardless
     # of test ordering — other tests may have already tripped the warn.
@@ -455,7 +455,7 @@ def test_jwt_exp_warn_rate_limited(caplog) -> None:
 
     caplog.set_level(
         logging.DEBUG,
-        logger="custom_components.iaqualink_robots.coordinator",
+        logger="custom_components.iaqualink_robots.client",
     )
 
     coord_mod._resolve_token_expiry("garbage")

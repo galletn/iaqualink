@@ -14,7 +14,7 @@ from .const import (
     DEFAULT_INCLUDE_SECONDS_REMAINING,
     DOMAIN,
 )
-from .coordinator import AqualinkClient, AuthFailedError
+from .client import AqualinkClient, AuthFailedError
 
 _LOGGER = logging.getLogger(__name__)
 

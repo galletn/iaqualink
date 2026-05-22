@@ -60,7 +60,7 @@ def _build_stepper_client(
     helper consults: device type / serial / auth strings for envelope
     construction, plus stubs for the cloud roundtrip and refresh callback.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient.__new__(AqualinkClient)
     client._device_type = device_type

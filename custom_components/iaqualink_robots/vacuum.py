@@ -15,7 +15,8 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .coordinator import AqualinkClient, AqualinkDataUpdateCoordinator
+from .client import AqualinkClient
+from .coordinator import AqualinkDataUpdateCoordinator
 from .const import DOMAIN
 from .device import build_device_info
 from .types import IaqualinkConfigEntry

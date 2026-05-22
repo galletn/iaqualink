@@ -19,7 +19,7 @@ import json
 
 import pytest
 
-from custom_components.iaqualink_robots.coordinator import (
+from custom_components.iaqualink_robots.client import (
     AqualinkClient,
     _TOKEN_EXP_SAFETY_MARGIN_S,
     _decode_jwt_exp,
@@ -109,7 +109,7 @@ def test_resolve_token_expiry_happy_path_returns_aware_utc() -> None:
 def test_resolve_token_expiry_fallback_returns_aware_utc() -> None:
     """Malformed token: fallback `now + 1h - margin` is also aware-UTC."""
     # Reset the rate-limit flag so a prior test can't suppress the fallback path.
-    from custom_components.iaqualink_robots import coordinator as coord_mod
+    from custom_components.iaqualink_robots import client as coord_mod
     coord_mod._JWT_EXP_FALLBACK_WARNED = False
 
     result = _resolve_token_expiry("garbage")
@@ -246,7 +246,7 @@ def test_dst_boundary_remaining_time_continuous(monkeypatch) -> None:
     minute regardless of whether DST math was broken. This test now
     structurally exercises the DST boundary.
     """
-    from custom_components.iaqualink_robots import coordinator as coord_mod
+    from custom_components.iaqualink_robots import client as coord_mod
 
     client = _build_client()
     # In Europe/Paris on 2026-03-29, 02:00 local jumps to 03:00. That's

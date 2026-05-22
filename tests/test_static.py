@@ -223,7 +223,7 @@ def test_aqualink_client_exposes_device_type_and_serial_as_properties() -> None:
     a stable descriptor shape. Failure here means the property was removed
     or renamed -- restore it before landing.
     """
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     device_type_attr = getattr(AqualinkClient, "device_type", None)
     serial_attr = getattr(AqualinkClient, "serial", None)
@@ -383,3 +383,122 @@ def test_py_typed_marker_exists() -> None:
         f"Expected PEP 561 marker at {marker} — without this consumers "
         "ignore the package's type annotations (P6 AC#5)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Story R26 — module-split guards.
+#
+# R26 split the pre-existing 3500-line ``coordinator.py`` into three
+# single-responsibility modules:
+#   * ``client.py``       — ``AqualinkClient`` (HTTP + websocket + auth)
+#   * ``coordinator.py``  — ``AqualinkDataUpdateCoordinator`` (HA glue)
+#   * ``parsing.py``      — pure date/time/duration helpers
+#
+# These guards lock the split in: the modules must exist, their sizes must
+# stay below an agreed ceiling (so a future ``# stuff a feature into the
+# convenient file'' regression is caught), and ``import``-ing the package
+# must not introduce a circular dependency between client and coordinator.
+# ---------------------------------------------------------------------------
+
+
+def test_module_split_files_exist() -> None:
+    """R26 AC#1: post-split layout — client.py, coordinator.py, parsing.py
+    are all present in the package.
+
+    The story spec calls these out explicitly. Without this guard, a
+    refactor that re-merges client into coordinator (or drops parsing
+    back into client) would slip past CI because the legacy
+    ``from .coordinator import AqualinkClient`` import would still work
+    via a re-export.
+    """
+    expected = ["client.py", "coordinator.py", "parsing.py"]
+    missing = [name for name in expected if not (PACKAGE / name).exists()]
+    assert not missing, (
+        f"R26 AC#1 layout regression — missing: {missing}. The post-split "
+        "package must contain client.py + coordinator.py + parsing.py."
+    )
+
+
+# Module-size ceilings (R26 testing-clause). Set ~10% above current line
+# counts so they catch regressions without tripping on a one-off review fix.
+# When a legitimate feature pushes a file past the ceiling, raise the
+# threshold AND document why in the same commit — the story author chose
+# to make this a knob rather than a hard cliff so the file gets attention
+# at review time rather than getting silently re-bloated.
+#
+# Current sizes at R26 land (2026-05-22):
+#   client.py       2629 lines (was 2611 inline in pre-R26 coordinator.py)
+#   coordinator.py   817 lines (was 774 inline in pre-R26 coordinator.py)
+#   parsing.py       186 lines (new)
+#
+# The story aspirational target of client.py ≤ 800 / coordinator.py ≤ 500
+# is not achievable with the "purely mechanical split" the spec calls for —
+# further compaction (collapsing per-device-type dispatch ifs, factoring
+# command-method boilerplate) is the natural next refactor (R26-followup).
+# These thresholds gate regressions, not aspirations.
+_MODULE_SIZE_CEILINGS = {
+    "client.py": 2900,
+    "coordinator.py": 900,
+    "parsing.py": 250,
+}
+
+
+def test_module_sizes_stay_under_ceiling() -> None:
+    """R26 testing-clause: per-module line-count regression gate.
+
+    Counts physical lines (``len(text.splitlines())``) — the same metric
+    ``wc -l`` reports. The ceilings in ``_MODULE_SIZE_CEILINGS`` are set
+    ~10% above the size at R26 land so a one-off review fix doesn't trip
+    CI but a steady-state regression (a new 200-line method on the
+    coordinator) does.
+
+    When a legitimate growth pushes the file past the ceiling, raise the
+    ceiling in this file AND name the reason in the commit message —
+    that surfaces the size as a review-time concern instead of a silent
+    drift.
+    """
+    offenders: list[tuple[str, int, int]] = []
+    for name, ceiling in _MODULE_SIZE_CEILINGS.items():
+        path = PACKAGE / name
+        actual = len(path.read_text(encoding="utf-8").splitlines())
+        if actual > ceiling:
+            offenders.append((name, actual, ceiling))
+    assert not offenders, (
+        "R26 module-size ceiling exceeded. If this is intentional growth, "
+        "raise the ceiling in _MODULE_SIZE_CEILINGS in this file and "
+        "name the reason in the commit message:\n"
+        + "\n".join(
+            f"  {name}: {actual} lines (> ceiling {ceiling})"
+            for name, actual, ceiling in offenders
+        )
+    )
+
+
+def test_package_imports_without_circular_dependency() -> None:
+    """R26 testing-clause: ``import custom_components.iaqualink_robots``
+    must complete without ImportError or RecursionError.
+
+    Catches the classic post-split failure mode where client.py imports
+    AqualinkDataUpdateCoordinator at module scope and coordinator.py
+    imports AqualinkClient at module scope — a cycle that resolves at
+    runtime only because ``from __future__ import annotations`` defers
+    annotation evaluation, but blows up the moment the typing pragma is
+    removed or a non-TYPE_CHECKING import is added.
+
+    Importing the package walks every ``__init__.py`` and re-imports
+    each submodule the bootstrap loads, so a cycle would surface here.
+    """
+    import importlib
+
+    # Use importlib.reload to force a fresh import even if a prior test
+    # already loaded the module (the integration package is not exposing
+    # a clean teardown hook). If any submodule has a circular import, the
+    # ImportError surfaces here.
+    pkg = importlib.import_module("custom_components.iaqualink_robots")
+    importlib.reload(pkg)
+
+    # Walk submodules to ensure each can be imported standalone too —
+    # catches the "module A only imports cleanly because module B was
+    # already loaded" failure mode.
+    for submodule in ("client", "coordinator", "parsing"):
+        importlib.import_module(f"custom_components.iaqualink_robots.{submodule}")

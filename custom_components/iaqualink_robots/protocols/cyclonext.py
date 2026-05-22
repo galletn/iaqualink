@@ -27,10 +27,11 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.util import dt as dt_util
 
+from ..parsing import calculate_times, format_time_human, resolve_cycle_duration
 from .base import RobotProtocol
 
 if TYPE_CHECKING:
-    from ..coordinator import AqualinkClient
+    from ..client import AqualinkClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -211,12 +212,12 @@ class CycloNextProtocol(RobotProtocol):
 
                 result["cycle"] = robot_data['cycle']
 
-                cycle_duration = client._resolve_cycle_duration(
+                cycle_duration = resolve_cycle_duration(
                     robot_data['durations'], result["cycle"]
                 )
                 result["cycle_duration"] = cycle_duration
 
-                client._calculate_times(cycle_start_time, cycle_duration, result)
+                calculate_times(client, cycle_start_time, cycle_duration, result)
             else:
                 # Never-cleaned robot.
                 result["cycle_start_time"] = None
@@ -225,7 +226,7 @@ class CycloNextProtocol(RobotProtocol):
                 result["cycle"] = 0
                 result["cycle_duration"] = 0
                 result["time_remaining"] = 0
-                result["time_remaining_human"] = client._format_time_human(0, 0, 0)
+                result["time_remaining_human"] = format_time_human(0, 0, 0)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for cyclonext robot: {e}")
             result["cycle_start_time"] = None
@@ -234,4 +235,4 @@ class CycloNextProtocol(RobotProtocol):
             result["cycle"] = 0
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
-            result["time_remaining_human"] = client._format_time_human(0, 0, 0)
+            result["time_remaining_human"] = format_time_human(0, 0, 0)

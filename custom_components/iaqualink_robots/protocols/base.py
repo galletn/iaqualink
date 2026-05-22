@@ -139,9 +139,11 @@ class RobotProtocol(ABC):
         """Parse a per-family status payload into ``result`` in place.
 
         Lifts the body of pre-R25 ``_update_<type>_robot_data``. Takes
-        ``client`` so it can reach the shared helpers
-        (``_resolve_cycle_duration``, ``_calculate_times``,
-        ``_format_time_human``) without duplicating them. Same in-place
-        mutation semantics as the pre-R25 method — adds keys to ``result``
-        rather than returning a new dict.
+        ``client`` so the per-family parser can read instance state
+        (``_fan_speed`` cache, ``_include_seconds_remaining`` flag) it
+        needs to drive the live mapping. Shared time / duration helpers
+        live in ``parsing.py`` (R26) and are imported directly by each
+        protocol module rather than reached through ``client.*``. Same
+        in-place mutation semantics as the pre-R25 method — adds keys to
+        ``result`` rather than returning a new dict.
         """

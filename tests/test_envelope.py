@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import pytest
 
-from custom_components.iaqualink_robots.coordinator import AqualinkClient
+from custom_components.iaqualink_robots.client import AqualinkClient
 
 
 # ---------------------------------------------------------------------------

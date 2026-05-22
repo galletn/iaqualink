@@ -40,7 +40,7 @@ _TOKEN = f"{_ID}|{_AUTH}|{_APP}"
 
 def _make_client() -> Any:
     """Build a minimal ``AqualinkClient`` for the Vortrax protocol tests."""
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     client = AqualinkClient.__new__(AqualinkClient)
     client._id = _ID

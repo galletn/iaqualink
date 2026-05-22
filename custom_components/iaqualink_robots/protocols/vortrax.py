@@ -9,7 +9,7 @@ differs is the parser:
   ``eboxData.completeCleanerPn`` path that VR doesn't surface.
 * Vortrax has no stepper UI (no ±15-minute buttons), so the parser
   doesn't read ``stepper`` / ``stepperAdjTime`` and the time math is
-  the simpler stepper-less path on ``_calculate_times``.
+  the simpler stepper-less path on ``parsing.calculate_times``.
 * Vortrax's ``cycle`` field is read at cycle-duration time (only when
   the robot has actually started a cycle), whereas VR reads it
   unconditionally to drive the live ``fan_speed`` mapping.
@@ -29,11 +29,12 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
+from ..parsing import calculate_times, format_time_human, resolve_cycle_duration
 from .base import RobotProtocol
 from .common import apply_common_robot_fields
 
 if TYPE_CHECKING:
-    from ..coordinator import AqualinkClient
+    from ..client import AqualinkClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -159,12 +160,12 @@ class VortraxProtocol(RobotProtocol):
 
                 result["cycle"] = robot_data['prCyc']
 
-                cycle_duration = client._resolve_cycle_duration(
+                cycle_duration = resolve_cycle_duration(
                     robot_data['durations'], result["cycle"]
                 )
                 result["cycle_duration"] = cycle_duration
 
-                client._calculate_times(cycle_start_time, cycle_duration, result)
+                calculate_times(client, cycle_start_time, cycle_duration, result)
             else:
                 # Never-cleaned robot.
                 result["cycle_start_time"] = None
@@ -173,7 +174,7 @@ class VortraxProtocol(RobotProtocol):
                 result["cycle"] = 0
                 result["cycle_duration"] = 0
                 result["time_remaining"] = 0
-                result["time_remaining_human"] = client._format_time_human(0, 0, 0)
+                result["time_remaining_human"] = format_time_human(0, 0, 0)
         except Exception as e:
             _LOGGER.debug(f"Error processing cycle times for vortrax robot: {e}")
             result["cycle_start_time"] = None
@@ -182,4 +183,4 @@ class VortraxProtocol(RobotProtocol):
             result["cycle"] = 0
             result["cycle_duration"] = 0
             result["time_remaining"] = 0
-            result["time_remaining_human"] = client._format_time_human(0, 0, 0)
+            result["time_remaining_human"] = format_time_human(0, 0, 0)

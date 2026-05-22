@@ -28,7 +28,7 @@ from unittest.mock import MagicMock
 import aiohttp
 import pytest
 
-from custom_components.iaqualink_robots.coordinator import AqualinkClient
+from custom_components.iaqualink_robots.client import AqualinkClient
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +154,11 @@ async def test_send_login_uses_wrapped_ha_connector(monkeypatch) -> None:
     fake_hass = MagicMock()
 
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.async_get_clientsession",
+        "custom_components.iaqualink_robots.client.async_get_clientsession",
         lambda hass: (fake_ha if hass is fake_hass else pytest.fail("wrong hass")),
     )
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        "custom_components.iaqualink_robots.client.aiohttp.ClientSession",
         _make_wrapper_factory(fake_response, constructed=constructed),
     )
 
@@ -187,11 +187,11 @@ async def test_get_devices_uses_wrapped_ha_connector(monkeypatch) -> None:
     fake_hass = MagicMock()
 
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.async_get_clientsession",
+        "custom_components.iaqualink_robots.client.async_get_clientsession",
         lambda hass: fake_ha,
     )
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        "custom_components.iaqualink_robots.client.aiohttp.ClientSession",
         _make_wrapper_factory(fake_response, constructed=constructed),
     )
 
@@ -219,11 +219,11 @@ async def test_get_device_features_uses_wrapped_ha_connector(monkeypatch) -> Non
     fake_hass = MagicMock()
 
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.async_get_clientsession",
+        "custom_components.iaqualink_robots.client.async_get_clientsession",
         lambda hass: fake_ha,
     )
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        "custom_components.iaqualink_robots.client.aiohttp.ClientSession",
         _make_wrapper_factory(fake_response, constructed=constructed),
     )
 
@@ -249,11 +249,11 @@ async def test_post_command_i2d_uses_wrapped_ha_connector(monkeypatch) -> None:
     fake_hass = MagicMock()
 
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.async_get_clientsession",
+        "custom_components.iaqualink_robots.client.async_get_clientsession",
         lambda hass: fake_ha,
     )
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        "custom_components.iaqualink_robots.client.aiohttp.ClientSession",
         _make_wrapper_factory(fake_response, constructed=constructed),
     )
 
@@ -293,11 +293,11 @@ async def test_cloud_wrappers_have_isolated_private_cookie_jars(monkeypatch) -> 
     fake_hass = MagicMock()
 
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.async_get_clientsession",
+        "custom_components.iaqualink_robots.client.async_get_clientsession",
         lambda hass: fake_ha,
     )
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        "custom_components.iaqualink_robots.client.aiohttp.ClientSession",
         _make_wrapper_factory(fake_response, constructed=constructed),
     )
 
@@ -341,13 +341,13 @@ async def test_send_login_falls_back_to_ephemeral_without_hass(monkeypatch) -> N
     constructed: list = []
 
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        "custom_components.iaqualink_robots.client.aiohttp.ClientSession",
         _make_wrapper_factory(fake_response, constructed=constructed),
     )
     # If async_get_clientsession is called when hass is None, that's a bug —
     # the helper must take the fallback branch.
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.async_get_clientsession",
+        "custom_components.iaqualink_robots.client.async_get_clientsession",
         lambda hass: pytest.fail("async_get_clientsession called with None hass"),
     )
 
@@ -390,12 +390,12 @@ async def test_vortrax_scraper_does_not_use_shared_session(monkeypatch) -> None:
     constructed: list = []
 
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.aiohttp.ClientSession",
+        "custom_components.iaqualink_robots.client.aiohttp.ClientSession",
         _make_wrapper_factory(fake_response, constructed=constructed),
     )
     # The scraper must not consult the shared session — any call is a bug.
     monkeypatch.setattr(
-        "custom_components.iaqualink_robots.coordinator.async_get_clientsession",
+        "custom_components.iaqualink_robots.client.async_get_clientsession",
         lambda hass: pytest.fail(
             "Vortrax scraper called async_get_clientsession — third-party leak risk (L19 AC#2)"
         ),

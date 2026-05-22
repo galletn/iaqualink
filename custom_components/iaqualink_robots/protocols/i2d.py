@@ -48,10 +48,11 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.vacuum import VacuumActivity
 from homeassistant.util import dt as dt_util
 
+from ..parsing import add_minutes_to_datetime, format_time_human
 from .base import RobotProtocol
 
 if TYPE_CHECKING:
-    from ..coordinator import AqualinkClient
+    from ..client import AqualinkClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -416,10 +417,10 @@ class I2DProtocol(RobotProtocol):
             # H8: aware-UTC datetime for the estimated end time, only
             # when we're actively cleaning and have remaining minutes.
             if frame.time_remaining > 0 and client._activity == VacuumActivity.CLEANING:
-                result["estimated_end_time"] = client.add_minutes_to_datetime(
+                result["estimated_end_time"] = add_minutes_to_datetime(
                     dt_util.utcnow(), frame.time_remaining
                 )
-                result["time_remaining_human"] = client._format_time_human(
+                result["time_remaining_human"] = format_time_human(
                     frame.time_remaining // 60, frame.time_remaining % 60, 0
                 )
 

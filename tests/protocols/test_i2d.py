@@ -28,7 +28,7 @@ import pytest
 
 
 def _make_client() -> Any:
-    from custom_components.iaqualink_robots.coordinator import AqualinkClient
+    from custom_components.iaqualink_robots.client import AqualinkClient
 
     c = AqualinkClient.__new__(AqualinkClient)
     c._id = "test_user_id"

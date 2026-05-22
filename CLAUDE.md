@@ -6,11 +6,11 @@ This file is for Claude Code sessions (and any other AI agents) picking up work 
 
 Home Assistant custom integration for **iAqualink robotic pool cleaners** (Zodiac, Polaris, Aqua Products and rebrands). Domain: `iaqualink_robots` (snake_case post-story-C7, matching the directory name and HA's snake_case convention). Pre-C7 the manifest declared the camelCase `iaqualinkRobots` which still exists in some legacy config-entry storage on user installs that haven't been deleted + re-added (the upgrade-time migration story is documented in the C7 CHANGELOG entry). The main code lives in [`custom_components/iaqualink_robots/`](custom_components/iaqualink_robots/).
 
-The user-facing entry point is the config flow in [`config_flow.py`](custom_components/iaqualink_robots/config_flow.py); the heavy lifting (cloud auth, websocket, per-device parsing) is in [`coordinator.py`](custom_components/iaqualink_robots/coordinator.py).
+The user-facing entry point is the config flow in [`config_flow.py`](custom_components/iaqualink_robots/config_flow.py). After story R26 the heavy lifting is split across three modules: [`client.py`](custom_components/iaqualink_robots/client.py) (cloud auth + HTTP + WebSocket + per-device dispatch), [`coordinator.py`](custom_components/iaqualink_robots/coordinator.py) (HA `DataUpdateCoordinator` glue + outage-aware availability + realtime-envelope apply), [`parsing.py`](custom_components/iaqualink_robots/parsing.py) (pure date/time/duration helpers as free functions), and the [`protocols/`](custom_components/iaqualink_robots/protocols/) subpackage (per-device parsing — one module per device family).
 
 ## Device types — the most important gotcha
 
-The integration handles **5 distinct device families** with **different cloud encodings**. Mismatching them silently breaks fan-speed / cycle commands. The split lives in `coordinator.py::AqualinkClient._set_other_fan_speed` and the per-type branches in [`vacuum.py::IAquaLinkRobotVacuum`](custom_components/iaqualink_robots/vacuum.py):
+The integration handles **5 distinct device families** with **different cloud encodings**. Mismatching them silently breaks fan-speed / cycle commands. The split lives in `client.py::AqualinkClient._set_other_fan_speed` (the cloud-encoding side) and the per-type branches in [`vacuum.py::IAquaLinkRobotVacuum`](custom_components/iaqualink_robots/vacuum.py) (the HA-display side); per-family parsing now lives in the [`protocols/`](custom_components/iaqualink_robots/protocols/) subpackage:
 
 | `device_type` | Modes (`_fan_speed_list`) | Example models |
 |---|---|---|
@@ -34,7 +34,7 @@ python -m py_compile <file.py>      # Python syntax
 # JSON: Get-Content file.json -Raw | ConvertFrom-Json
 ```
 
-CI (`.github/workflows/ci.yaml`) runs: hassfest (informational), flake8, mypy (currently `ignore_errors=True` per-module — story P6 ratchets that), pytest with coverage.
+CI (`.github/workflows/ci.yaml`) runs: hassfest (informational), flake8, **`mypy --strict`** (P6 ratcheted `ignore_errors = False` for every module — `# type: ignore` is now banned by `tests/test_static.py::test_no_type_ignore_in_production_code`), pytest with coverage.
 
 ## Polling cadence — do not slow it globally
 
@@ -46,7 +46,7 @@ When users complain about activity-log spam from frequently-changing sensors, th
 
 Planning lives under `_bmad-output/` (gitignored, local-only). Key files:
 
-- [`_bmad-output/planning-artifacts/stories/EPICS.md`](_bmad-output/planning-artifacts/stories/EPICS.md) — backlog index, ~43 stories across 11 epics
+- [`_bmad-output/planning-artifacts/stories/EPICS.md`](_bmad-output/planning-artifacts/stories/EPICS.md) — backlog index, **47 stories across 11 epics** (46 done as of 2026-05-22; R30 is the only `backlog` story, gated on Epic-4 soak)
 - `_bmad-output/planning-artifacts/stories/story-<KEY>-<slug>.md` — one file per story, with `Status: backlog | in-progress | done`
 - [`_bmad-output/implementation-artifacts/deferred-work.md`](_bmad-output/implementation-artifacts/deferred-work.md) — items absorbed/moved/dropped from code reviews, annotated with owning story keys
 
@@ -80,22 +80,26 @@ Push directly to `main` — this project does not gate routine work behind PRs, 
 
 Story **P7** (translations completeness) is the dedicated place to roll up native translations; until it lands, English-fallback is the convention.
 
-## Current state (as of `ab2d37b`)
+## Current state (as of `f9ae8b4`, 2026-05-22)
 
-**6 stories done**: C2 (unique_id), M12 (button unique_ids), M17 (api_key drop), H9a (JWT exp decode), M18 (parity test), M19 (defensive hardening bundle). Plus P1/P2 (test/CI scaffolding) shipped earlier and bookkeeping-flipped to done.
+**46 of 47 stories done.** The full Epic 1-10 sweep has landed: CI + test scaffolding (P1, P2), config-flow hardening (C2/C7 + M12/M17/M18/M19 + H9a/H9b/P4 + C6), service-layer repair (C1a/C1b/P8), refresh-storm reduction + lifecycle (C4-cmd/C4-ws/H6/H7/H10/P10), micro-cleanups (C3/L18/L19/L22/M14/M15/M16), datetime hygiene + display strings (H8/M11/C5), Platinum HA patterns (P3/P5/P6/P7/P9/P11), helper extractions (R23/R24), per-device strategy refactor (R25 × 5 families), module split + typed WS payloads (R26/P12). The `coordinator.py` god-file went from 3566 lines → 704 + `client.py` (2306) + `parsing.py` (152) + `protocols/{base,common,vr,vortrax,cyclobat,cyclonext,i2d}.py`.
 
-**Open issues** worth glancing at:
+**R30** (drop `_status_history` stabilizer) is the only `backlog` story and is **gated on 4 weeks of Epic-4 production soak with zero flapping bug reports** — soak window begins when Epic 4 hits a released version.
 
-- `#76` — vacuum fan_speed bugs — **fixed** in `6bdefc5` + `ab2d37b`, awaiting user confirmation
-- `#88` — EX6000 reporting as "unknown" model — README updated, underlying detection fix still open
-- `#76` (related) — `#79`, `#81` — entity/translation polish, belongs to P7 / P11
-- Discussion `#91` — reporting interval — partially addressed by `include_seconds_remaining` toggle
+**Open GitHub issues** (live state, not aspirational):
 
-**Obvious next work**:
+- `#97` — Rename integration ID `iaqualink_robots` → `iaqualinkrobots` for HACS compatibility. **Conflicts with C7's deliberate snake_case choice.** Worth reading before acting; HA's snake_case convention and our hassfest-compliant manifest are the defenders.
+- `#93` — Help implement upstream HA pool-cleaner entity domain. Collaboration ask, not a bug.
+- `#92` — How to select different cleaning modes / add time. User question, not a bug.
+- `#88` — EX6000 support. README is updated; underlying device-detection fix is open.
+- `#81` — Hide irrelevant entities for certain vacuum models. Pre-P11; may be addressable now that translation_key + has_entity_name are wired up.
+- `#76` — "Walls only" mode showing on Zodiac CNX 30 iQ post-2.4.2. Patches in `6bdefc5`/`ab2d37b` claim a fix but the issue is still open — likely user confirmation outstanding.
 
-- **H9b** — 401-on-stale-token wrapper + `ConfigEntryAuthFailed` + `asyncio.Lock` around `_authenticate` + WARNING rate-limit. Picks up 3 absorbed items from the H9a review.
-- **M15** — public `serial` / `device_type` / `title` properties. Unblocks the `client._serial` TODO in `button.py` and the `coordinator._title` reach-through in tests. Picks up 3 absorbed items from the M12 review.
-- **C6** — auth-before-discovery (dedupe before expensive cloud calls). Depends on H9b's design.
+**Obvious next work** (no story file exists yet for any of these — `bmad-create-story` first):
+
+- **R26-followup** — compact `coordinator.py` toward ≤ 500 lines and `client.py` toward ≤ 800 (currently 704 / 2306) by collapsing per-device-type dispatch ifs and factoring command-method boilerplate. Named in CHANGELOG + deferred-work but never written up.
+- **Bug-fix triage of `#76` / `#88` / `#97`** — pick one of the live user-reported issues and turn it into a story.
+- **5 deferred items from R26 review** (in `deferred-work.md`): H8 broad-except in `parsing.calculate_times`, cyclonext strict-int `mode == 1` (cyclobat sibling coerces), `_state_signature` hardcoded to `equipment.robot` (cyclonext's `robot.1` shadow missing), 5 coordinator → `client._foo` private reach-throughs, one-sided size-ceiling guard.
 
 See `deferred-work.md` for the full triage table mapping review findings to owning stories.
 

@@ -4,6 +4,63 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 
 ## Unreleased
 
+_None yet._
+
+## 3.0.0-rc.1 — 2026-05-22
+
+Release candidate for the 3.x line. Consolidates the v2.5.1 → 3.0.0 release notes so testers see the full diff from the last stable in one place. If RC testing surfaces no regressions, this content becomes the `v3.0.0` release notes as-is. **Pre-release** — HACS users on the default channel will not see this version; toggle "Show beta versions" in the integration's HACS panel to install it. **Minimum Home Assistant raised to `2026.3.0`** (via `hacs.json`).
+
+### ⚠ Breaking changes (read before upgrading)
+
+- **Sensor state values are now lowercase snake_case** (`cleaning`, `floor_only`, `connected`) instead of title-cased English (`Cleaning`, `Floor only`, `Connected`). Templates and automations doing `is_state(sensor.x_activity, 'Cleaning')` need to switch to `'cleaning'`. HA's frontend still renders localized text via the new translations.
+- **Timestamps are now aware-UTC** (`+00:00` suffix on ISO output) and the three TIMESTAMP sensors (`cycle_start_time`, `estimated_end_time`, `last_online`) declare `device_class=TIMESTAMP` — they render in your local timezone in the UI. Templates parsing the raw string should use `as_datetime()` instead of string slicing.
+- **Vacuum entity friendly name** is now the device-registry name only (no English suffix). If you renamed the device card via the UI without re-running the config flow, the vacuum entity's display name shifts to match.
+- **Integration domain renamed** `iaqualinkRobots` → `iaqualink_robots` (snake_case, HA convention). Existing config entries auto-migrate; entity_ids and history are preserved.
+
+### 🐛 Fixed (user-visible bugs)
+
+- **VR robots no longer auto-restart** for a second cycle after natural completion (issue #89, PR #94 by @flimzy). Cyclonext / cyclobat / vortrax / i2d are unaffected — the bug was vr-specific.
+- **Cyclonext "Walls only" no longer shows** in the cleaning-mode dropdown on CNX 30 iQ / RE 4400 iQ / RE 4600 iQ (issue #76). Cyclonext now correctly exposes only `floor_only` + `floor_and_walls`.
+- **Cyclonext fan-speed changes from HA now reach the device** (issue #76, second half). Previously the command silently no-op'd because of a key-style mismatch; the entity remembered the local change but the robot stayed on its previous cycle.
+- **Cyclobat now exposes all 4 of its real cleaning modes** (`wall_only`, `floor_only`, `smart_floor_and_walls`, `floor_and_walls`) instead of an i2d-shaped 3-entry list.
+- **i2d_robot `stop_cleaning`** no longer double-sends the stop command.
+- **`reduce_fifteen_minutes` button** no longer always reads `stepper=0`; it now indexes the active stepper like `add_fifteen_minutes`.
+- **Remote-control button names now render in your HA language** (issue #79) — Forward / Backward / Rotate Left/Right / Stop / Add 15 Minutes / Reduce 15 Minutes for cs, de, es, fr, it, nl, pt, sk + English fallback.
+- **Stop + immediate restart no longer rolls the UI back to "idle"** for ~3 s before the next poll catches up.
+- **TIMESTAMP sensors render "Unknown" on failure paths** (no-data / parse error / never-cleaned) instead of a misleading "right now" instant or "55 years ago" 1970-epoch.
+- **Newer HA cores no longer reject the manifest** as `extra keys not allowed @ data['homeassistant']`.
+- **Stale-token reauth**: a password change in the iAqualink app now triggers HA's reauth prompt instead of looping silently. REST 401s retry once with a forced token refresh before tripping reauth.
+- **Device card `Model` field** now shows the device-type family (`i2d_robot`, `cyclonext`, `vortrax`, `cyclobat`, `vr`) when the cloud hasn't returned a specific model name — was `"Hidden"` or `"Unknown"` before.
+- **All entity platforms (vacuum / sensors / buttons) now group under a single device card** in Home Assistant, with consistent `name` / `manufacturer` / `model` / `sw_version` across platforms.
+
+### ✨ Added
+
+- **Reauth flow** in the config flow (story P4): when authentication fails, HA's "Reauthentication required" notification opens a password-only form that updates the entry in place — entity IDs, history, area assignments, and automations are preserved.
+- **Repairs flow for the legacy-service behaviour change** (story P8): if your pre-3.0 automations called `iaqualink_robots.remote_forward` / `…remote_stop` / etc. (which silently failed pre-3.0), HA now surfaces a one-time notification on first post-3.0 setup so you can verify those automations still do what you intended (because post-3.0, the services actually move the robot).
+- **`Include seconds in time-remaining display` option** in the config flow (default on; turn off via Settings → Devices & Services → Configure to cut ~20× the activity-log spam during long cleaning cycles).
+- **Config flow rejects duplicates**: re-adding the same robot now aborts with `already_configured` instead of forking a second coordinator. Multi-robot-per-account users can still add new robots by re-running the user flow with the same credentials — only new robots are offered.
+- **Config flow rejects empty/whitespace serials**: prevents the old M13 bug where your email got frozen as the entity unique_id.
+- **Diagnostics dump** with credential redaction (Settings → Devices & Services → ⋮ → Download diagnostics — useful for issue reports).
+- **Typed WebSocket payload validation** (story P12): the integration now logs an actionable WARNING when the iAqualink cloud silently changes its payload shape, instead of swallowing the drift as a silent KeyError.
+
+### 📝 Migration / manual notes
+
+- **HA minimum raised to `2026.3.0`** via `hacs.json`. Users on older HA will see the version greyed out in HACS — upgrade HA or stay on 2.5.1.
+- **Templates parsing timestamps** need `as_datetime()` instead of raw string parsing (see Breaking changes #2).
+- **Templates comparing sensor states** to `'Cleaning'` / `'Floor only'` / `'Connected'` need to switch to lowercase keys (see Breaking changes #1).
+- **No manual config-entry deletion is required**: every domain rename / schema bump (C7, M17, P3) auto-migrates on next setup.
+
+### 🛠 Behind the scenes (not user-visible, mentioned for transparency)
+
+- **48-story refactor pass** — 46 shipped, 2 backlog (R30 stabilizer-drop is gated on a 4-week production soak after Epic 4; R26-followup compaction is the natural next refactor). Highlights: config-flow hardening (C2/C6/C7/M12/M17/M18/M19/H9a/H9b/P4), refresh-storm reduction (C4-cmd/C4-ws/H6/H7/H10/P10), per-device strategy refactor (R25 × 5 families), `coordinator.py` god-file split (R26: 3566 → 704 + `client.py` + `parsing.py` + `protocols/`), and full `mypy --strict` clean across the package (P6) with a `py.typed` marker.
+- **~681 tests** + flake8 + `mypy --strict` + hassfest on every push (GitHub Actions, `ubuntu-latest`).
+- **Translations completeness**: all 9 locales (cs / de / en / es / fr / it / nl / pt / sk) have full key coverage with English fallback where native translations haven't been contributed yet (PRs welcome).
+
+🙏 Thanks to @flimzy for PR #94 (VR auto-restart fix) and @FejbyK for the `hacs.json` minimum-HA-version salvage from PR #96.
+
+<details>
+<summary>Per-story technical detail (archived from the pre-rc.1 <code>Unreleased</code> section — for maintainers and bug-hunters who want the full thousand-words-per-story rationale)</summary>
+
 ### Changed
 
 - **R26 review follow-up part 2 — 13 more AST-guard path fixes + cycle-detection guard reverted to non-destructive reload.** The first follow-up (`fc2fa33`) caught one path-stale source-grep guard (`test_cloud_sites_routed_through_cloud_session`) but missed 13 sibling sites of the same shape across the protocol-test suite and the broader coordinator-test files. CI on Linux surfaced them as 33 test failures all of the form `AqualinkClient.<method> not found` because the AST helpers were reading `coordinator.py` to look up `class AqualinkClient` — which moved to `client.py` under R26. Sites flipped from `coordinator.py` → `client.py`: `tests/protocols/test_cyclobat.py` (2 sites), `tests/protocols/test_cyclonext.py` (2), `tests/protocols/test_i2d.py` (3), `tests/protocols/test_vortrax.py` (2), `tests/protocols/test_vr.py` (2), `tests/test_coordinator.py` (3 — the C4-cmd command-method guard, the F1 `_safe_post_command_refresh` guard, and the C4-ws `_websocket_listener` no-fire-and-forget guard), `tests/test_auth.py` (the H9b 401-substring-match anti-pattern grep). `tests/test_stepper.py::_method_node` is now class-name-aware via a `_CLASS_FILE` map — `AqualinkClient` → `client.py`, `AqualinkDataUpdateCoordinator` → `coordinator.py` — because that helper is called with both class names. **Cycle-detection guard reverted to reload pattern.** The first follow-up's "snapshot sys.modules, pop the package prefix, re-import" pattern broke `tests/test_vacuum.py::test_set_fan_speed_accepts_internal_key` because `sys.modules.pop()` + re-import creates a fresh package object whose `__dict__` is missing the `vacuum` submodule attribute, so a subsequent `monkeypatch.setattr("…vacuum.asyncio.sleep", …)` blows up trying to traverse the desynchronized attribute graph. The reload-based pattern is strictly stronger than the original (which used `import_module` cache hits) without destroying the parent package object: each submodule's body re-executes via `importlib.reload(sys.modules[name])`, surfacing module-level import errors that the original guard would silently no-op past. It does NOT catch a true "fresh process" cycle (where neither module is in `sys.modules`); the guard's docstring now states that limitation explicitly and points to hassfest (which spawns a fresh interpreter) for the stronger check. Same lesson, twice: dev-time `py_compile` + in-process import smoke cannot replace running pytest on Linux. CI on `ubuntu-latest` remains the canonical verifier.
@@ -70,6 +127,8 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 ### Fixed
 
 - **Stop + immediate-restart no longer rolls the UI back to "idle" (story H6).** Pre-H6, when the user pressed stop and then immediately restarted cleaning, the live `activity == "cleaning"` from the next cloud poll was silently overwritten back to `"idle"` by the queued reset from `stop_cleaning`. The integration's state would lie about what the robot was actually doing until the *next* poll cycle re-fetched. H6 makes the apply state-aware: the new `AqualinkClient._apply_pending_stop_reset` helper consults `data["activity"]` and discards the reset (without clobbering live state) if the cloud has already moved past idle. Also defends against the "stale zombie reset" path — a queued reset that never landed (long disconnect, network drop) and would otherwise apply minutes later — by pairing the values dict with a `_pending_stop_reset_at` timestamp and expiring it after `PENDING_STOP_RESET_MAX_AGE_SECONDS` (10 s, tunable via the new constant in `const.py`). PR #94's natural-completion detector continues to work unchanged — the gate it uses (`not client._pending_stop_reset`) reads the same dict-or-None truthiness it always has; the timestamp is a private contract between `stop_cleaning` and `_apply_pending_stop_reset`.
+
+</details>
 
 ## 3.0.0-beta.1 — 2026-05-15
 

@@ -116,6 +116,21 @@ async def async_setup_entry(
             (key, name) for key, name in ALL_SENSOR_TYPES
             if key not in excluded_sensors
         ]
+    elif device_type == "cyclonext":
+        # Issue #81: cyclonext exposes no `sensors` block at all — verified on
+        # two live units (RE 4600 iQ, CNX 50 iQ), neither of which reports a
+        # `sensors` key — so the Temperature sensor could never be anything but
+        # Unknown. `battery_level` is cyclobat-only as with every other family.
+        #
+        # `fan_speed`, `stepper` and `stepper_adj_time` are deliberately NOT
+        # excluded: cyclonext does report stepper data and does support two
+        # cycles, and the parser was simply not reading them. Fixed in
+        # protocols/cyclonext.py rather than hidden here.
+        excluded_sensors = {"battery_level", "temperature"}
+        sensor_types = [
+            (key, name) for key, name in ALL_SENSOR_TYPES
+            if key not in excluded_sensors
+        ]
     else:
         # For other types, just exclude battery
         sensor_types = [

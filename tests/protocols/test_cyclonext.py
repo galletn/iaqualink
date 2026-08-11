@@ -608,6 +608,91 @@ def test_extract_fan_speed_decodes_string_cycle(cycle: str) -> None:
 _CYCLONEXT_EXPECTED = {"1": "floor_only", "3": "floor_and_walls"}
 
 
+@pytest.mark.parametrize(
+    "cycle,expected_key",
+    [(1, "floor_only"), (3, "floor_and_walls"), ("3", "floor_and_walls")],
+)
+def test_parse_status_sets_fan_speed(cycle: Any, expected_key: str) -> None:
+    """Cyclonext's parser never set ``fan_speed``.
+
+    The Fan Speed sensor therefore read Unknown forever, and the vacuum
+    entity's reported speed never reflected the cloud — even though the
+    family supports two cycles and ``set_fan_speed_payload`` writes them.
+    Confirmed by auditing the parser against two live cyclonext units:
+    ``fan_speed`` was among the keys it never populated.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("cyclonext").parse_status(
+        client, _cyclonext_payload(mode=1, cycle=cycle), result
+    )
+    assert result["fan_speed"] == expected_key
+    assert client._fan_speed == expected_key
+
+
+def test_parse_status_reads_stepper_fields() -> None:
+    """Cyclonext reports ``stepper`` / ``stepperAdjTime`` (both live units do),
+    but the parser ignored them, so the Time Adjustments sensors read Unknown.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    payload = _cyclonext_payload(mode=1, cycle=1)
+    robot = payload["payload"]["robot"]["state"]["reported"]["equipment"]["robot.1"]
+    robot["stepper"] = 2
+    robot["stepperAdjTime"] = 15
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("cyclonext").parse_status(client, payload, result)
+    assert result["stepper"] == 2
+    assert result["stepper_adj_time"] == 15
+
+
+def test_parse_status_stepper_defaults_when_absent() -> None:
+    """A cyclonext without stepper data must not crash or omit the keys."""
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    payload = _cyclonext_payload(mode=1, cycle=1)
+    robot = payload["payload"]["robot"]["state"]["reported"]["equipment"]["robot.1"]
+    robot.pop("stepper", None)
+    robot.pop("stepperAdjTime", None)
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("cyclonext").parse_status(client, payload, result)
+    assert result["stepper"] == 0
+    assert result["stepper_adj_time"] == 15
+
+
+def test_stepper_adjustment_applied_to_remaining_time() -> None:
+    """Issue #92: the ``+/- 15 minutes`` adjustment never moved the clock.
+
+    ``calculate_times`` silently defaults the stepper to 0 when ``robot_data``
+    is omitted, and cyclonext's parser omitted it — so a cycle extended in the
+    app (or via this integration's own buttons) kept its original end time.
+    A stepper of +30 must extend the cycle by 30 minutes.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    def _duration_with_stepper(stepper: int) -> int:
+        payload = _cyclonext_payload(mode=1, cycle=1)
+        robot = (
+            payload["payload"]["robot"]["state"]["reported"]["equipment"]["robot.1"]
+        )
+        robot["stepper"] = stepper
+        client = _make_client()
+        result: dict[str, Any] = {}
+        get_protocol("cyclonext").parse_status(client, payload, result)
+        return result["adjusted_cycle_duration"]
+
+    base = _duration_with_stepper(0)
+    assert base == 90                              # quickTim
+    assert _duration_with_stepper(30) == base + 30
+    assert _duration_with_stepper(-15) == base - 15
+
+
 def test_parse_status_never_cleaned() -> None:
     from custom_components.iaqualink_robots.protocols import get_protocol
 

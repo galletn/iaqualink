@@ -274,6 +274,33 @@ class CycloNextProtocol(RobotProtocol):
                 client._activity = VacuumActivity.IDLE
                 result["activity"] = "idle"
 
+        # Current cycle → fan-speed key. Pre-fix cyclonext's parser never set
+        # `fan_speed`, so the Fan Speed sensor read Unknown forever and the
+        # vacuum entity's reported speed never reflected the cloud — even
+        # though cyclonext DOES support two cycles and `set_fan_speed_payload`
+        # writes them. Mirrors what vr.py does with `prCyc`.
+        raw_cycle = _coerce_cloud_int(robot_data.get('cycle'))
+        if raw_cycle is not None:
+            client._fan_speed = _CYCLONEXT_CYCLE_TO_FAN_SPEED.get(
+                raw_cycle, "floor_only"
+            )
+            result["fan_speed"] = client._fan_speed
+
+        # Stepper (the +/- 15 minute adjustment). The cloud reports these on
+        # cyclonext — both captured units carry `stepper` and `stepperAdjTime`
+        # — but this parser ignored them and, critically, called
+        # `calculate_times` WITHOUT `robot_data`, so the stepper defaulted to 0
+        # and a time adjustment made in the app or via the integration's own
+        # buttons never moved the remaining-time sensors. Reported as "the
+        # +/- 15 minutes keys ... do not work in the integration" (issue #92).
+        try:
+            result["stepper"] = robot_data['stepper']
+            result["stepper_adj_time"] = robot_data.get('stepperAdjTime', 15)
+        except (KeyError, TypeError):
+            result["stepper"] = 0
+            result["stepper_adj_time"] = 15
+            _LOGGER.debug("No stepper data for cyclonext robot, using defaults")
+
         try:
             result["canister"] = robot_data['canister'] * 100
         except (KeyError, TypeError):
@@ -316,7 +343,13 @@ class CycloNextProtocol(RobotProtocol):
                 )
                 result["cycle_duration"] = cycle_duration
 
-                calculate_times(client, cycle_start_time, cycle_duration, result)
+                # Pass robot_data so the stepper adjustment is applied —
+                # ``calculate_times`` silently defaults the stepper to 0 when
+                # it is omitted, which is why cyclonext time adjustments never
+                # showed up (issue #92).
+                calculate_times(
+                    client, cycle_start_time, cycle_duration, result, robot_data
+                )
             else:
                 # Never-cleaned robot.
                 result["cycle_start_time"] = None

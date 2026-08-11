@@ -219,6 +219,13 @@ class AqualinkClient:
         self._first_name: str = ""
         self._last_name: str | None = None
         self._model: str | None = None
+        # Cloud-advertised capability list from ``/devices/v2/{serial}/features``.
+        # Verified to vary BETWEEN devices of the same family: of two live vr
+        # robots, one advertised `preset_waterline` / `custom_mode` /
+        # `spot_clean` / `water_temp` and the other did not. Empty until the
+        # features call succeeds; consumers must treat empty as "unknown, use
+        # the per-family default" rather than "device supports nothing".
+        self._features: list[str] = []
         self._token_expires_at: datetime.datetime | None = None
         self._model_fetch_attempts: int = 0
         self._model_last_attempt: datetime.datetime | None = None
@@ -594,6 +601,9 @@ class AqualinkClient:
             if not self._model:
                 self._model = await self._get_device_model()
             data["model"] = str(self._model)
+            # Surface the cloud's capability list so entity layers can gate on
+            # what the device actually supports instead of on device_type alone.
+            data["features"] = list(self._features)
 
         # Apply any pending reset values from a manual stop command (H6).
         self._apply_pending_stop_reset(data)
@@ -1458,6 +1468,18 @@ class AqualinkClient:
             if not data or not isinstance(data, dict):
                 _LOGGER.debug(f"Empty or invalid features response for device {self._serial}")
                 return self._handle_model_fetch_failure()
+
+            # Capture the capability list regardless of whether a model comes
+            # back — the two are independent, and a device with no `model` still
+            # advertises its features (verified on a live vr robot that returned
+            # 19 features and no model at all).
+            advertised = data.get('features')
+            if isinstance(advertised, list):
+                self._features = [str(f) for f in advertised]
+                _LOGGER.debug(
+                    "Device advertises %d features: %s",
+                    len(self._features), self._features,
+                )
 
             # Try to get model, if not found or None, return Unknown
             features_model = data.get('model')

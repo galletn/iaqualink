@@ -108,6 +108,66 @@ async def async_setup_entry(
         platform.async_register_entity_service(service_name, {}, method)
 
 
+#: Fan-speed translation key → the ``/features`` capability that gates it.
+#:
+#: Derived from four live captures. Verified both directions: the two
+#: cyclonext units advertise only ``quick_clean`` + ``preset_deep_ultra`` and
+#: this map reproduces their known-correct 2-entry list, while the two vr
+#: units differ from each other only by ``preset_waterline``.
+#:
+#: ``walls_only`` (i2d's waterline mode) is deliberately absent: i2d speaks
+#: the REST hex protocol and its capabilities aren't described by this
+#: endpoint, so it must never be narrowed away.
+_FAN_SPEED_REQUIRED_FEATURE: Dict[str, str] = {
+    "wall_only": "preset_waterline",
+    "floor_only": "quick_clean",
+    "floor_and_walls": "preset_deep_ultra",
+    "smart_floor_and_walls": "smart_cycle",
+}
+
+
+def _narrow_fan_speeds_to_features(
+    speeds: List[str],
+    features: Any,
+) -> List[str]:
+    """Drop fan speeds the device doesn't advertise in ``/features``.
+
+    Fails OPEN in every ambiguous case, because a wrongly-narrowed list
+    removes working functionality whereas a wrongly-wide one only reproduces
+    today's behaviour:
+
+    * ``features`` missing, empty, or not a list → return ``speeds`` unchanged
+      (the features call hasn't succeeded yet, or the family isn't described
+      by it).
+    * a speed with no entry in the gate map → always kept.
+    * if narrowing would empty the list → return ``speeds`` unchanged, since
+      an empty ``fan_speed_list`` would strip fan-speed support entirely.
+    """
+    if not isinstance(features, list) or not features:
+        return speeds
+
+    advertised = {str(f) for f in features}
+    narrowed = [
+        speed for speed in speeds
+        if _FAN_SPEED_REQUIRED_FEATURE.get(speed) is None
+        or _FAN_SPEED_REQUIRED_FEATURE[speed] in advertised
+    ]
+    if not narrowed:
+        _LOGGER.debug(
+            "Feature narrowing would empty the fan-speed list "
+            "(features=%s); keeping the family default %s",
+            sorted(advertised), speeds,
+        )
+        return speeds
+    if narrowed != speeds:
+        dropped = [s for s in speeds if s not in narrowed]
+        _LOGGER.debug(
+            "Dropped unsupported fan speeds %s — not advertised by the device",
+            dropped,
+        )
+    return narrowed
+
+
 class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], StateVacuumEntity):
     """Represents an iaqualink_robots vacuum."""
 
@@ -232,6 +292,20 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
                     # i2d_robot (and any unknown future type) keeps the
                     # 3-entry list which IS valid for i2d (mode 0x04).
                     self._fan_speed_list = ["floor_only", "walls_only", "floor_and_walls"]
+
+                # Narrow the per-family list to what THIS device advertises.
+                #
+                # The per-family lists above are a family-wide upper bound, but
+                # capability varies within a family: of two live `vr` robots,
+                # only one advertised `preset_waterline`. The other was being
+                # offered "Wall only", which the cloud silently ignored — the
+                # same failure issue #76 reported for cyclonext, still present
+                # for vr. Cross-check: deriving the list from features for the
+                # two captured cyclonext units independently reproduces the
+                # hardcoded cyclonext list above.
+                self._fan_speed_list = _narrow_fan_speeds_to_features(
+                    self._fan_speed_list, data.get("features")
+                )
 
             # Update current fan speed from coordinator data (store as raw key) - only if not unknown
             coordinator_fan_speed = data.get("fan_speed")

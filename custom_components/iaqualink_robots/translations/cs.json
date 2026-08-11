@@ -188,7 +188,30 @@
         "name": "Odebrat 15 minut"
       }
     },
-    "vacuum": {}
+    "vacuum": {},
+    "select": {
+      "pattern_floor": {
+        "name": "Floor Pattern",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "S-Pattern"
+        }
+      },
+      "pattern_floor_walls": {
+        "name": "Floor & Wall Pattern",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "S-Pattern"
+        }
+      },
+      "pattern_smart": {
+        "name": "SMART Pattern",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "S-Pattern"
+        }
+      }
+    }
   },
   "issues": {
     "legacy_service_behavior_change": {

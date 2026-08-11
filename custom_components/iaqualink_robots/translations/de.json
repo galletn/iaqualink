@@ -188,7 +188,30 @@
         "name": "15 Minuten reduzieren"
       }
     },
-    "vacuum": {}
+    "vacuum": {},
+    "select": {
+      "pattern_floor": {
+        "name": "Boden Muster",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "S-Muster"
+        }
+      },
+      "pattern_floor_walls": {
+        "name": "Boden & Wand Muster",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "S-Muster"
+        }
+      },
+      "pattern_smart": {
+        "name": "SMART Muster",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "S-Muster"
+        }
+      }
+    }
   },
   "issues": {
     "legacy_service_behavior_change": {

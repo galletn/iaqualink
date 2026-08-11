@@ -482,6 +482,17 @@ class AqualinkClient:
         return self._device_type
 
     @property
+    def features(self) -> list[str]:
+        """Capability list the cloud advertises for this device.
+
+        From ``/devices/v2/{serial}/features``. Verified to vary between
+        devices of the same family, so entity layers should gate on this
+        rather than on ``device_type``. Empty until the features call
+        succeeds — treat empty as "unknown", not "supports nothing".
+        """
+        return list(self._features)
+
+    @property
     def robot_name(self) -> str:
         """Human-readable robot name for log messages.
 
@@ -2482,6 +2493,51 @@ class AqualinkClient:
             return result
 
         return {"success": False, "fan_speed": fan_speed, "error": "No valid request generated"}
+
+    async def set_cleaning_pattern(
+        self, cycle_key: str, route: int
+    ) -> dict[str, Any]:
+        """Set the navigation pattern for one cleaning cycle.
+
+        ``route`` is 0 (Standard) or 1 (S-Pattern), nested per-cycle under
+        ``cycles.<cycleKey>``, so writing one cycle's pattern leaves the others
+        untouched.
+
+        Verified end-to-end on a live cyclobat (firmware V22E3.25.3): the write
+        changed the value, the cloud echoed it back over ``StateStreamer``, and
+        writing the original value restored it.
+
+        Currently cyclobat-only — no vr or cyclonext payload captured so far
+        carries a ``route`` key. Rather than silently no-op for other families
+        (the issue #76 failure mode), an unsupported device_type returns an
+        explicit error, and the select entity is not created there anyway.
+        """
+        protocol = get_protocol(self._device_type)
+        builder = getattr(protocol, "set_pattern_payload", None)
+        if protocol is None or builder is None:
+            _LOGGER.warning(
+                "Cleaning pattern not supported for device type %s",
+                self._device_type,
+            )
+            return {
+                "success": False,
+                "error": f"pattern unsupported for {self._device_type}",
+            }
+
+        request = builder(self, cycle_key, route)
+        response_data = await asyncio.wait_for(
+            self.set_cleaner_state(request), timeout=30
+        )
+        _LOGGER.debug(
+            "Cleaning pattern command sent (%s -> route=%s), response: %s",
+            cycle_key, route, response_data,
+        )
+        return {
+            "success": True,
+            "cycle": cycle_key,
+            "route": route,
+            "response": response_data,
+        }
 
     async def _enter_remote_control_mode(self) -> None:
         """Enter remote control mode by setting robot to pause state (state: 2)."""

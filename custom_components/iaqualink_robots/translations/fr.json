@@ -188,7 +188,30 @@
         "name": "Réduire 15 Minutes"
       }
     },
-    "vacuum": {}
+    "vacuum": {},
+    "select": {
+      "pattern_floor": {
+        "name": "Fond motif",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "Motif en S"
+        }
+      },
+      "pattern_floor_walls": {
+        "name": "Fond et paroi motif",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "Motif en S"
+        }
+      },
+      "pattern_smart": {
+        "name": "SMART motif",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "Motif en S"
+        }
+      }
+    }
   },
   "issues": {
     "legacy_service_behavior_change": {

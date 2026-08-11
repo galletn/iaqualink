@@ -4,7 +4,18 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 
 ## Unreleased
 
-_None yet._
+### ✨ Added
+
+- **Cleaning-pattern selection.** Newer CycloBat firmware lets you choose the navigation pattern for a cleaning cycle — `Standard` or `S-Pattern` — which the iAquaLink app shows as a toggle under Floor. The integration now exposes this as a **select** entity per pattern-capable cycle (Floor, Floor & Wall, SMART), so you can both see and change it from Home Assistant and use it in automations.
+
+  Only created for robots whose firmware advertises the capability, and only for cycles that actually report a pattern — so nothing appears on a robot that can't do it. Both reading and writing were verified against live hardware rather than inferred, which matters: a control that silently does nothing is the failure mode behind issue #76.
+
+- **`Walls Duration` sensor** for CycloBat, from a `wallsTim` cycle observed on newer firmware that has no counterpart in the app's mode list yet.
+
+### 📝 Notes
+
+- Cleaning pattern is CycloBat-only so far. No VR or CycloNext payload examined contains the field, so it is gated on the capability the cloud advertises rather than on model — if a future firmware adds it to another family, it should appear automatically.
+- `cs` and `sk` translations for the new select entities fall back to English and would welcome a native-speaker pass.
 
 ## 3.0.0-rc.2 — 2026-08-11
 

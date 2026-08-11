@@ -8,7 +8,7 @@ name = "iaqualink-robots"
 # necessity: HACS/HA read manifest.json (SemVer), Python packaging reads this
 # (PEP 440, which has no hyphen/dot form for pre-releases). manifest.json is
 # authoritative for what users install.
-version = "3.0.0rc2"
+version = "3.0.0rc3"
 description = "Home Assistant custom integration for iAqualink pool robots."
 readme = "README.md"
 requires-python = ">=3.13"

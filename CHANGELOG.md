@@ -4,6 +4,12 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 
 ## Unreleased
 
+_None yet._
+
+## 3.0.0-rc.3 — 2026-08-11
+
+Third release candidate. **Pre-release** — toggle "Show beta versions" in the integration's HACS panel to install it. Everything in `3.0.0-rc.2` still applies; this adds one feature.
+
 ### ✨ Added
 
 - **Cleaning-pattern selection.** Newer CycloBat firmware lets you choose the navigation pattern for a cleaning cycle — `Standard` or `S-Pattern` — which the iAquaLink app shows as a toggle under Floor. The integration now exposes this as a **select** entity per pattern-capable cycle (Floor, Floor & Wall, SMART), so you can both see and change it from Home Assistant and use it in automations.

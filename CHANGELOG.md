@@ -6,6 +6,36 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 
 _None yet._
 
+## 3.0.0-rc.2 — 2026-08-11
+
+Second release candidate for the 3.x line. **Pre-release** — toggle "Show beta versions" in the integration's HACS panel to install it. Everything in `3.0.0-rc.1` still applies; the notes below are the diff since then.
+
+Most of this release came from capturing real payloads from four live robots (2× `vr`, 2× `cyclonext`) rather than from reading code. Several long-standing assumptions turned out to be wrong, and a few sensors had never worked.
+
+### 🐛 Fixed (user-visible bugs)
+
+- **Cyclonext ±15-minute adjustments now move the remaining-time sensors** (issue #92). The cloud reports the adjustment on cyclonext, but the parser never read it, so a cycle extended in the iAquaLink app — or with this integration's own buttons — kept its original end time. Affects CNX / RE / EvoluX models.
+- **Cyclonext now reports its cleaning mode.** The `Fan Speed` sensor read `Unknown` permanently and the vacuum entity's reported speed never reflected the cloud, even though setting the mode worked.
+- **"Wall only" no longer appears on VR robots that don't support it.** Issue #76 fixed this for cyclonext by hard-coding the list; the same fault remained for `vr`. Capability varies _within_ a family — of two live VR robots, only one advertised a waterline preset — so the list is now built from what each device actually advertises. If you have been picking a mode that the robot silently ignored, it will now be absent instead.
+- **Smart-cycle duration no longer reads 0 minutes** on a robot that hasn't completed a smart cycle yet. The cloud leaves the learned duration at `0` until the first smart run, so time-remaining showed zero for the whole cycle.
+- **Cycle durations are now looked up by name.** The old positional lookup was correct only by accident of the order the cloud happened to send its fields in; any reordering would have silently shifted every duration.
+- **Cyclonext no longer shows a Temperature sensor** (issue #81). Neither captured cyclonext reports a temperature at all, so it could only ever read `Unknown`.
+- **Far less log noise.** A "Fan speed mismatch" warning was emitted on every update — roughly every 10 seconds, about 8,600 lines a day — for any robot in a mismatched state. It is now logged once per distinct mismatch.
+- **Model detection no longer depends on scraping a vendor website.** The page it parsed stopped rendering results server-side some time ago, so that lookup had been returning "Unknown" for every input. Models are now resolved offline from the cleaner part number, which also means the integration no longer contacts any site other than the iAqualink cloud. An unrecognised part number now shows as `Unknown (WR0xxxxx)` — please report that string so the model can be added.
+
+### ✨ Added
+
+- **Four diagnostic sensors**, grouped under _Diagnostic_ on the device page: `Firmware Version`, `Error Code`, `Diagnostic Code`, and `Last Cloud Contact`. The last is the most useful for troubleshooting: the `Status` sensor can say "connected" but cannot tell you the robot has been silent for two hours.
+- **Richer diagnostics download**: equipment part numbers, partially-redacted component serials, and the capability list the cloud advertises for your device. Attaching this to an issue now usually removes the need for any follow-up questions.
+- **`tools/capture_payload.py`** — a maintainer/contributor script that prints a redacted payload plus a field-type report, replacing the hand-written Postman walkthroughs previously needed for issue triage. Reads credentials from a local, git-ignored file.
+
+### 📝 Notes for testers
+
+- The new sensors appear automatically. They are Diagnostic-category, so they sit in a separate section rather than among the controls.
+- **Issue #100 (cyclonext stuck "Idle" while cleaning) is _not_ confirmed fixed.** Both captured cyclonext robots report the relevant field as an integer, which rules out the type mismatch that both the reporter and I suspected. A defensive guard is in place, but the root cause is still unknown — if you can reproduce it, a capture taken _while the robot is actively cleaning_ is the missing piece.
+- Cyclonext `Diagnostic Code` may read `Unknown` on some models: the RE 4600 iQ omits the field while the CNX 50 iQ reports it. It is kept rather than hidden so the models that do provide it aren't penalised.
+- `cs` and `sk` translations for the four new sensors fall back to English and would welcome a native-speaker pass.
+
 ## 3.0.0-rc.1 — 2026-05-22
 
 Release candidate for the 3.x line. Consolidates the v2.5.1 → 3.0.0 release notes so testers see the full diff from the last stable in one place. If RC testing surfaces no regressions, this content becomes the `v3.0.0` release notes as-is. **Pre-release** — HACS users on the default channel will not see this version; toggle "Show beta versions" in the integration's HACS panel to install it. **Minimum Home Assistant raised to `2026.3.0`** (via `hacs.json`).

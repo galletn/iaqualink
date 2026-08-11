@@ -177,6 +177,80 @@ def test_last_cloud_contact_tolerates_missing_aws_block() -> None:
     assert "last_cloud_contact" not in result
 
 
+def _client_with_block() -> Any:
+    c = _client("vr")
+    c._last_robot_block = {}
+    return c
+
+
+def test_raw_robot_block_cached_from_ws_shape() -> None:
+    """Diagnostics needs the RAW cloud values, not just the parsed result.
+
+    Issue #100 stalled because a report could show `activity: idle` without
+    revealing the cloud value the parser derived it from. Caching the block
+    lets a reporter attach exactly what the cloud sent, with no script and
+    no credential sharing.
+    """
+    client = _client_with_block()
+    data = {"payload": {"robot": {"state": {"reported": {
+        "aws": {"timestamp": 1786201126595},
+        "equipment": {"robot": {"mode": 1, "cycle": 3}},
+    }}}}}
+    client._apply_last_cloud_contact(data, {})
+    assert client._last_robot_block == {"mode": 1, "cycle": 3}
+
+
+def test_raw_robot_block_cached_from_dotted_key() -> None:
+    """Cyclonext over WebSocket nests under ``robot.1``, not ``robot``."""
+    client = _client_with_block()
+    data = {"payload": {"robot": {"state": {"reported": {
+        "equipment": {"robot.1": {"mode": 0, "cycle": 1}},
+    }}}}}
+    client._apply_last_cloud_contact(data, {})
+    assert client._last_robot_block == {"mode": 0, "cycle": 1}
+
+
+def test_raw_robot_block_cached_from_rest_list_shape() -> None:
+    """Over the REST shadow, cyclonext sends ``robot`` as ``[null, {...}]``.
+
+    That list-with-a-leading-null is where the ``robot.1`` key name comes
+    from. A naive ``isinstance(block, dict)`` check would silently skip it.
+    """
+    client = _client_with_block()
+    data = {"payload": {"robot": {"state": {"reported": {
+        "equipment": {"robot": [None, {"mode": 1, "cycle": 3}]},
+    }}}}}
+    client._apply_last_cloud_contact(data, {})
+    assert client._last_robot_block == {"mode": 1, "cycle": 3}
+
+
+def test_raw_robot_block_never_captures_the_envelope() -> None:
+    """Only the robot block is kept — the envelope carries ``clientToken``,
+    which embeds the auth token, and ``async_redact_data`` matches dict keys
+    so it would not scrub a credential nested inside a stringified blob.
+    """
+    client = _client_with_block()
+    data = {"payload": {
+        "clientToken": "user|SECRET_AUTH_TOKEN|app",
+        "robot": {"state": {"reported": {
+            "equipment": {"robot": {"mode": 1}},
+        }}},
+    }}
+    client._apply_last_cloud_contact(data, {})
+    assert "SECRET_AUTH_TOKEN" not in repr(client._last_robot_block)
+    assert "clientToken" not in client._last_robot_block
+
+
+def test_raw_robot_block_left_alone_when_absent() -> None:
+    """A payload with no equipment must not clear a previously good block."""
+    client = _client_with_block()
+    client._last_robot_block = {"mode": 1}
+    client._apply_last_cloud_contact(
+        {"payload": {"robot": {"state": {"reported": {}}}}}, {}
+    )
+    assert client._last_robot_block == {"mode": 1}
+
+
 def test_ebox_data_is_cached_for_diagnostics() -> None:
     """The same shadow read caches equipment identity so diagnostics.py can
     include part numbers without issuing its own request (issue #88).

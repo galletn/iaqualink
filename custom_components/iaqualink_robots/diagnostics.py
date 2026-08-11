@@ -132,6 +132,28 @@ async def async_get_config_entry_diagnostics(
         # spurious control is unanswerable without it.
         payload["features"] = list(getattr(client, "_features", []) or [])
 
+        # The RAW robot block exactly as the cloud sent it.
+        #
+        # Everything else here is post-parse, which means a report can show a
+        # wrong *result* while hiding the input that produced it. Issue #100
+        # stalled on exactly that: a robot showing Idle while cleaning, with
+        # no way to see the cloud's own value. Including this makes such a
+        # report self-sufficient — download diagnostics while the robot is
+        # running and the answer is in the file.
+        #
+        # Serial-like identifiers are partially redacted; the remaining
+        # fields are cycle/state/duration telemetry, not secrets. The
+        # surrounding envelope is deliberately NOT included because it
+        # carries `clientToken`, which embeds the auth token.
+        raw_robot = dict(getattr(client, "_last_robot_block", {}) or {})
+        if raw_robot:
+            for identifying in ("sn", "equipmentId"):
+                if identifying in raw_robot:
+                    raw_robot[identifying] = _partial_redact(
+                        raw_robot[identifying]
+                    )
+            payload["raw_robot_state"] = async_redact_data(raw_robot, TO_REDACT)
+
         # ``client._token_expires_at`` is an aware-UTC datetime post-H8.
         # Serialise as ISO so the diagnostic JSON round-trips cleanly.
         # Note: ``model`` is intentionally NOT read from ``client._model``

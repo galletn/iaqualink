@@ -231,6 +231,10 @@ class AqualinkClient:
         # can include it without issuing its own request. Part numbers identify
         # a model (not an account) and feed ``MODEL_BY_CLEANER_PN``.
         self._ebox_data: dict[str, Any] = {}
+        # Last raw ``equipment.robot`` block, for the diagnostics download.
+        # Lets a reporter hand over exactly what the cloud sent without
+        # running any script or sharing credentials (see issue #100).
+        self._last_robot_block: dict[str, Any] = {}
         self._token_expires_at: datetime.datetime | None = None
         self._model_fetch_attempts: int = 0
         self._model_last_attempt: datetime.datetime | None = None
@@ -1465,6 +1469,34 @@ class AqualinkClient:
         ebox = reported.get('eboxData')
         if isinstance(ebox, dict) and ebox:
             self._ebox_data = dict(ebox)
+
+        # Cache the RAW robot block for diagnostics.
+        #
+        # Until now nothing captured this: diagnostics dumped the *parsed*
+        # result, so a report could show `activity: idle` without revealing
+        # the cloud value the parser derived it from. That is precisely the
+        # dead end on issue #100 — a robot reporting Idle while physically
+        # cleaning, with no way to see what the cloud actually sent. The
+        # alternative was asking reporters to run a script with their
+        # password in it, which is not a reasonable thing to request.
+        #
+        # Only the robot block is kept, not the whole envelope: the envelope
+        # carries `clientToken`, which embeds the auth token. Note that
+        # `async_redact_data` matches dict KEYS, so it would not scrub a
+        # credential nested inside a stringified blob — hence keeping a real
+        # dict and a narrow slice of it rather than `str(data)`.
+        equipment = reported.get('equipment')
+        if isinstance(equipment, dict):
+            block = equipment.get('robot')
+            if isinstance(block, list):
+                # cyclonext over REST: robot is [null, {...}] — index 1.
+                block = next(
+                    (item for item in block if isinstance(item, dict)), None
+                )
+            if not isinstance(block, dict):
+                block = equipment.get('robot.1')
+            if isinstance(block, dict) and block:
+                self._last_robot_block = dict(block)
 
         try:
             stamp = reported['aws']['timestamp']

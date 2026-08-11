@@ -15,16 +15,23 @@ jobs:
   # ---------------------------------------------------------------------------
   # hassfest — HA's official manifest/strings validator.
   #
-  # Currently INFORMATIONAL (continue-on-error). Two known errors are
-  # accepted as long-standing project decisions:
-  #   1. "Domain does not match dir name" — `iaqualinkRobots` (camelCase) vs.
-  #      directory `iaqualink_robots`. Renaming would require migrating every
-  #      user's entity registry; deliberately deferred.
-  #   2. "Invalid translations/en.json: extra keys not allowed @ data['entity']
-  #      ['vacuum']['fan_speed']" — translations file has keys not in HA's
-  #      schema; addressed in story P7 (translations completeness).
+  # Currently INFORMATIONAL (continue-on-error). It was set that way for two
+  # known errors, and BOTH now appear resolved:
   #
-  # Drop `continue-on-error` once the two issues above are resolved.
+  #   1. "Domain does not match dir name" — was `iaqualinkRobots` (camelCase)
+  #      vs. directory `iaqualink_robots`. The domain is now `iaqualink_robots`
+  #      in both manifest.json and const.DOMAIN, matching the directory, so
+  #      this cannot fire. (Issue #97.)
+  #   2. "Invalid translations/en.json: extra keys not allowed @ data['entity']
+  #      ['vacuum']['fan_speed']" — the fan-speed state translations now live
+  #      under `entity.sensor.fan_speed.state`, which IS schema-valid, and
+  #      `entity.vacuum` is an empty object. So this cannot fire either.
+  #
+  # `continue-on-error` is deliberately still here: neither claim has been
+  # confirmed against a real hassfest run, and hassfest can only run in CI
+  # (it's a container action). Check the hassfest output on the next run —
+  # if it passes, drop `continue-on-error` and make this a real gate. That
+  # is also a prerequisite for any HA-core submission (issue #99).
   # ---------------------------------------------------------------------------
   hassfest:
     name: hassfest (informational)

@@ -14,6 +14,7 @@ from typing import Any
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
+from .const import MODEL_BY_CLEANER_PN
 from .types import IaqualinkConfigEntry
 
 # Field names that ``async_redact_data`` will replace with ``"**REDACTED**"``
@@ -99,6 +100,60 @@ async def async_get_config_entry_diagnostics(
         }
 
     if client is not None:
+        # Equipment identity. The cloud reports these under
+        # ``state.reported.eboxData`` on every family (verified on 2x vr +
+        # 2x cyclonext). Part numbers are NOT secrets — they identify a model,
+        # not an account — and ``completeCleanerPn`` is the key that
+        # ``MODEL_BY_CLEANER_PN`` maps, so including it verbatim makes a
+        # "Model shows Unknown" report immediately actionable (issue #88).
+        #
+        # The component *serials* alongside them ARE identifying, so they get
+        # the same partial redaction as the robot serial rather than being
+        # emitted in full.
+        ebox = getattr(client, "_ebox_data", None) or {}
+        if ebox:
+            payload["equipment"] = {
+                "complete_cleaner_pn": ebox.get("completeCleanerPn"),
+                "control_box_pn": ebox.get("controlBoxPn"),
+                "complete_cleaner_sn": _partial_redact(
+                    ebox.get("completeCleanerSn")
+                ),
+                "control_box_sn": _partial_redact(ebox.get("controlBoxSn")),
+                "motor_block_sn": _partial_redact(ebox.get("motorBlockSn")),
+                "power_supply_sn": _partial_redact(ebox.get("powerSupplySn")),
+                "sensor_block_sn": _partial_redact(ebox.get("sensorBlockSn")),
+                "model_resolved_from_pn": (
+                    ebox.get("completeCleanerPn") in MODEL_BY_CLEANER_PN
+                ),
+            }
+
+        # Cloud-advertised capabilities. Drives the fan-speed list and, in
+        # future, entity gating (issue #81) — so a report about a missing or
+        # spurious control is unanswerable without it.
+        payload["features"] = list(getattr(client, "_features", []) or [])
+
+        # The RAW robot block exactly as the cloud sent it.
+        #
+        # Everything else here is post-parse, which means a report can show a
+        # wrong *result* while hiding the input that produced it. Issue #100
+        # stalled on exactly that: a robot showing Idle while cleaning, with
+        # no way to see the cloud's own value. Including this makes such a
+        # report self-sufficient — download diagnostics while the robot is
+        # running and the answer is in the file.
+        #
+        # Serial-like identifiers are partially redacted; the remaining
+        # fields are cycle/state/duration telemetry, not secrets. The
+        # surrounding envelope is deliberately NOT included because it
+        # carries `clientToken`, which embeds the auth token.
+        raw_robot = dict(getattr(client, "_last_robot_block", {}) or {})
+        if raw_robot:
+            for identifying in ("sn", "equipmentId"):
+                if identifying in raw_robot:
+                    raw_robot[identifying] = _partial_redact(
+                        raw_robot[identifying]
+                    )
+            payload["raw_robot_state"] = async_redact_data(raw_robot, TO_REDACT)
+
         # ``client._token_expires_at`` is an aware-UTC datetime post-H8.
         # Serialise as ISO so the diagnostic JSON round-trips cleanly.
         # Note: ``model`` is intentionally NOT read from ``client._model``

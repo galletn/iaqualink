@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -23,6 +24,18 @@ _TIMESTAMP_SENSOR_KEYS = frozenset({
     "cycle_start_time",
     "estimated_end_time",
     "last_online",
+    "last_cloud_contact",
+})
+
+#: Sensors filed under HA's "Diagnostic" section on the device page rather
+#: than sitting among the primary controls. These describe the *equipment*
+#: (firmware, fault codes, cloud liveness) rather than the current clean, so
+#: they're useful when troubleshooting and noise the rest of the time.
+_DIAGNOSTIC_SENSOR_KEYS = frozenset({
+    "version",
+    "error_code",
+    "diagnostic_code",
+    "last_cloud_contact",
 })
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,6 +58,10 @@ ICON_MAP = {
     "fan_speed":           "mdi:fan",
     "activity":            "mdi:robot-vacuum",
     "status":              "mdi:connection",
+    "version":             "mdi:chip",
+    "error_code":          "mdi:alert-octagon",
+    "diagnostic_code":     "mdi:stethoscope",
+    "last_cloud_contact":  "mdi:cloud-check-outline",
     "stepper":             "mdi:stairs",
     "stepper_adj_time":    "mdi:timer-plus",
     "base_cycle_duration": "mdi:timer-sand",
@@ -91,6 +108,22 @@ ALL_SENSOR_TYPES = [
     ("base_cycle_duration", "Original Duration"),
     ("stepper_adjustment_minutes", "Time Added/Removed"),
     ("adjusted_cycle_duration", "Total Duration"),
+    # Diagnostic additions. All four are read from fields the cloud already
+    # sends on every poll and that no sensor exposed:
+    #   version           robot.vr        firmware revision, e.g. "V32E56".
+    #                     Cyclobat's parser already produced this and it was
+    #                     discarded for want of an entity.
+    #   error_code        robot.errorCode numeric, distinct from error_state.
+    #   diagnostic_code   robot.diagnostic numeric service code.
+    #   last_cloud_contact aws.timestamp  when the ROBOT last reached the
+    #                     cloud. `status` says "connected"; it cannot say
+    #                     "connected but silent for two hours", which is the
+    #                     ambiguity behind every "is it actually updating?"
+    #                     report (see issue #100).
+    ("version",             "Firmware Version"),
+    ("error_code",          "Error Code"),
+    ("diagnostic_code",     "Diagnostic Code"),
+    ("last_cloud_contact",  "Last Cloud Contact"),
 ]
 
 
@@ -112,6 +145,31 @@ async def async_setup_entry(
     elif device_type == "i2d_robot":
         # Exclude specified sensors for i2d robots
         excluded_sensors = {"cycle_duration", "cycle_start_time", "model", "temperature", "battery_level"}
+        sensor_types = [
+            (key, name) for key, name in ALL_SENSOR_TYPES
+            if key not in excluded_sensors
+        ]
+    elif device_type == "cyclonext":
+        # Issue #81: cyclonext exposes no `sensors` block at all — verified on
+        # two live units (RE 4600 iQ, CNX 50 iQ), neither of which reports a
+        # `sensors` key — so the Temperature sensor could never be anything but
+        # Unknown. `battery_level` is cyclobat-only as with every other family.
+        #
+        # `fan_speed`, `stepper` and `stepper_adj_time` are deliberately NOT
+        # excluded: cyclonext does report stepper data and does support two
+        # cycles, and the parser was simply not reading them. Fixed in
+        # protocols/cyclonext.py rather than hidden here.
+        #
+        # `error_code` is excluded because cyclonext has no separate numeric
+        # error field — it reports `errors.code`, which the parser already
+        # surfaces as `error_state`. Confirmed absent on both captured units,
+        # so this is a family-wide gap rather than device variance.
+        #
+        # `diagnostic_code` is NOT excluded even though the RE 4600 iQ omits
+        # it while the CNX 50 iQ reports it: the family is capable of it, so
+        # hiding it would throw away real data for the devices that have it.
+        # Same treatment as `totRunTime`, which varies the same way.
+        excluded_sensors = {"battery_level", "temperature", "error_code"}
         sensor_types = [
             (key, name) for key, name in ALL_SENSOR_TYPES
             if key not in excluded_sensors
@@ -160,6 +218,11 @@ class AqualinkSensor(CoordinatorEntity[AqualinkDataUpdateCoordinator], SensorEnt
         # when device_class=TIMESTAMP and native_value is an aware datetime.
         if key in _TIMESTAMP_SENSOR_KEYS:
             self._attr_device_class = SensorDeviceClass.TIMESTAMP
+
+        # Equipment/troubleshooting values go under HA's "Diagnostic" heading
+        # so they don't crowd the primary controls on the device page.
+        if key in _DIAGNOSTIC_SENSOR_KEYS:
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
         # Set translation key for entity name (HA will handle translation)
         self._attr_translation_key = key

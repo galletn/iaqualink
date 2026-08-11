@@ -36,6 +36,97 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+#: ``prCyc`` code for the smart cycle on the VR/Vortrax families.
+_SMART_CYCLE_CODE = 2
+
+
+def resolve_smart_duration_key_map(
+    robot_data: dict[str, Any],
+    base_map: dict[int, str],
+) -> dict[int, str]:
+    """Return ``base_map``, redirecting the smart cycle to ``firstSmartTim``
+    when the robot hasn't completed its first smart cycle yet.
+
+    Two live VR captures made this behaviour visible::
+
+        robot A: firstSmrtFlag=1, smartTim=0,   firstSmartTim=150
+        robot B: firstSmrtFlag=0, smartTim=130, firstSmartTim=150
+
+    ``smartTim`` is the *learned* smart-cycle duration: the cloud leaves it
+    at 0 until the robot has run a smart cycle once, and ``firstSmrtFlag``
+    is the "not learned yet" marker. Reading ``smartTim`` unconditionally
+    therefore yields a 0-minute duration — and a 0 time-remaining — for
+    any robot in that state, which is robot A above.
+
+    The redirect only fires when ``firstSmrtFlag`` is truthy *and*
+    ``smartTim`` is missing or 0, so a robot that reports both a set flag
+    and a real learned duration keeps the real one.
+    """
+    if base_map.get(_SMART_CYCLE_CODE) is None:
+        return base_map
+
+    durations = robot_data.get("durations")
+    if not isinstance(durations, dict):
+        return base_map
+    if "firstSmartTim" not in durations:
+        return base_map
+
+    if not robot_data.get("firstSmrtFlag"):
+        return base_map
+
+    learned = durations.get("smartTim")
+    if isinstance(learned, (int, float)) and learned > 0:
+        return base_map
+
+    _LOGGER.debug(
+        "firstSmrtFlag set and smartTim=%r; using firstSmartTim=%r for the "
+        "smart cycle duration",
+        learned, durations.get("firstSmartTim"),
+    )
+    redirected = dict(base_map)
+    redirected[_SMART_CYCLE_CODE] = "firstSmartTim"
+    return redirected
+
+
+def apply_shared_diagnostic_fields(
+    robot_data: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    """Apply firmware version, error code and diagnostic code.
+
+    All three appear under the same key names on every WebSocket family and
+    were previously read by none of the parsers except cyclobat — which does
+    populate ``version`` and ``diagnostic_code``, but had no sensor exposing
+    them, so the values were computed and discarded.
+
+    Verified across four live captures (2x vr, 2x cyclonext):
+
+    * ``vr``          — firmware string, e.g. ``"V32E56"`` / ``"V21E27"``.
+                        Note the unfortunate collision: the *field* is named
+                        ``vr`` on every family, including the family also
+                        called ``vr``. It is a firmware revision, not a
+                        device type.
+    * ``errorCode``   — numeric, distinct from ``errorState``. Present on vr;
+                        cyclonext nests its equivalent under ``errors.code``,
+                        which its own parser already reads into
+                        ``error_state``, so this is a no-op there.
+    * ``diagnostic``  — numeric diagnostic/service code.
+
+    Absent fields are left out of ``result`` entirely rather than defaulted,
+    so the corresponding sensor reads Unknown instead of a misleading 0 —
+    a real distinction on the CNX 50 iQ, which omits several fields the
+    RE 4600 iQ reports.
+    """
+    firmware = robot_data.get('vr')
+    if isinstance(firmware, str) and firmware:
+        result["version"] = firmware
+
+    for src, dest in (("errorCode", "error_code"),
+                      ("diagnostic", "diagnostic_code")):
+        value = robot_data.get(src)
+        if value is not None and not isinstance(value, (dict, list)):
+            result[dest] = value
+
 
 def apply_common_robot_fields(
     client: AqualinkClient,
@@ -91,6 +182,8 @@ def apply_common_robot_fields(
         result["error_state"] = robot_data['errorState']
     except (KeyError, TypeError):
         result["error_state"] = "unknown"
+
+    apply_shared_diagnostic_fields(robot_data, result)
 
     try:
         result["total_hours"] = robot_data['totalHours']

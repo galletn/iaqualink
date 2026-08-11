@@ -71,47 +71,46 @@
   },
   "entity": {
     "sensor": {
-      "serial_number": {
-        "name": "Sériové číslo"
-      },
-      "device_type": {
-        "name": "Typ zariadenia"
-      },
-      "cycle_start_time": {
-        "name": "Čas začiatku cyklu"
-      },
-      "cycle_duration": {
-        "name": "Trvanie cyklu"
-      },
-      "cycle": {
-        "name": "Cyklus"
+      "activity": {
+        "name": "Aktivita",
+        "state": {
+          "cleaning": "Cleaning",
+          "error": "Error",
+          "idle": "Idle",
+          "returning": "Returning",
+          "docking": "Docking",
+          "paused": "Paused"
+        }
       },
       "battery_level": {
         "name": "Úroveň batérie"
       },
-      "total_hours": {
-        "name": "Celkové hodiny"
-      },
       "canister": {
         "name": "Úroveň nádoby"
+      },
+      "cycle": {
+        "name": "Cyklus"
+      },
+      "cycle_duration": {
+        "name": "Trvanie cyklu"
+      },
+      "cycle_start_time": {
+        "name": "Čas začiatku cyklu"
+      },
+      "device_type": {
+        "name": "Typ zariadenia"
+      },
+      "diagnostic_code": {
+        "name": "Diagnostic Code"
+      },
+      "error_code": {
+        "name": "Error Code"
       },
       "error_state": {
         "name": "Stav chyby"
       },
-      "temperature": {
-        "name": "Teplota"
-      },
-      "time_remaining_human": {
-        "name": "Zostávajúci čas"
-      },
       "estimated_end_time": {
         "name": "Odhadovaný čas ukončenia"
-      },
-      "model": {
-        "name": "Model"
-      },
-      "time_remaining": {
-        "name": "Zostávajúci čas (minúty)"
       },
       "fan_speed": {
         "name": "Rýchlosť turbíny",
@@ -123,16 +122,14 @@
           "smart_floor_and_walls": "SMART floor and walls"
         }
       },
-      "activity": {
-        "name": "Aktivita",
-        "state": {
-          "cleaning": "Cleaning",
-          "error": "Error",
-          "idle": "Idle",
-          "returning": "Returning",
-          "docking": "Docking",
-          "paused": "Paused"
-        }
+      "last_cloud_contact": {
+        "name": "Last Cloud Contact"
+      },
+      "model": {
+        "name": "Model"
+      },
+      "serial_number": {
+        "name": "Sériové číslo"
       },
       "status": {
         "name": "Stav",
@@ -151,6 +148,21 @@
       },
       "stepper_adjustment_minutes": {
         "name": "Čas pridaný/odobraný"
+      },
+      "temperature": {
+        "name": "Teplota"
+      },
+      "time_remaining": {
+        "name": "Zostávajúci čas (minúty)"
+      },
+      "time_remaining_human": {
+        "name": "Zostávajúci čas"
+      },
+      "total_hours": {
+        "name": "Celkové hodiny"
+      },
+      "version": {
+        "name": "Firmware Version"
       }
     },
     "button": {

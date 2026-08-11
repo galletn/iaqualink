@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
@@ -37,39 +38,101 @@ def format_time_human(hours: int, minutes: int, seconds: int) -> str:
     return f"{hours} Hour(s) {minutes} Minute(s) {seconds} Second(s)"
 
 
-def resolve_cycle_duration(durations: dict[str, int], cycle: int) -> int:
-    """Look up the cycle duration for cycle code ``cycle`` (story C5).
+def resolve_cycle_duration(
+    durations: Mapping[str, int] | Sequence[int],
+    cycle: int,
+    key_map: Mapping[int, str] | None = None,
+) -> int:
+    """Look up the cycle duration (in minutes) for cycle code ``cycle``.
 
     Pre-C5, the three callers each did
     ``list(durations.values())[result["cycle"]]`` — a positional lookup
     that silently raised ``IndexError`` (masked by the surrounding
-    broad-except) when ``cycle`` was unexpected. C5 extracts the
-    lookup so out-of-range / non-int cycle codes fall back to 0 with
-    an explicit DEBUG breadcrumb instead of an exception the operator
-    never sees.
+    broad-except) when ``cycle`` was unexpected. C5 extracted the lookup
+    so out-of-range / non-int cycle codes fall back to 0 with an
+    explicit DEBUG breadcrumb instead of an exception nobody sees.
 
-    Behavior on the success path is unchanged (positional values
-    lookup over insertion-ordered dict). The cloud-side key names for
-    the ``durations`` sub-dict are not currently documented and the
-    team review explicitly downgraded "switch to named keys" out of
-    scope until we have a verified API sample.
+    **Verified payload shape.** C5 deferred "switch to named keys" until
+    a real API sample existed. One was captured from a live VR
+    (RA 6570 iQ) via ``tools/capture_payload.py``::
+
+        durations = {"waterTim": 45, "quickTim": 75, "smartTim": 0,
+                     "deepTim": 165, "customTim": 150,
+                     "firstSmartTim": 150}
+
+    Three things that sample settled:
+
+    * It is a JSON **object**, not an array, and it has **six** keys —
+      not the four the earlier docstring here assumed.
+    * Positional indexing was *accidentally* correct: ``prCyc`` 0/1/2/3
+      lines up with ``waterTim``/``quickTim``/``smartTim``/``deepTim``
+      purely because of the cloud's key insertion order, which is not an
+      API contract. Pass ``key_map`` to resolve by name instead.
+    * The positional form also accepted codes 4 and 5, silently
+      resolving them to ``customTim`` / ``firstSmartTim``. The payload
+      carries ``customCyc`` and ``customIntensity`` fields, so a custom
+      cycle really exists and those codes are not hypothetical.
+
+    ``smartTim`` reads 0 while the robot is idle and is populated by the
+    cloud once a smart cycle actually starts, so a 0 here is not
+    treated as an error.
 
     ``bool`` is filtered out via the ``not isinstance(cycle, bool)``
     clause: in Python, ``bool`` subclasses ``int``, so ``True`` would
-    otherwise pass the ``isinstance(cycle, int)`` guard and silently
-    return ``durations.values()[1]``.
+    otherwise pass the ``isinstance(cycle, int)`` guard and resolve as
+    cycle 1.
+
+    ``str``/``bytes`` are rejected explicitly: both are ``Sequence``s, so
+    a cloud that ever sent ``durations`` as a string would otherwise
+    index out a single character and return it as a "duration". Lists are
+    tolerated defensively — no live payload has been seen using one.
     """
-    if (
-        not isinstance(cycle, int)
-        or isinstance(cycle, bool)
-        or not (0 <= cycle < len(durations))
+    if isinstance(durations, (str, bytes)) or not isinstance(
+        durations, (Mapping, Sequence)
     ):
+        _LOGGER.debug(
+            "Unusable durations container %r (type %s); falling back to 0",
+            durations, type(durations).__name__,
+        )
+        return 0
+
+    if not isinstance(cycle, int) or isinstance(cycle, bool):
         _LOGGER.debug(
             "Unexpected cycle code %r for durations=%r; falling back to 0",
             cycle, durations,
         )
         return 0
-    return list(durations.values())[cycle]
+
+    # Preferred path: resolve by the cloud's own key name.
+    if key_map is not None and isinstance(durations, Mapping):
+        name = key_map.get(cycle)
+        if name is not None:
+            value = durations.get(name)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return int(value)
+            _LOGGER.debug(
+                "durations is missing mapped key %r for cycle %r "
+                "(keys=%s); falling back to positional lookup",
+                name, cycle, list(durations),
+            )
+        else:
+            _LOGGER.debug(
+                "No durations key mapped for cycle %r (map=%s); "
+                "falling back to positional lookup",
+                cycle, dict(key_map),
+            )
+
+    # Legacy positional fallback, for families whose real payload keys
+    # haven't been captured yet.
+    if not (0 <= cycle < len(durations)):
+        _LOGGER.debug(
+            "Unexpected cycle code %r for durations=%r; falling back to 0",
+            cycle, durations,
+        )
+        return 0
+    ordered = list(durations.values()) if isinstance(durations, Mapping) else durations
+    value = ordered[cycle]
+    return int(value) if isinstance(value, (int, float)) else 0
 
 
 def add_minutes_to_datetime(

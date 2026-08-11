@@ -31,7 +31,7 @@ from homeassistant.util import dt as dt_util
 
 from ..parsing import calculate_times, format_time_human, resolve_cycle_duration
 from .base import RobotProtocol
-from .common import apply_common_robot_fields
+from .common import apply_common_robot_fields, resolve_smart_duration_key_map
 
 if TYPE_CHECKING:
     from ..client import AqualinkClient
@@ -52,6 +52,24 @@ _VORTRAX_PRCYC_TO_FAN_SPEED: dict[int, str] = {
 
 _VORTRAX_FAN_SPEED_TO_PRCYC: dict[str, int] = {
     v: k for k, v in _VORTRAX_PRCYC_TO_FAN_SPEED.items()
+}
+
+#: ``prCyc`` → key in the cloud's ``durations`` object.
+#:
+#: Vortrax shares VR's ``prCyc`` encoding but is a sibling class, not a
+#: subclass, so the map is duplicated here deliberately rather than
+#: inherited. Names come from a live VR (RA 6570 iQ) capture; vortrax
+#: hardware itself is uncaptured, so this is an informed extrapolation.
+#: ``resolve_cycle_duration`` falls back to the legacy positional lookup
+#: if these keys are absent, so being wrong is no worse than before.
+#:
+#: ``tests/protocols/test_vortrax.py`` asserts this stays equal to VR's
+#: map, so the two parallel definitions can't drift silently.
+_VORTRAX_PRCYC_TO_DURATION_KEY: dict[int, str] = {
+    0: "waterTim",   # wall_only
+    1: "quickTim",   # floor_only
+    2: "smartTim",   # smart_floor_and_walls
+    3: "deepTim",    # floor_and_walls
 }
 
 
@@ -85,6 +103,10 @@ class VortraxProtocol(RobotProtocol):
 
     def fan_speed_codes(self) -> dict[str, int]:
         return dict(_VORTRAX_FAN_SPEED_TO_PRCYC)
+
+    def duration_key_map(self) -> dict[int, str]:
+        """Vortrax's ``durations`` keys — kept in step with VR's map."""
+        return dict(_VORTRAX_PRCYC_TO_DURATION_KEY)
 
     def extract_fan_speed_from_response(
         self,
@@ -161,7 +183,11 @@ class VortraxProtocol(RobotProtocol):
                 result["cycle"] = robot_data['prCyc']
 
                 cycle_duration = resolve_cycle_duration(
-                    robot_data['durations'], result["cycle"]
+                    robot_data['durations'],
+                    result["cycle"],
+                    resolve_smart_duration_key_map(
+                        robot_data, self.duration_key_map()
+                    ),
                 )
                 result["cycle_duration"] = cycle_duration
 

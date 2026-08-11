@@ -71,47 +71,46 @@
   },
   "entity": {
     "sensor": {
-      "serial_number": {
-        "name": "Serial Number"
-      },
-      "device_type": {
-        "name": "Device Type"
-      },
-      "cycle_start_time": {
-        "name": "Cycle Start Time"
-      },
-      "cycle_duration": {
-        "name": "Cycle Duration"
-      },
-      "cycle": {
-        "name": "Cycle"
+      "activity": {
+        "name": "Activity",
+        "state": {
+          "cleaning": "Cleaning",
+          "error": "Error",
+          "idle": "Idle",
+          "returning": "Returning",
+          "docking": "Docking",
+          "paused": "Paused"
+        }
       },
       "battery_level": {
         "name": "Battery Level"
       },
-      "total_hours": {
-        "name": "Total Hours"
-      },
       "canister": {
         "name": "Canister Level"
+      },
+      "cycle": {
+        "name": "Cycle"
+      },
+      "cycle_duration": {
+        "name": "Cycle Duration"
+      },
+      "cycle_start_time": {
+        "name": "Cycle Start Time"
+      },
+      "device_type": {
+        "name": "Device Type"
+      },
+      "diagnostic_code": {
+        "name": "Diagnostic Code"
+      },
+      "error_code": {
+        "name": "Error Code"
       },
       "error_state": {
         "name": "Error State"
       },
-      "temperature": {
-        "name": "Temperature"
-      },
-      "time_remaining_human": {
-        "name": "Time Remaining"
-      },
       "estimated_end_time": {
         "name": "Estimated End Time"
-      },
-      "model": {
-        "name": "Model"
-      },
-      "time_remaining": {
-        "name": "Time Remaining (Minutes)"
       },
       "fan_speed": {
         "name": "Fan Speed",
@@ -123,16 +122,14 @@
           "smart_floor_and_walls": "SMART floor and walls"
         }
       },
-      "activity": {
-        "name": "Activity",
-        "state": {
-          "cleaning": "Cleaning",
-          "error": "Error",
-          "idle": "Idle",
-          "returning": "Returning",
-          "docking": "Docking",
-          "paused": "Paused"
-        }
+      "last_cloud_contact": {
+        "name": "Last Cloud Contact"
+      },
+      "model": {
+        "name": "Model"
+      },
+      "serial_number": {
+        "name": "Serial Number"
       },
       "status": {
         "name": "Status",
@@ -151,6 +148,21 @@
       },
       "stepper_adjustment_minutes": {
         "name": "Time Added/Removed"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "time_remaining": {
+        "name": "Time Remaining (Minutes)"
+      },
+      "time_remaining_human": {
+        "name": "Time Remaining"
+      },
+      "total_hours": {
+        "name": "Total Hours"
+      },
+      "version": {
+        "name": "Firmware Version"
       }
     },
     "button": {

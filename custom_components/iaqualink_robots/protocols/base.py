@@ -112,6 +112,28 @@ class RobotProtocol(ABC):
 
     # -- Cloud-encoding helpers --------------------------------------------
 
+    def duration_key_map(self) -> dict[int, str] | None:
+        """Return the cycle-code → ``durations`` key map, or ``None``.
+
+        The cloud's ``durations`` block is a JSON **object** with named
+        keys, verified against a live VR (RA 6570 iQ)::
+
+            {"waterTim": 45, "quickTim": 75, "smartTim": 0,
+             "deepTim": 165, "customTim": 150, "firstSmartTim": 150}
+
+        Historically ``resolve_cycle_duration`` indexed this
+        *positionally* by cycle code, which happened to be correct only
+        because the cloud's key insertion order aligned with the cycle
+        codes. Key order is not an API contract, and the positional form
+        also silently resolved out-of-band codes 4/5 to ``customTim`` /
+        ``firstSmartTim``.
+
+        Returning a map here switches that family to a named lookup.
+        ``None`` (the default) keeps the legacy positional behaviour for
+        families whose real payload keys haven't been captured yet.
+        """
+        return None
+
     def extract_fan_speed_from_response(
         self,
         payload: dict[str, Any],

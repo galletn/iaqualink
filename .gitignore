@@ -15,3 +15,11 @@ __pycache__/
 _bmad/
 _bmad-output/
 docs/
+
+# Local-only iAqualink credentials for tools/capture_payload.py.
+# NEVER commit. Belt-and-braces: the whole directory, plus the filename
+# pattern anywhere in the tree, plus any captured raw output.
+.secrets/
+*.secrets.json
+iaqualink_credentials.json
+captured_payload*.txt

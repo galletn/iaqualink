@@ -130,3 +130,13 @@ We welcome:
 * Developed by [@galletn](https://github.com/galletn)
 * Translation help from Home Assistant community
 * Based on reverse-engineered iAqualink API
+
+## 📄 License
+
+Released under the [MIT License](LICENSE) — © 2023-2026 Nicolas Gallet
+([@galletn](https://github.com/galletn)) and contributors.
+
+The iAqualink cloud protocol this integration speaks is not publicly
+documented; the implementation is the result of reverse-engineering by the
+maintainer and contributors. If you build on that work, an acknowledgement is
+appreciated.

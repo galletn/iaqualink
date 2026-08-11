@@ -264,6 +264,176 @@ def test_resolve_cycle_duration_empty_durations_returns_zero() -> None:
 
 
 # ----------------------------------------------------------------------------
+# Issue #100 — `durations` arrives as a JSON array, not an object
+# ----------------------------------------------------------------------------
+#
+# The helper was annotated `dict[str, int]` and called `.values()`. The
+# VR / Vortrax / CycloNext payloads carry `durations` as a JSON *array*
+# (see the fixtures in tests/protocols/ and the "no `durations` list like
+# VR/Vortrax" note in protocols/cyclobat.py). On a list `.values()` raises
+# AttributeError, which the three parsers' broad `except Exception` swallowed
+# — zeroing `cycle_duration`, and therefore the user-visible time-remaining
+# sensor, for every cleaning cycle on all three families.
+#
+# Both container shapes appear in this repo's own fixtures, so both are
+# accepted rather than picking one as canonical.
+
+
+def test_resolve_cycle_duration_accepts_list_payload() -> None:
+    """A list `durations` resolves positionally by cycle code.
+
+    Same ordering contract as the dict form: index 0 = wall_only,
+    1 = floor_only, 2 = smart_floor_and_walls, 3 = floor_and_walls.
+    """
+    from custom_components.iaqualink_robots import parsing
+
+    durations = [30, 60, 90, 120]
+    assert parsing.resolve_cycle_duration(durations, 0) == 30
+    assert parsing.resolve_cycle_duration(durations, 1) == 60
+    assert parsing.resolve_cycle_duration(durations, 2) == 90
+    assert parsing.resolve_cycle_duration(durations, 3) == 120
+
+
+def test_resolve_cycle_duration_list_and_dict_agree() -> None:
+    """The two shapes must resolve identically for every valid code —
+    the property that makes accepting both safe.
+    """
+    from custom_components.iaqualink_robots import parsing
+
+    as_dict = {"wallOnly": 30, "floorOnly": 60, "smart": 90, "floorAndWalls": 120}
+    as_list = [30, 60, 90, 120]
+    for cycle in range(4):
+        assert parsing.resolve_cycle_duration(as_dict, cycle) == (
+            parsing.resolve_cycle_duration(as_list, cycle)
+        )
+
+
+def test_resolve_cycle_duration_list_out_of_range_returns_zero() -> None:
+    """Bounds-checking applies to the list form too (no IndexError)."""
+    from custom_components.iaqualink_robots import parsing
+
+    assert parsing.resolve_cycle_duration([30, 60], 3) == 0
+    assert parsing.resolve_cycle_duration([], 0) == 0
+    assert parsing.resolve_cycle_duration([30, 60, 90, 120], -1) == 0
+
+
+@pytest.mark.parametrize("bad", ["abcd", b"abcd"])
+def test_resolve_cycle_duration_rejects_str_and_bytes(bad: object) -> None:
+    """`str`/`bytes` are Sequences, so without an explicit guard a cloud
+    that sent `durations` as a string would index out a single character
+    and return it as a "duration" (a str, where callers expect an int).
+    """
+    from custom_components.iaqualink_robots import parsing
+
+    assert parsing.resolve_cycle_duration(bad, 1) == 0
+
+
+@pytest.mark.parametrize("bad", [None, 42, 3.5, object()])
+def test_resolve_cycle_duration_rejects_non_container(bad: object) -> None:
+    """A missing or scalar `durations` falls back to 0 rather than raising
+    into the callers' broad-except (which is what hid issue #100).
+    """
+    from custom_components.iaqualink_robots import parsing
+
+    assert parsing.resolve_cycle_duration(bad, 1) == 0
+
+
+# ----------------------------------------------------------------------------
+# Named-key lookup, using the VERIFIED live payload
+# ----------------------------------------------------------------------------
+#
+# Captured from a live VR (RA 6570 iQ) with tools/capture_payload.py. This is
+# the "verified API sample" the C5 review said was required before replacing
+# the positional lookup with named keys. Note it has SIX keys, not the four
+# the old docstring assumed.
+
+REAL_DURATIONS = {
+    "waterTim": 45,
+    "quickTim": 75,
+    "smartTim": 0,
+    "deepTim": 165,
+    "customTim": 150,
+    "firstSmartTim": 150,
+}
+VR_KEY_MAP = {0: "waterTim", 1: "quickTim", 2: "smartTim", 3: "deepTim"}
+
+
+@pytest.mark.parametrize(
+    "cycle,expected",
+    [(0, 45), (1, 75), (2, 0), (3, 165)],
+)
+def test_resolve_cycle_duration_named_lookup(cycle: int, expected: int) -> None:
+    """Named lookup returns the semantically correct duration."""
+    from custom_components.iaqualink_robots import parsing
+
+    assert parsing.resolve_cycle_duration(
+        REAL_DURATIONS, cycle, VR_KEY_MAP
+    ) == expected
+
+
+def test_resolve_cycle_duration_named_lookup_ignores_key_order() -> None:
+    """The reason named lookup exists.
+
+    Positional indexing over the real payload was correct only because the
+    cloud emitted waterTim/quickTim/smartTim/deepTim in prCyc order. Key
+    order is not an API contract; reordering must not shift durations.
+    """
+    from custom_components.iaqualink_robots import parsing
+
+    shuffled = {
+        "deepTim": 165,
+        "customTim": 150,
+        "waterTim": 45,
+        "firstSmartTim": 150,
+        "quickTim": 75,
+        "smartTim": 0,
+    }
+    for cycle, expected in ((0, 45), (1, 75), (2, 0), (3, 165)):
+        assert parsing.resolve_cycle_duration(shuffled, cycle, VR_KEY_MAP) == expected
+        # Positional would have returned the wrong value for most of these.
+    assert parsing.resolve_cycle_duration(shuffled, 1) == 150  # positional: customTim
+
+
+def test_resolve_cycle_duration_named_falls_back_when_key_absent() -> None:
+    """An unrecognised key set degrades to positional, not to 0.
+
+    This is what makes the unverified cyclonext/vortrax key names safe to
+    ship: a wrong guess is no worse than the previous behaviour.
+    """
+    from custom_components.iaqualink_robots import parsing
+
+    unknown = {"aaa": 30, "bbb": 60, "ccc": 90, "ddd": 120}
+    assert parsing.resolve_cycle_duration(unknown, 1, VR_KEY_MAP) == 60
+
+
+def test_resolve_cycle_duration_named_falls_back_for_unmapped_cycle() -> None:
+    """A cycle code with no entry in the map degrades to positional.
+
+    Codes 4 and 5 have no mapping but DO resolve positionally to
+    customTim / firstSmartTim -- preserved behaviour, now with a DEBUG
+    breadcrumb. The payload's `customCyc` field suggests a custom cycle
+    really exists, so these codes are not hypothetical.
+    """
+    from custom_components.iaqualink_robots import parsing
+
+    assert parsing.resolve_cycle_duration(REAL_DURATIONS, 4, VR_KEY_MAP) == 150
+    assert parsing.resolve_cycle_duration(REAL_DURATIONS, 99, VR_KEY_MAP) == 0
+
+
+def test_resolve_cycle_duration_named_lookup_rejects_non_numeric_value() -> None:
+    """A mapped key whose value isn't numeric falls through to positional
+    rather than returning a string as a "duration".
+    """
+    from custom_components.iaqualink_robots import parsing
+
+    weird = {"waterTim": 45, "quickTim": "not-a-number", "smartTim": 0, "deepTim": 165}
+    # quickTim is unusable -> positional index 1 -> "not-a-number" -> 0
+    assert parsing.resolve_cycle_duration(weird, 1, VR_KEY_MAP) == 0
+    # deepTim is fine.
+    assert parsing.resolve_cycle_duration(weird, 3, VR_KEY_MAP) == 165
+
+
+# ----------------------------------------------------------------------------
 # Story H6 — pending-stop-reset state-aware apply + max-age expiry
 # ----------------------------------------------------------------------------
 #

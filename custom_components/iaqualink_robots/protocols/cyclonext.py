@@ -29,6 +29,7 @@ from homeassistant.util import dt as dt_util
 
 from ..parsing import calculate_times, format_time_human, resolve_cycle_duration
 from .base import RobotProtocol
+from .common import apply_shared_diagnostic_fields
 
 if TYPE_CHECKING:
     from ..client import AqualinkClient
@@ -50,6 +51,82 @@ _CYCLONEXT_CYCLE_TO_FAN_SPEED: dict[int, str] = {
 _CYCLONEXT_FAN_SPEED_TO_CYCLE: dict[str, str] = {
     v: str(k) for k, v in _CYCLONEXT_CYCLE_TO_FAN_SPEED.items()
 }
+
+#: ``cycle`` → key in the cloud's ``durations`` object.
+#:
+#: VERIFIED against a live cyclonext (RE 4600 iQ), whose ``durations`` was::
+#:
+#:     {"waterTim": 45, "quickTim": 90, "smartTim": 0, "deepTim": 150,
+#:      "customTim": 75, "firstSmartTim": 150, "scanTim": 30}
+#:
+#: Note it carries **seven** keys — one more than the VR family, which has
+#: no ``scanTim``. The extra key sits past every mapped cycle code, so it
+#: never shifted a positional lookup, but it does mean the two families'
+#: ``durations`` objects are not interchangeable.
+#:
+#: cycle 1 → ``quickTim`` = 90 min and cycle 3 → ``deepTim`` = 150 min also
+#: match the Floor / Floor+Wall durations an operator independently
+#: reported for an Alpha-series cyclonext, so two sources agree.
+#:
+#: ``resolve_cycle_duration`` still falls back to the legacy positional
+#: lookup when a mapped key is absent, which covers firmware that renames
+#: or omits one.
+_CYCLONEXT_CYCLE_TO_DURATION_KEY: dict[int, str] = {
+    1: "quickTim",   # floor_only
+    3: "deepTim",    # floor_and_walls
+}
+
+#: ``robot.1.mode`` value that means "cleaning". Every other value is
+#: idle (the family has no return-to-base, hence no ``returning``).
+_CYCLONEXT_MODE_CLEANING = 1
+
+#: Raw ``mode`` values already warned about, so a robot stuck on an
+#: uninterpretable value doesn't emit a WARNING on every poll (the
+#: coordinator polls roughly every 10s). Mirrors the rate-limiting in
+#: ``ws_envelope.py``; keyed by ``repr`` so unhashable values are safe.
+_warned_modes: set[str] = set()
+
+
+def _warn_once_unknown_mode(raw_mode: Any) -> None:
+    """WARN once per distinct raw ``mode`` value per process."""
+    key = repr(raw_mode)
+    if key in _warned_modes:
+        return
+    _warned_modes.add(key)
+    _LOGGER.warning(
+        "Cyclonext reported an uninterpretable mode %r (%s); activity is "
+        "unknown. Please report this payload (issue #100).",
+        raw_mode, type(raw_mode).__name__,
+    )
+
+
+def _coerce_cloud_int(value: Any) -> int | None:
+    """Coerce a cloud-reported numeric field to ``int``, or ``None``.
+
+    Issue #100: a CNX 868 iQ reported ``mode`` in a form that did not
+    compare equal to the int ``1``, so the parser's ``== 1`` test fell
+    through to the idle branch and the robot showed **Idle** in HA while
+    physically cleaning. The reporter's trace showed ``None -> Idle``
+    rather than ``unknown``, which means ``mode`` was *present* and
+    simply wasn't an int.
+
+    That is the same round-tripping the cyclobat parser already guards
+    against: this integration sends ``cycle`` (and cyclobat's ``mode``)
+    as *strings*, and firmware revisions differ on whether they echo the
+    value back as a string or an int. Cyclonext never got the guard.
+    Accepting both shapes here is strictly wider than the old ``== 1``.
+    """
+    if isinstance(value, bool):
+        # bool subclasses int; True would otherwise read as "cleaning".
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (str, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 class CycloNextProtocol(RobotProtocol):
@@ -99,6 +176,10 @@ class CycloNextProtocol(RobotProtocol):
     def fan_speed_codes(self) -> dict[str, str]:
         return dict(_CYCLONEXT_FAN_SPEED_TO_CYCLE)
 
+    def duration_key_map(self) -> dict[int, str]:
+        """Cyclonext's ``durations`` keys (unverified — see the map)."""
+        return dict(_CYCLONEXT_CYCLE_TO_DURATION_KEY)
+
     def set_fan_speed_payload(
         self, client: AqualinkClient, fan_speed: str
     ) -> dict[str, Any] | None:
@@ -137,7 +218,13 @@ class CycloNextProtocol(RobotProtocol):
         cycle = robot_state.get("cycle")
         if cycle is None:
             return None
-        return _CYCLONEXT_CYCLE_TO_FAN_SPEED.get(cycle, requested_fan_speed)
+        # Issue #100: ``set_fan_speed_payload`` sends ``cycle`` as a string,
+        # and firmware differs on whether it echoes back a string or an int.
+        # The map is int-keyed, so coerce before lookup.
+        coerced = _coerce_cloud_int(cycle)
+        if coerced is None:
+            return requested_fan_speed
+        return _CYCLONEXT_CYCLE_TO_FAN_SPEED.get(coerced, requested_fan_speed)
 
     # -- Status parser -----------------------------------------------------
 
@@ -171,14 +258,52 @@ class CycloNextProtocol(RobotProtocol):
             return
 
         try:
-            if robot_data['mode'] == 1:
+            raw_mode = robot_data['mode']
+        except (KeyError, TypeError):
+            result["activity"] = "unknown"
+        else:
+            mode = _coerce_cloud_int(raw_mode)
+            if mode is None:
+                # Present but uninterpretable — report "unknown" rather
+                # than silently claiming "idle" (issue #100's symptom).
+                _warn_once_unknown_mode(raw_mode)
+                result["activity"] = "unknown"
+            elif mode == _CYCLONEXT_MODE_CLEANING:
                 client._activity = VacuumActivity.CLEANING
                 result["activity"] = "cleaning"
             else:
                 client._activity = VacuumActivity.IDLE
                 result["activity"] = "idle"
+
+        # Firmware version + diagnostic code (shared across families).
+        apply_shared_diagnostic_fields(robot_data, result)
+
+        # Current cycle → fan-speed key. Pre-fix cyclonext's parser never set
+        # `fan_speed`, so the Fan Speed sensor read Unknown forever and the
+        # vacuum entity's reported speed never reflected the cloud — even
+        # though cyclonext DOES support two cycles and `set_fan_speed_payload`
+        # writes them. Mirrors what vr.py does with `prCyc`.
+        raw_cycle = _coerce_cloud_int(robot_data.get('cycle'))
+        if raw_cycle is not None:
+            client._fan_speed = _CYCLONEXT_CYCLE_TO_FAN_SPEED.get(
+                raw_cycle, "floor_only"
+            )
+            result["fan_speed"] = client._fan_speed
+
+        # Stepper (the +/- 15 minute adjustment). The cloud reports these on
+        # cyclonext — both captured units carry `stepper` and `stepperAdjTime`
+        # — but this parser ignored them and, critically, called
+        # `calculate_times` WITHOUT `robot_data`, so the stepper defaulted to 0
+        # and a time adjustment made in the app or via the integration's own
+        # buttons never moved the remaining-time sensors. Reported as "the
+        # +/- 15 minutes keys ... do not work in the integration" (issue #92).
+        try:
+            result["stepper"] = robot_data['stepper']
+            result["stepper_adj_time"] = robot_data.get('stepperAdjTime', 15)
         except (KeyError, TypeError):
-            result["activity"] = "unknown"
+            result["stepper"] = 0
+            result["stepper_adj_time"] = 15
+            _LOGGER.debug("No stepper data for cyclonext robot, using defaults")
 
         try:
             result["canister"] = robot_data['canister'] * 100
@@ -210,14 +335,25 @@ class CycloNextProtocol(RobotProtocol):
                 cycle_start_time = dt_util.utc_from_timestamp(timestamp)
                 result["cycle_start_time"] = cycle_start_time
 
-                result["cycle"] = robot_data['cycle']
+                # Issue #100: coerce before storing — ``resolve_cycle_duration``
+                # rejects a non-int cycle code and returns 0, which would zero
+                # the time-remaining sensor for a string-echoing firmware.
+                result["cycle"] = _coerce_cloud_int(robot_data['cycle']) or 0
 
                 cycle_duration = resolve_cycle_duration(
-                    robot_data['durations'], result["cycle"]
+                    robot_data['durations'],
+                    result["cycle"],
+                    self.duration_key_map(),
                 )
                 result["cycle_duration"] = cycle_duration
 
-                calculate_times(client, cycle_start_time, cycle_duration, result)
+                # Pass robot_data so the stepper adjustment is applied —
+                # ``calculate_times`` silently defaults the stepper to 0 when
+                # it is omitted, which is why cyclonext time adjustments never
+                # showed up (issue #92).
+                calculate_times(
+                    client, cycle_start_time, cycle_duration, result, robot_data
+                )
             else:
                 # Never-cleaned robot.
                 result["cycle_start_time"] = None

@@ -71,47 +71,46 @@
   },
   "entity": {
     "sensor": {
-      "serial_number": {
-        "name": "Numero di Serie"
-      },
-      "device_type": {
-        "name": "Tipo di Dispositivo"
-      },
-      "cycle_start_time": {
-        "name": "Orario Inizio Ciclo"
-      },
-      "cycle_duration": {
-        "name": "Durata Ciclo"
-      },
-      "cycle": {
-        "name": "Ciclo"
+      "activity": {
+        "name": "Attività",
+        "state": {
+          "cleaning": "Cleaning",
+          "error": "Error",
+          "idle": "Idle",
+          "returning": "Returning",
+          "docking": "Docking",
+          "paused": "Paused"
+        }
       },
       "battery_level": {
         "name": "Livello Batteria"
       },
-      "total_hours": {
-        "name": "Ore Totali"
-      },
       "canister": {
         "name": "Livello Contenitore"
+      },
+      "cycle": {
+        "name": "Ciclo"
+      },
+      "cycle_duration": {
+        "name": "Durata Ciclo"
+      },
+      "cycle_start_time": {
+        "name": "Orario Inizio Ciclo"
+      },
+      "device_type": {
+        "name": "Tipo di Dispositivo"
+      },
+      "diagnostic_code": {
+        "name": "Codice diagnostico"
+      },
+      "error_code": {
+        "name": "Codice di errore"
       },
       "error_state": {
         "name": "Stato di Errore"
       },
-      "temperature": {
-        "name": "Temperatura"
-      },
-      "time_remaining_human": {
-        "name": "Tempo Rimanente"
-      },
       "estimated_end_time": {
         "name": "Orario Stimato di Fine"
-      },
-      "model": {
-        "name": "Modello"
-      },
-      "time_remaining": {
-        "name": "Tempo Rimanente (Minuti)"
       },
       "fan_speed": {
         "name": "Velocità Ventola",
@@ -123,16 +122,14 @@
           "smart_floor_and_walls": "SMART floor and walls"
         }
       },
-      "activity": {
-        "name": "Attività",
-        "state": {
-          "cleaning": "Cleaning",
-          "error": "Error",
-          "idle": "Idle",
-          "returning": "Returning",
-          "docking": "Docking",
-          "paused": "Paused"
-        }
+      "last_cloud_contact": {
+        "name": "Ultimo contatto cloud"
+      },
+      "model": {
+        "name": "Modello"
+      },
+      "serial_number": {
+        "name": "Numero di Serie"
       },
       "status": {
         "name": "Stato",
@@ -151,6 +148,21 @@
       },
       "stepper_adjustment_minutes": {
         "name": "Tempo Aggiunto/Rimosso"
+      },
+      "temperature": {
+        "name": "Temperatura"
+      },
+      "time_remaining": {
+        "name": "Tempo Rimanente (Minuti)"
+      },
+      "time_remaining_human": {
+        "name": "Tempo Rimanente"
+      },
+      "total_hours": {
+        "name": "Ore Totali"
+      },
+      "version": {
+        "name": "Versione firmware"
       }
     },
     "button": {

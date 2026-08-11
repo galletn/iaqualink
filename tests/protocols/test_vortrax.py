@@ -259,7 +259,17 @@ def _vortrax_payload(**overrides: Any) -> dict[str, Any]:
         "totalHours": 123,
         "prCyc": 1,
         "cycleStartTime": 1_700_000_000,
-        "durations": [60, 90, 120, 150],
+        # Real shape, from the live VR capture (vortrax subclasses VR and
+        # shares the prCyc encoding). Was a 4-element list, which matched
+        # neither the real type nor the real key count.
+        "durations": {
+            "waterTim": 45,
+            "quickTim": 75,
+            "smartTim": 0,
+            "deepTim": 165,
+            "customTim": 150,
+            "firstSmartTim": 150,
+        },
         "sensors": {"sns_1": {"val": "21.5"}},
     }
     ebox = {"completeCleanerPn": "VTX-PN-001"}
@@ -281,6 +291,42 @@ def _vortrax_payload(**overrides: Any) -> dict[str, Any]:
         reported["eboxData"] = ebox_block
 
     return {"payload": {"robot": {"state": {"reported": reported}}}}
+
+
+@pytest.mark.parametrize(
+    "pr_cyc,expected_minutes",
+    [(0, 45), (1, 75), (2, 0), (3, 165)],
+)
+def test_parse_status_resolves_cycle_duration_by_named_key(
+    pr_cyc: int, expected_minutes: int
+) -> None:
+    """Vortrax resolves the same ``durations`` keys as VR.
+
+    The vortrax suite previously had no ``cycle_duration`` assertion, so
+    its fixture's unrealistic list shape went unnoticed too.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("vortrax").parse_status(
+        client, _vortrax_payload(robot={"prCyc": pr_cyc}), result
+    )
+    assert result["cycle_duration"] == expected_minutes
+    assert result["cycle_start_time"] is not None
+
+
+def test_vortrax_duration_key_map_matches_vr() -> None:
+    """Vortrax is a *sibling* of VR, not a subclass, so its duration key
+    map is a parallel definition. Pin the two together so they can't
+    drift silently — only VR's names were verified against real hardware.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    assert (
+        get_protocol("vortrax").duration_key_map()
+        == get_protocol("vr").duration_key_map()
+    )
 
 
 def test_parse_status_no_payload_marks_unknown() -> None:

@@ -369,7 +369,19 @@ def _full_vr_payload(**robot_overrides: Any) -> dict[str, Any]:
         "stepperAdjTime": 15,
         "prCyc": 1,
         "cycleStartTime": 1_700_000_000,
-        "durations": [60, 90, 120, 150],
+        # Verbatim shape from a live VR (RA 6570 iQ) capture. Previously
+        # this fixture was `[60, 90, 120, 150]` -- a 4-element LIST, which
+        # matched neither the real type (JSON object) nor the real key
+        # count (6). The parser's happy path was therefore never tested
+        # against a shape the cloud actually sends.
+        "durations": {
+            "waterTim": 45,
+            "quickTim": 75,
+            "smartTim": 0,
+            "deepTim": 165,
+            "customTim": 150,
+            "firstSmartTim": 150,
+        },
         "sensors": {"sns_1": {"val": "21.5"}},
     }
     robot.update(robot_overrides)
@@ -384,6 +396,159 @@ def _full_vr_payload(**robot_overrides: Any) -> dict[str, Any]:
             },
         },
     }
+
+
+@pytest.mark.parametrize(
+    "pr_cyc,expected_minutes,expected_key",
+    [
+        (0, 45, "waterTim"),    # wall_only
+        (1, 75, "quickTim"),    # floor_only
+        (2, 0, "smartTim"),     # smart -- 0 while idle; cloud fills it in
+        (3, 165, "deepTim"),    # floor_and_walls
+    ],
+)
+def test_parse_status_resolves_cycle_duration_by_named_key(
+    pr_cyc: int, expected_minutes: int, expected_key: str
+) -> None:
+    """Every ``prCyc`` resolves the semantically correct ``durations`` key.
+
+    Values are from a live VR (RA 6570 iQ) capture. The VR suite had no
+    ``cycle_duration`` assertion at all before this, which is how an
+    unrealistic fixture (a 4-element list, where the cloud sends a 6-key
+    object) survived unnoticed.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("vr").parse_status(client, _full_vr_payload(prCyc=pr_cyc), result)
+    assert result["cycle_duration"] == expected_minutes
+    assert result["cycle_start_time"] is not None
+
+
+def test_smart_cycle_uses_first_smart_tim_when_not_yet_learned() -> None:
+    """Robot A from the live captures: ``firstSmrtFlag=1``, ``smartTim=0``.
+
+    ``smartTim`` is the *learned* smart duration and the cloud leaves it at
+    0 until a smart cycle has run once. Reading it unconditionally gave a
+    0-minute cycle and a 0 time-remaining for any robot in that state.
+    Falls back to ``firstSmartTim`` (150).
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    payload = _full_vr_payload(prCyc=2, firstSmrtFlag=1)
+    robot = payload["payload"]["robot"]["state"]["reported"]["equipment"]["robot"]
+    robot["durations"] = {
+        "waterTim": 45, "quickTim": 75, "smartTim": 0,
+        "deepTim": 165, "customTim": 150, "firstSmartTim": 150,
+    }
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("vr").parse_status(client, payload, result)
+    assert result["cycle_duration"] == 150
+
+
+def test_smart_cycle_uses_smart_tim_once_learned() -> None:
+    """Robot B from the live captures: ``firstSmrtFlag=0``, ``smartTim=130``.
+
+    The learned duration must win — the redirect is strictly for the
+    not-yet-learned case.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    payload = _full_vr_payload(prCyc=2, firstSmrtFlag=0)
+    robot = payload["payload"]["robot"]["state"]["reported"]["equipment"]["robot"]
+    robot["durations"] = {
+        "waterTim": 45, "quickTim": 75, "smartTim": 130,
+        "deepTim": 165, "customTim": 150, "firstSmartTim": 150,
+    }
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("vr").parse_status(client, payload, result)
+    assert result["cycle_duration"] == 130
+
+
+def test_smart_flag_set_but_real_smart_tim_present_keeps_it() -> None:
+    """A set flag alongside a non-zero ``smartTim`` keeps the real value —
+    the redirect requires BOTH the flag and a missing/zero duration.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    payload = _full_vr_payload(prCyc=2, firstSmrtFlag=1)
+    robot = payload["payload"]["robot"]["state"]["reported"]["equipment"]["robot"]
+    robot["durations"] = {
+        "waterTim": 45, "quickTim": 75, "smartTim": 120,
+        "deepTim": 165, "customTim": 150, "firstSmartTim": 150,
+    }
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("vr").parse_status(client, payload, result)
+    assert result["cycle_duration"] == 120
+
+
+def test_smart_redirect_only_affects_the_smart_cycle() -> None:
+    """The redirect must not perturb the other cycle codes."""
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    for pr_cyc, expected in ((0, 45), (1, 75), (3, 165)):
+        payload = _full_vr_payload(prCyc=pr_cyc, firstSmrtFlag=1)
+        robot = (
+            payload["payload"]["robot"]["state"]["reported"]["equipment"]["robot"]
+        )
+        robot["durations"] = {
+            "waterTim": 45, "quickTim": 75, "smartTim": 0,
+            "deepTim": 165, "customTim": 150, "firstSmartTim": 150,
+        }
+        client = _make_client()
+        result: dict[str, Any] = {}
+        get_protocol("vr").parse_status(client, payload, result)
+        assert result["cycle_duration"] == expected
+
+
+def test_parse_status_duration_survives_reordered_durations_keys() -> None:
+    """Named lookup must be independent of the cloud's key order.
+
+    The legacy positional lookup was correct only because the cloud
+    happened to emit waterTim/quickTim/smartTim/deepTim in prCyc order.
+    Reordering them broke every duration; now it doesn't.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    payload = _full_vr_payload(prCyc=3)
+    robot = payload["payload"]["robot"]["state"]["reported"]["equipment"]["robot"]
+    robot["durations"] = {
+        "deepTim": 165,      # deliberately first
+        "waterTim": 45,
+        "quickTim": 75,
+        "smartTim": 0,
+    }
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("vr").parse_status(client, payload, result)
+    assert result["cycle_duration"] == 165
+
+
+def test_parse_status_falls_back_to_positional_for_unknown_keys() -> None:
+    """A payload whose ``durations`` keys we don't recognise degrades to
+    the legacy positional lookup rather than returning 0.
+
+    This is what keeps the unverified cyclonext/vortrax key names safe:
+    a wrong guess is no worse than the previous behaviour.
+    """
+    from custom_components.iaqualink_robots.protocols import get_protocol
+
+    payload = _full_vr_payload(prCyc=1)
+    robot = payload["payload"]["robot"]["state"]["reported"]["equipment"]["robot"]
+    robot["durations"] = {"aaa": 30, "bbb": 60, "ccc": 90, "ddd": 120}
+
+    client = _make_client()
+    result: dict[str, Any] = {}
+    get_protocol("vr").parse_status(client, payload, result)
+    assert result["cycle_duration"] == 60  # positional index 1
 
 
 def test_parse_status_no_payload_marks_unknown() -> None:

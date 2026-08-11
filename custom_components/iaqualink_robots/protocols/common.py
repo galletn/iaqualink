@@ -36,6 +36,57 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+#: ``prCyc`` code for the smart cycle on the VR/Vortrax families.
+_SMART_CYCLE_CODE = 2
+
+
+def resolve_smart_duration_key_map(
+    robot_data: dict[str, Any],
+    base_map: dict[int, str],
+) -> dict[int, str]:
+    """Return ``base_map``, redirecting the smart cycle to ``firstSmartTim``
+    when the robot hasn't completed its first smart cycle yet.
+
+    Two live VR captures made this behaviour visible::
+
+        robot A: firstSmrtFlag=1, smartTim=0,   firstSmartTim=150
+        robot B: firstSmrtFlag=0, smartTim=130, firstSmartTim=150
+
+    ``smartTim`` is the *learned* smart-cycle duration: the cloud leaves it
+    at 0 until the robot has run a smart cycle once, and ``firstSmrtFlag``
+    is the "not learned yet" marker. Reading ``smartTim`` unconditionally
+    therefore yields a 0-minute duration — and a 0 time-remaining — for
+    any robot in that state, which is robot A above.
+
+    The redirect only fires when ``firstSmrtFlag`` is truthy *and*
+    ``smartTim`` is missing or 0, so a robot that reports both a set flag
+    and a real learned duration keeps the real one.
+    """
+    if base_map.get(_SMART_CYCLE_CODE) is None:
+        return base_map
+
+    durations = robot_data.get("durations")
+    if not isinstance(durations, dict):
+        return base_map
+    if "firstSmartTim" not in durations:
+        return base_map
+
+    if not robot_data.get("firstSmrtFlag"):
+        return base_map
+
+    learned = durations.get("smartTim")
+    if isinstance(learned, (int, float)) and learned > 0:
+        return base_map
+
+    _LOGGER.debug(
+        "firstSmrtFlag set and smartTim=%r; using firstSmartTim=%r for the "
+        "smart cycle duration",
+        learned, durations.get("firstSmartTim"),
+    )
+    redirected = dict(base_map)
+    redirected[_SMART_CYCLE_CODE] = "firstSmartTim"
+    return redirected
+
 
 def apply_common_robot_fields(
     client: AqualinkClient,

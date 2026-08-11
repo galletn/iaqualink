@@ -28,6 +28,7 @@ Most of this release came from capturing real payloads from four live robots (2�
 - **Four diagnostic sensors**, grouped under _Diagnostic_ on the device page: `Firmware Version`, `Error Code`, `Diagnostic Code`, and `Last Cloud Contact`. The last is the most useful for troubleshooting: the `Status` sensor can say "connected" but cannot tell you the robot has been silent for two hours.
 - **Richer diagnostics download**: equipment part numbers, partially-redacted component serials, and the capability list the cloud advertises for your device. Attaching this to an issue now usually removes the need for any follow-up questions.
 - **`tools/capture_payload.py`** — a maintainer/contributor script that prints a redacted payload plus a field-type report, replacing the hand-written Postman walkthroughs previously needed for issue triage. Reads credentials from a local, git-ignored file.
+- **A `LICENSE` file (MIT).** The repository never had one, even though `pyproject.toml` has long declared `license = "MIT"` — so the stated licence and the repository contents disagreed. The file now makes the MIT grant explicit for anyone installing, forking or building on this work.
 
 ### 📝 Notes for testers
 

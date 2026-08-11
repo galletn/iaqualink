@@ -346,9 +346,20 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
                 # fan speed we deliberately removed from its list because it
                 # doesn't advertise the capability. That is a legitimate state,
                 # not a bug, and must not spam.
+                # Lazily created rather than relied upon from __init__: the
+                # entity is legitimately constructed via __new__ in places
+                # (e.g. tests exercising only _handle_coordinator_update), and
+                # a log rate-limiter must never be the reason an update path
+                # raises. A class-level default would share the set across
+                # instances, so build it per-instance on first use.
+                warned = getattr(self, "_warned_fan_speed_mismatches", None)
+                if warned is None:
+                    warned = set()
+                    self._warned_fan_speed_mismatches = warned
+
                 signature = (current_display, tuple(available_speeds))
-                if signature not in self._warned_fan_speed_mismatches:
-                    self._warned_fan_speed_mismatches.add(signature)
+                if signature not in warned:
+                    warned.add(signature)
                     _LOGGER.warning(
                         "Fan speed mismatch: current '%s' is not in the "
                         "available speeds %s. The device may be reporting a "

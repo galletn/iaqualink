@@ -64,12 +64,29 @@ A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners
 * Canister Level, Error State
 * Time Remaining, Estimated End Time
 * Fan Speed, Activity, Status
+* Time adjustments (Time Adjustments, Adjustment Increment, Original /
+  Total Duration, Time Added/Removed)
+
+Grouped under **Diagnostic** on the device page:
+
+* Firmware Version, Error Code, Diagnostic Code, Last Cloud Contact
+
+> **Not every sensor appears on every robot.** The integration only creates
+> sensors your model can actually populate — for example CycloNext robots
+> report no water temperature, so no Temperature sensor is created, and
+> Battery Level exists only on battery-powered (CycloBat) models. A sensor
+> reading `Unknown` on your model is worth reporting.
 
 ### Buttons
+
+Remote control and time adjustment are only available on **VR** and
+**VortraX** robots — the cloud exposes no equivalent commands for the other
+families, so these buttons are not created for them.
 
 * Remote Forward / Backward
 * Remote Rotate Left / Right
 * Remote Stop
+* Add 15 Minutes / Reduce 15 Minutes
 
 ## 📋 Supported Models
 
@@ -93,7 +110,19 @@ A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners
 
 ### Known Issues
 
-*(List currently empty — please report if you encounter problems.)*
+* **CNX 868 iQ (CycloNext) can show `Idle` while physically cleaning**
+  ([#100](https://github.com/galletn/iaqualink/issues/100)). Not yet
+  explained: the two CycloNext robots available for testing report the
+  relevant cloud field normally, so the obvious cause has been ruled out.
+  If you can reproduce it, please attach **Download diagnostics** taken
+  _while the robot is running_ — that captures the raw cloud values and
+  would very likely settle it.
+* **`Model` can read `Unknown (WR0xxxxx)`** on some robots. The cloud
+  derives the model name from a part number stored against your device; when
+  that field is blank in their records, no model can be resolved by anyone —
+  including the iAquaLink app. Report the `WR0…` string and the model can at
+  least be mapped locally
+  ([#88](https://github.com/galletn/iaqualink/issues/88)).
 
 ## 🖥️ Example: Start/Stop in Home Assistant
 

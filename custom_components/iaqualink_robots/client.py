@@ -3,10 +3,10 @@
 Owns:
 - authentication (Cognito login + JWT exp decode + safety-margin handling)
 - REST session lifecycle (``_cloud_session`` reuses HA's pooled connector
-  with a private cookie jar — L19)
+  with a private cookie jar â€” L19)
 - persistent websocket connection + listener + state-shadow merge (C4-ws)
 - per-device command surface (start/stop/pause/return/set_fan_speed/
-  remote-steering/stepper-adjust) — dispatched through ``protocols/``
+  remote-steering/stepper-adjust) â€” dispatched through ``protocols/``
 
 The HA-side ``AqualinkDataUpdateCoordinator`` (and its adaptive-polling
 logic, realtime-envelope apply, and entity lifecycle plumbing) lives in
@@ -22,7 +22,6 @@ import math
 import aiohttp
 import logging
 import asyncio
-import re
 import time
 
 from collections.abc import AsyncIterator
@@ -44,6 +43,7 @@ from .const import (
     URL_GET_DEVICES,
     URL_WS,
     URL_GET_DEVICE_FEATURES,
+    MODEL_BY_CLEANER_PN,
     PENDING_STOP_RESET_MAX_AGE_SECONDS,
 )
 from .parsing import format_time_human
@@ -64,7 +64,7 @@ def _i2d_protocol() -> I2DProtocol:
     ``RobotProtocol`` base) without each site repeating the cast.
 
     Uses an explicit ``isinstance``-guard + ``raise`` (NOT an ``assert``)
-    so the type narrowing survives ``python -O`` — assertions are
+    so the type narrowing survives ``python -O`` â€” assertions are
     stripped under optimisation and the helper would silently return
     whatever ``get_protocol`` returned, defeating the whole point of
     centralising the cast (review MED).
@@ -84,7 +84,7 @@ def _require_protocol(device_type: str) -> RobotProtocol:
     assertion so the call-site type-narrows to non-None. Every call here
     is gated by ``self._device_type in (...)`` checks that match the keys
     in ``_DEVICE_PROTOCOLS``, so the None branch is unreachable at runtime
-    — the explicit raise replaces what would otherwise be a silent
+    â€” the explicit raise replaces what would otherwise be a silent
     ``AttributeError`` on a future cloud surfacing an unknown
     ``device_type`` value.
     """
@@ -103,7 +103,7 @@ class AuthFailedError(Exception):
     Converted to ``homeassistant.exceptions.ConfigEntryAuthFailed`` at the
     coordinator boundary so HA stops polling and dispatches its reauth flow.
     Keeping this as a separate internal type lets the REST/WS layers stay
-    framework-agnostic — only ``AqualinkDataUpdateCoordinator._async_update_data``
+    framework-agnostic â€” only ``AqualinkDataUpdateCoordinator._async_update_data``
     translates to the HA-specific exception.
     """
 
@@ -124,7 +124,7 @@ def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
     """Decode the `exp` claim from a JWT and return an aware-UTC datetime.
 
     The Cognito `IdToken` is a standard JWT (`<header>.<payload>.<signature>`).
-    The middle segment is base64url-encoded JSON containing an `exp` field —
+    The middle segment is base64url-encoded JSON containing an `exp` field â€”
     seconds-since-epoch. We trust transport security (TLS) and the iAqualink
     auth flow rather than verifying the signature, which would require
     fetching Cognito's public JWKs.
@@ -143,7 +143,7 @@ def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
         payload_b64 = parts[1]
         # base64url decoding needs the trailing '=' padding (multiple of 4).
         # M19 AC#9: split the negative-modulo trick into two named steps for
-        # readability. Behavior unchanged — `test_unpadded_base64_handled`
+        # readability. Behavior unchanged â€” `test_unpadded_base64_handled`
         # still covers it.
         missing = (4 - len(payload_b64) % 4) % 4
         padded = payload_b64 + "=" * missing
@@ -252,7 +252,7 @@ class AqualinkClient:
         self._coordinator_callback: Callable[[], Awaitable[None]] | None = None
         # C4-ws: push-callback wired by the coordinator. The WS listener uses
         # this to apply a merged shadow envelope directly via
-        # ``coordinator.async_set_updated_data`` — no HTTP refresh roundtrip.
+        # ``coordinator.async_set_updated_data`` â€” no HTTP refresh roundtrip.
         self._realtime_push_callback: (
             Callable[[dict[str, Any]], Awaitable[None]] | None
         ) = None
@@ -260,7 +260,7 @@ class AqualinkClient:
         # The WS listener deep-merges inbound shadow deltas into this baseline
         # so the existing per-device-type parsers (which expect a complete
         # envelope) keep working unchanged on the push path. ``None`` until the
-        # first successful ``_ws_subscribe`` — the listener falls back to
+        # first successful ``_ws_subscribe`` â€” the listener falls back to
         # ``_coordinator_callback`` (refresh) for that first race window.
         self._last_ws_envelope: dict[str, Any] | None = None
         # C4-ws: tuple of (state, errorState, prCyc, cycleStartTime, stepper,
@@ -302,7 +302,7 @@ class AqualinkClient:
         # family doesn't crash on first read. Typed as ``Any`` because the
         # VR / vortrax / cyclobat / cyclonext families write a translation
         # key string here while the i2d family writes the cloud-side int
-        # code — the inconsistency predates P6 and tightening it is out
+        # code â€” the inconsistency predates P6 and tightening it is out
         # of scope.
         self._fan_speed: Any = None
 
@@ -445,7 +445,7 @@ class AqualinkClient:
             # Not enough consistency - keep the stable status
             if self._debug_mode:
                 _LOGGER.debug(
-                    f"Status stabilizer: Status change rejected from '{self._stable_status}' to '{raw_status}' ({matching_count}/{total_recent_count} recent readings match, need ≥70%)")
+                    f"Status stabilizer: Status change rejected from '{self._stable_status}' to '{raw_status}' ({matching_count}/{total_recent_count} recent readings match, need â‰¥70%)")
             return self._stable_status
 
     @property
@@ -480,7 +480,7 @@ class AqualinkClient:
         and exposed via ``coordinator.title``) so log lines render
         "Add 15 minutes command sent to Pool Robot" instead of the
         synthetic "vr_R23X12345678" fallback. Pre-review this looked at
-        ``getattr(self, "_title", ...)`` — but ``_title`` lives on the
+        ``getattr(self, "_title", ...)`` â€” but ``_title`` lives on the
         coordinator, NOT the client, so the getattr always fell through
         to the synthetic.
         """
@@ -512,9 +512,9 @@ class AqualinkClient:
 
         When ``self._hass`` is set, constructs a per-call ``aiohttp.ClientSession``
         that **reuses HA's pooled connector** (so the integration keeps the
-        connection-pooling win — no fresh TLS handshake per request) but with
+        connection-pooling win â€” no fresh TLS handshake per request) but with
         its own private ``aiohttp.DummyCookieJar``. ``connector_owner=False``
-        means closing the wrapper does NOT close the connector — HA still
+        means closing the wrapper does NOT close the connector â€” HA still
         owns its lifecycle. This is cheap: ``aiohttp.ClientSession``
         construction is pure Python (no I/O); the TCP/TLS work is in the
         connector, which we share.
@@ -526,11 +526,11 @@ class AqualinkClient:
         ``AWSALBCORS``) on responses. Without isolation, those persist
         for the HA-process lifetime and auto-attach to any other
         integration's requests within a matching ``Domain``/``Path``
-        scope — the symmetric risk to the header leak the story's
+        scope â€” the symmetric risk to the header leak the story's
         original AC#1 defended via headers-on-request. A
         ``DummyCookieJar`` silently drops every cookie set on every
         cloud response, defending the leak without affecting auth (we
-        don't rely on cookies — every request carries its own
+        don't rely on cookies â€” every request carries its own
         Authorization header).
 
         When ``self._hass`` is None (config-flow discovery via the
@@ -539,18 +539,21 @@ class AqualinkClient:
         that closes on exit. Pooling has no value for a single-shot
         discovery probe.
 
-        Headers are NOT passed to the session here — callers MUST attach
+        Headers are NOT passed to the session here â€” callers MUST attach
         them per-request (``session.get(url, headers=...)``). The shared
         HA connector is shared across many integrations, so setting default
         headers on the wrapper would still leak auth via the request path
-        if the wrapper were ever reused — keep headers per-request for
+        if the wrapper were ever reused â€” keep headers per-request for
         the same defence-in-depth reasoning the original L19 patch used.
 
         Note: the websocket session at ``_ensure_websocket_connection`` is
-        intentionally owned by this client (not shared) — it holds the live
-        WS connection and is closed via ``_close_websocket``. The Vortrax
-        web scraper at ``_get_vortrax_model_from_web`` is also intentionally
-        isolated (third-party site — see comment there).
+        intentionally owned by this client (not shared) â€” it holds the live
+        WS connection and is closed via ``_close_websocket``.
+
+        There is no longer any third-party HTTP call to isolate: the Vortrax
+        web scraper this note used to warn about has been removed in favour
+        of the offline ``MODEL_BY_CLEANER_PN`` table, so the integration now
+        talks only to the iAqualink cloud.
         """
         if self._hass is not None:
             shared = async_get_clientsession(self._hass)
@@ -627,8 +630,8 @@ class AqualinkClient:
              silently lying to the UI about what the robot was doing.
 
           2) **Stale zombie reset.** If a poll never lands (long
-             disconnect, network drop), the next successful poll — possibly
-             minutes later — applied the reset and clobbered whatever the
+             disconnect, network drop), the next successful poll â€” possibly
+             minutes later â€” applied the reset and clobbered whatever the
              robot was doing by then.
 
         H6 guards (1) with a state-awareness check against
@@ -637,7 +640,7 @@ class AqualinkClient:
 
         Extracted into a method so the logic is directly unit-testable
         without spinning up the full ``fetch_status`` cloud round-trip
-        (see ``tests/test_coordinator.py`` — apply-pending-stop-reset block).
+        (see ``tests/test_coordinator.py`` â€” apply-pending-stop-reset block).
         """
         if not self._pending_stop_reset or not self._pending_stop_reset_at:
             return data
@@ -679,7 +682,7 @@ class AqualinkClient:
         single Cognito refresh. The second caller acquires the lock after the
         first completed, sees a valid token, and returns without re-auth.
 
-        ``force=True`` bypasses the recheck — used by the 401-retry paths so
+        ``force=True`` bypasses the recheck â€” used by the 401-retry paths so
         the spec's "refresh-then-retry" mitigation does an actual Cognito
         round-trip even when the local token still looks valid (a cloud-side
         revocation looks locally-valid until the response says otherwise).
@@ -696,7 +699,7 @@ class AqualinkClient:
             # let a partial-failure state slip past the recheck.
             if not force and self._id_token and not self._is_token_expired():
                 if self._debug_mode:
-                    _LOGGER.debug("Skipping authenticate — token still valid")
+                    _LOGGER.debug("Skipping authenticate â€” token still valid")
                 return
             if self._debug_mode:
                 _LOGGER.debug("Authenticating with iAqualink API...")
@@ -762,7 +765,7 @@ class AqualinkClient:
 
             for device in devices:
                 device_type = device.get("device_type")
-                _LOGGER.debug("🔍 Devices found : %s", device)
+                _LOGGER.debug("ðŸ” Devices found : %s", device)
                 if device_type in supported_device_types:
                     serial = device["serial_number"]
                     compatible_devices.append(device)
@@ -771,10 +774,10 @@ class AqualinkClient:
                     if target_serial and serial == target_serial:
                         self._serial = serial
                         self._device_type = device_type
-                        _LOGGER.debug(f"✅ Target device selected: {device_type} - {serial}")
+                        _LOGGER.debug(f"âœ… Target device selected: {device_type} - {serial}")
                         return
                 else:
-                    _LOGGER.debug(f"⏩ Device ignored (unsupported type): {device_type}")
+                    _LOGGER.debug(f"â© Device ignored (unsupported type): {device_type}")
 
             # If we have compatible devices but weren't looking for a specific one,
             # select the first compatible device
@@ -782,16 +785,16 @@ class AqualinkClient:
                 device = compatible_devices[0]
                 self._serial = device["serial_number"]
                 self._device_type = device["device_type"]
-                _LOGGER.debug(f"✅ Device selected: {self._device_type} - {self._serial}")
+                _LOGGER.debug(f"âœ… Device selected: {self._device_type} - {self._serial}")
                 return
 
             # If we were looking for a specific device but didn't find it,
             # or if we found no compatible devices at all
             if target_serial:
-                _LOGGER.error(f"❌ Target device {target_serial} not found in the device list.")
+                _LOGGER.error(f"âŒ Target device {target_serial} not found in the device list.")
                 raise RuntimeError(f"Target device {target_serial} not found")
             else:
-                _LOGGER.error("❌ No compatible robot found in the device list.")
+                _LOGGER.error("âŒ No compatible robot found in the device list.")
                 raise RuntimeError("No supported robot found")
         except asyncio.CancelledError:
             if self._debug_mode:
@@ -878,7 +881,7 @@ class AqualinkClient:
 
             except aiohttp.WSServerHandshakeError as e:
                 # Typed status check replaces the pre-H9b fragile substring
-                # match on the exception message (AC#3). 401 is auth-failed →
+                # match on the exception message (AC#3). 401 is auth-failed â†’
                 # surface to coordinator as AuthFailedError so HA reauth
                 # fires. 403 stays an error log.
                 self._ws_consecutive_failures += 1
@@ -896,7 +899,7 @@ class AqualinkClient:
                             await self._authenticate(force=True)
                         except asyncio.CancelledError:
                             # H9b review P7: never swallow cancellation as auth
-                            # failure — propagate the shutdown signal.
+                            # failure â€” propagate the shutdown signal.
                             raise
                         except Exception as auth_err:
                             _LOGGER.debug(f"Re-auth after WS 401 failed: {auth_err}")
@@ -911,7 +914,7 @@ class AqualinkClient:
                         retry_delay *= 1.5
                         continue
                     # H9b review P6: drop the misleading "fall through to next
-                    # iteration" comment — we `raise` immediately here.
+                    # iteration" comment â€” we `raise` immediately here.
                     raise AuthFailedError(f"WS handshake 401 after {max_retries} attempts") from e
                 if e.status == 403:
                     _LOGGER.error(f"Websocket access forbidden (attempt {attempt + 1}): {e}")
@@ -987,11 +990,11 @@ class AqualinkClient:
         - **AC #2 + AC #4 (direct push):** on a real state change, the inbound
           ``reported`` delta is deep-merged into the cached baseline envelope
           and dispatched once via ``await self._realtime_push_callback(...)``
-          — which the coordinator implements as ``async_set_updated_data``
+          â€” which the coordinator implements as ``async_set_updated_data``
           (no fetch_status, no debouncer, no HTTP roundtrip).
 
         The pre-C4-ws code fired up to two ``asyncio.create_task`` callbacks
-        per message (one for stepper, one for state) — both unawaited, both
+        per message (one for stepper, one for state) â€” both unawaited, both
         funnelling into ``async_request_refresh``. A chatty cloud session
         therefore produced multiple overlapping refresh fan-outs per inbound
         StateReported plus a duplicated dispatch when a single message
@@ -1057,7 +1060,7 @@ class AqualinkClient:
                     if typed_payload.get("service") != "StateStreamer":
                         continue
                     state_envelope = cast(WSStateEnvelope, typed_payload)
-                    # P12 AC #3: top-level field validation — warns once
+                    # P12 AC #3: top-level field validation â€” warns once
                     # per missing field per process so cloud-shape drift
                     # surfaces with an actionable log line.
                     if not validate_state_envelope_fields(state_envelope):
@@ -1071,7 +1074,7 @@ class AqualinkClient:
                         continue
 
                     try:
-                        # First-push fallback: no cached baseline yet → route
+                        # First-push fallback: no cached baseline yet â†’ route
                         # to the refresh callback so the next ``_ws_subscribe``
                         # seeds ``_last_ws_envelope``. Avoids parsing a partial
                         # envelope that would silently overwrite cached fields
@@ -1118,7 +1121,7 @@ class AqualinkClient:
                         self._last_applied_state_signature = new_signature
 
                         # AC #2 + AC #4: single awaited push. The coordinator
-                        # implements this as ``async_set_updated_data`` — no
+                        # implements this as ``async_set_updated_data`` â€” no
                         # HTTP roundtrip, no debouncer.
                         if self._realtime_push_callback is not None:
                             await self._realtime_push_callback(self._last_ws_envelope)
@@ -1159,7 +1162,7 @@ class AqualinkClient:
             # MUST propagate up to HA's coordinator so reauth dispatches.
             # Pre-fix, the broad-except below caught the propagated value
             # (ConfigEntryAuthFailed inherits from Exception) and demoted
-            # it to WARNING — the listener task died silently and the
+            # it to WARNING â€” the listener task died silently and the
             # user never saw the reauth prompt until the next polled
             # cycle's 401 hit. Same H10 precedent as the C4-cmd command
             # sites: never swallow auth failures.
@@ -1186,8 +1189,8 @@ class AqualinkClient:
 
         The push callback is invoked with a deep-merged shadow envelope
         (the same shape ``_ws_subscribe`` returns). The coordinator implements
-        the merge target — running the per-device-type parser on the envelope
-        and calling ``async_set_updated_data`` — so the WS listener side stays
+        the merge target â€” running the per-device-type parser on the envelope
+        and calling ``async_set_updated_data`` â€” so the WS listener side stays
         a pure dispatcher.
 
         Distinct from ``set_coordinator_callback`` (the legacy callback that
@@ -1209,7 +1212,7 @@ class AqualinkClient:
         """Return a new dict with ``overlay`` overlaid onto ``base`` (story C4-ws).
 
         Recursive on nested dicts. Scalars and lists are replaced wholesale
-        (no list concatenation) — matches the AWS IoT shadow document
+        (no list concatenation) â€” matches the AWS IoT shadow document
         semantics where a delta's array overwrites the previous array.
 
         Used by the WS listener to apply incremental ``StateReported`` deltas
@@ -1217,7 +1220,7 @@ class AqualinkClient:
         parsers receive a complete, well-shaped dict regardless of whether
         the cloud pushed a full state or just the changed sub-tree.
 
-        Does NOT mutate either input — returns a fresh dict so the cached
+        Does NOT mutate either input â€” returns a fresh dict so the cached
         baseline isn't side-channelled into divergent states by callers
         retaining references to it.
         """
@@ -1247,7 +1250,7 @@ class AqualinkClient:
         body so the AC #1 filter is independently testable.
 
         P12: accepts ``WSStateEnvelope`` (the classified-typed shape from
-        ``parse_ws_message``) in addition to the raw ``dict[str, Any]`` —
+        ``parse_ws_message``) in addition to the raw ``dict[str, Any]`` â€”
         the runtime ``isinstance`` + ``service`` / ``event`` guards stay
         because callers in test fixtures may pass raw dicts directly.
         """
@@ -1268,21 +1271,21 @@ class AqualinkClient:
         # push at the empty-robot check and the entire device family
         # silently fell back to polled-only updates (~3 s latency vs the
         # ~<200 ms push path everyone else got). Fallback to ``robot.1``
-        # lets the parser see cyclonext deltas — the per-device-type
+        # lets the parser see cyclonext deltas â€” the per-device-type
         # apply path at ``_apply_realtime_envelope`` already dispatches
         # to ``_update_cyclonext_robot_data`` which reads from the same
         # key.
         robot = equipment.get("robot") or equipment.get("robot.1") or {}
         if not isinstance(robot, dict) or not robot:
-            # No equipment.robot content → nothing to apply. Heartbeats and
+            # No equipment.robot content â†’ nothing to apply. Heartbeats and
             # status-only messages land here.
             return None
         # ``reported`` is a TypedDict in the WSStateEnvelope path; widen to
         # the legacy ``dict[str, Any]`` return shape downstream consumers
         # (``_deep_merge_dict``, ``_apply_realtime_envelope``) expect.
         # Runtime ``isinstance`` guard (review MED) before the cast so a
-        # drifted ``reported`` value (string, scalar, list — possible if
-        # the cloud emits a partial-render shape) surfaces as ``None`` —
+        # drifted ``reported`` value (string, scalar, list â€” possible if
+        # the cloud emits a partial-render shape) surfaces as ``None`` â€”
         # the listener's per-message ``continue`` handles None gracefully.
         # Without this guard the cast would type-promise a dict and the
         # next call (``_deep_merge_dict``) would hit AttributeError mid-
@@ -1295,7 +1298,7 @@ class AqualinkClient:
     def _state_signature(robot_data: dict[str, Any]) -> tuple[Any, ...]:
         """Build a comparable signature of the ``equipment.robot`` fields that drive entity state (story C4-ws).
 
-        The dedup check at AC #3 ("60 s of unchanged WS chatter → 0
+        The dedup check at AC #3 ("60 s of unchanged WS chatter â†’ 0
         ``_async_update_data`` invocations") relies on this signature being
         stable when the user-visible state hasn't moved. Includes top-level
         VR/vortrax/cyclonext keys *and* cyclobat's nested ``main`` /
@@ -1329,7 +1332,7 @@ class AqualinkClient:
             # instead of ``errorState``). Without these the signature
             # tuple was all-None for cyclonext, every consecutive push
             # deduped against the previous all-None tuple, and only the
-            # FIRST push after baseline-cache ever fired — real
+            # FIRST push after baseline-cache ever fired â€” real
             # subsequent state changes were silently dropped.
             # ``_update_cyclonext_robot_data`` at L1985 confirms these
             # are the fields the parser actually reads.
@@ -1353,72 +1356,6 @@ class AqualinkClient:
         # This restores the original working behavior
         return await asyncio.wait_for(self.get_device_status(req), timeout=30)
 
-    # Cache compiled regex patterns for better performance
-    _VORTRAX_PATTERNS = [
-        re.compile(pattern, re.IGNORECASE | re.DOTALL) for pattern in [
-            r'container-[0-9a-f]+[^>]*>[^<]*<div[^>]*>[^<]*<div[^>]*>[^<]*<section[^>]*>[^<]*<div[^>]*>[^<]*<div[^>]*>[^<]*<ul[^>]*>[^<]*<li[^>]*>[^<]*<a[^>]*>[^<]*<h4[^>]*>([^<]+)</h4>',
-            r'<h4[^>]*>(?:VortraX|VORTRAX)\s*([\w-]+)[^<]*</h4>',
-            r'<div[^>]*class="[^"]*product-title[^"]*"[^>]*>\s*(?:VortraX|VORTRAX)\s*([\w-]+)\s*</div>',
-            r'product-name[^>]*>\s*(?:VortraX|VORTRAX)\s*([\w-]+)\s*</',
-            r'<title[^>]*>(?:VortraX|VORTRAX)\s*([\w-]+)',
-            r'(?:VortraX|VORTRAX)\s*([\w-]+)'
-        ]
-    ]
-
-    async def _get_vortrax_model_from_web(self, pn: str) -> str:
-        """Get vortrax model from the zodiac website using product number."""
-        # List of URLs to try
-        urls = [
-            f"https://www.zodiac-poolcare.com/search?key={pn}",
-            f"https://www.zodiac-poolcare.be/content/zodiac/be/nl_be/search.html?key={pn}",
-            f"https://www.zodiac-poolcare.fr/search?key={pn}"
-        ]
-
-        timeout = aiohttp.ClientTimeout(total=5)  # 5 second timeout
-        # L19 AC#2/#3: intentionally NOT routed through `self._cloud_session()`.
-        # This scrapes zodiac-poolcare.com — a third-party site — and must not
-        # share HA's pooled session, which is reused across every integration
-        # in the installation. Sharing would leak HA's cookies/headers (and any
-        # iAqualink auth tokens that landed on the shared session via a
-        # mis-implemented future cloud call) to a third-party domain. The
-        # session is ephemeral by design: closes on context exit, nothing
-        # persisted, so `coordinator.cleanup()` (P10) has nothing to release.
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            for url in urls:
-                try:
-                    _LOGGER.debug(f"Trying to fetch VortraX model from {url}")
-                    async with session.get(url) as response:
-                        if response.status != 200:
-                            _LOGGER.debug(f"Failed to fetch from {url}, status: {response.status}")
-                            continue
-
-                        html = await response.text()
-                        _LOGGER.debug(f"Got HTML content length: {len(html)}")
-
-                        # Try each pre-compiled pattern
-                        for pattern in self._VORTRAX_PATTERNS:
-                            matches = pattern.finditer(html)
-                            for match in matches:
-                                model = match.group(1).strip()
-                                # Clean up the model string
-                                model = re.sub(r'^(?:VortraX|VORTRAX)\s*', '', model, flags=re.IGNORECASE)
-                                if model:
-                                    _LOGGER.debug(f"Found VortraX model {model} for PN {pn}")
-                                    # Only accept model numbers that look valid
-                                    if re.match(r'^[A-Z0-9-]+$', model):
-                                        return f"VortraX {model}"
-
-                except asyncio.TimeoutError:
-                    _LOGGER.debug(f"Timeout fetching from {url}")
-                    continue
-                except Exception as e:
-                    _LOGGER.debug(f"Error fetching from {url}: {e}")
-                    continue
-
-        # If no model found after trying all URLs and patterns
-        _LOGGER.debug(f"No VortraX model found for PN {pn}")
-        return f"VortraX (PN: {pn})"
-
     async def _get_device_model(self) -> str:
         """Get device model information."""
         # Return cached model if available and valid (not "Unknown" or "Not Supported")
@@ -1439,27 +1376,15 @@ class AqualinkClient:
         self._model_fetch_attempts += 1
         self._model_last_attempt = dt_util.utcnow()
 
-        # For vortrax robots, get model from web based on product number
-        if self._device_type == "vortrax":
-            try:
-                # Use the persistent websocket connection
-                data = await self._ws_subscribe()
-                if data and 'payload' in data and data['payload'].get('robot', {}).get('state', {}).get('reported', {}).get('eboxData', {}).get('completeCleanerPn'):
-                    pn = data['payload']['robot']['state']['reported']['eboxData']['completeCleanerPn']
-                    _LOGGER.debug(f"Found VortraX product number: {pn}")
-                    if pn:
-                        model = await self._get_vortrax_model_from_web(pn)
-                        if model != "Unknown":
-                            self._model = model  # Cache the successful result
-                            self._model_fetch_attempts = 0  # Reset attempts on success
-                            _LOGGER.debug(f"Successfully cached VortraX model: {self._model}")
-                            return model
-                else:
-                    _LOGGER.debug("No product number data available for VortraX model detection")
-            except Exception as e:
-                _LOGGER.debug(f"Error getting vortrax product number: {e}")
+        # Pre-fix there was a vortrax-only branch here that resolved the model
+        # by scraping zodiac-poolcare.com for the cleaner part number. That
+        # page stopped rendering results server-side, so the scrape matched
+        # nothing and always fell through. The part-number path now lives in
+        # ``_model_from_cleaner_pn`` (table-based, no network, all families)
+        # and runs AFTER the features API, which is authoritative when it
+        # answers — the cloud derives ``model`` from the same part number.
 
-        # For other robots, try the features API
+        # Try the features API first.
         url = f"{URL_GET_DEVICE_FEATURES}{self._serial}/features"
         try:
             data = await asyncio.wait_for(self.get_device_features(url), timeout=30)
@@ -1470,7 +1395,7 @@ class AqualinkClient:
                 return self._handle_model_fetch_failure()
 
             # Capture the capability list regardless of whether a model comes
-            # back — the two are independent, and a device with no `model` still
+            # back â€” the two are independent, and a device with no `model` still
             # advertises its features (verified on a live vr robot that returned
             # 19 features and no model at all).
             advertised = data.get('features')
@@ -1496,11 +1421,73 @@ class AqualinkClient:
                 _LOGGER.debug(f"Model not supported for device {self._serial}")
                 return self._model
 
+            # The features call gave no model. Fall back to the part number.
+            resolved = await self._model_from_cleaner_pn()
+            if resolved is not None:
+                self._model = resolved
+                self._model_fetch_attempts = 0
+                return self._model
+
             return self._handle_model_fetch_failure()
 
         except Exception as e:
             _LOGGER.debug(f"Error getting device model: {e}")
             return self._handle_model_fetch_failure()
+
+    async def _model_from_cleaner_pn(self) -> str | None:
+        """Resolve the model from ``eboxData.completeCleanerPn``.
+
+        Returns a model name, or ``"Unknown (<pn>)"`` when the part number is
+        present but not in ``MODEL_BY_CLEANER_PN``, or ``None`` when there is
+        no usable part number at all (caller then falls through to its normal
+        failure handling).
+
+        Replaces ``_get_vortrax_model_from_web``, which scraped
+        ``zodiac-poolcare.com`` for vortrax only. That page is now a
+        client-rendered shell with no product names in the HTML, so the scrape
+        returned "Unknown" for every input â€” verified against the three known
+        part numbers. This path needs no network call beyond the shadow the
+        client already fetches, and it works for every family rather than one.
+
+        Surfacing the raw part number on a miss is deliberate: it tells the
+        user something concrete, and it is exactly the datum needed to extend
+        the table (see ``tools/capture_payload.py``).
+        """
+        try:
+            data = await self._ws_subscribe()
+            pn = (
+                ((data or {}).get('payload') or {})
+                .get('robot', {})
+                .get('state', {})
+                .get('reported', {})
+                .get('eboxData', {})
+                .get('completeCleanerPn')
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not read completeCleanerPn: %s", err)
+            return None
+
+        if not pn or not isinstance(pn, str):
+            # An empty string is the *expected* value for a device whose cloud
+            # record was never fully provisioned â€” which is also exactly why
+            # its features call carried no model. Nothing to resolve.
+            _LOGGER.debug(
+                "No completeCleanerPn for device (got %r); model unresolvable",
+                pn,
+            )
+            return None
+
+        pn = pn.strip()
+        known = MODEL_BY_CLEANER_PN.get(pn)
+        if known:
+            _LOGGER.debug("Resolved model %s from part number %s", known, pn)
+            return known
+
+        _LOGGER.info(
+            "Unrecognised cleaner part number %s â€” please report it so the "
+            "model can be mapped (see MODEL_BY_CLEANER_PN in const.py)", pn,
+        )
+        return f"Unknown ({pn})"
 
     def _should_retry_model_fetch(self) -> bool:
         """Determine if we should retry fetching the model."""
@@ -1546,7 +1533,7 @@ class AqualinkClient:
         return self._model or "Unknown"
 
     async def _update_i2d_robot(self) -> dict[str, Any]:
-        """Update status for i2d_robot type — HTTP fetch + protocol parse.
+        """Update status for i2d_robot type â€” HTTP fetch + protocol parse.
 
         R25-i2d (R27 fold): the 138-line god-function body now lives as
         ``I2DProtocol.parse_status`` + the pure ``parse_i2d_payload``
@@ -1700,21 +1687,21 @@ class AqualinkClient:
     def _update_vr_robot_data(
         self, data: dict[str, Any], result: dict[str, Any]
     ) -> None:
-        """Update status for VR type robot — delegates to VRProtocol.parse_status.
+        """Update status for VR type robot â€” delegates to VRProtocol.parse_status.
 
         R25-vr: the parser body lives on ``VRProtocol`` so each device family
         owns its own parsing logic. This method stays as a stable seam for
         the two callers (``fetch_status`` and ``_apply_realtime_envelope``)
         so the push-path dispatch doesn't need to know about the protocol
         package yet (the dispatch will collapse once all five R25 stories
-        land — story R26).
+        land â€” story R26).
         """
         _require_protocol("vr").parse_status(self, data, result)
 
     def _update_cyclobat_robot_data(
         self, data: dict[str, Any], result: dict[str, Any]
     ) -> None:
-        """Update status for cyclobat type robot — delegates to
+        """Update status for cyclobat type robot â€” delegates to
         CycloBatProtocol.parse_status (story R25-cyclobat).
 
         Stable 2-line seam called by both the polled path
@@ -1725,10 +1712,10 @@ class AqualinkClient:
     def _update_vortrax_robot_data(
         self, data: dict[str, Any], result: dict[str, Any]
     ) -> None:
-        """Update status for vortrax type robot — delegates to
+        """Update status for vortrax type robot â€” delegates to
         VortraxProtocol.parse_status (story R25-vortrax).
 
-        Mirrors the ``_update_vr_robot_data`` shape — stable 2-line seam
+        Mirrors the ``_update_vr_robot_data`` shape â€” stable 2-line seam
         called by both the polled path (``fetch_status``) and the push
         path (``_apply_realtime_envelope``). The legacy method stays
         until story R26 (module split) collapses the dispatch.
@@ -1738,7 +1725,7 @@ class AqualinkClient:
     def _update_cyclonext_robot_data(
         self, data: dict[str, Any], result: dict[str, Any]
     ) -> None:
-        """Update status for cyclonext type robot — delegates to
+        """Update status for cyclonext type robot â€” delegates to
         CycloNextProtocol.parse_status (story R25-cyclonext).
 
         Stable 2-line seam called by both the polled path
@@ -1758,13 +1745,13 @@ class AqualinkClient:
         expected JSON envelope (Cognito occasionally returns a 200 with an
         error body or a non-JSON content type). Without this, a 200-shaped
         rejection slipped through and only blew up on the ``auth["...":]``
-        dict accesses in ``_authenticate`` as ``KeyError`` — which the
+        dict accesses in ``_authenticate`` as ``KeyError`` â€” which the
         coordinator broad-except handled as transient noise and the user
         never saw the reauth prompt.
         """
         try:
             # L19: shared HA pool via _cloud_session (falls back to ephemeral
-            # session when self._hass is None — config-flow discovery + tests).
+            # session when self._hass is None â€” config-flow discovery + tests).
             # Headers go on the request, not the session, to avoid leaking
             # auth into the shared pool.
             async with self._cloud_session() as session:
@@ -1814,7 +1801,7 @@ class AqualinkClient:
                     async with session.get(URL_GET_DEVICES, params=params, headers=headers) as response:
                         if response.status == 401:
                             if attempt == 0:
-                                _LOGGER.debug("401 on get_devices — refreshing token and retrying once")
+                                _LOGGER.debug("401 on get_devices â€” refreshing token and retrying once")
                                 await self._authenticate(force=True)
                                 # `params` carries `authentication_token` from the caller; refresh it
                                 # in-place so the retry uses the new token.
@@ -1842,12 +1829,12 @@ class AqualinkClient:
                 # L19: shared HA pool. Auth header constructed per-request so
                 # the retry path picks up the rotated `self._id_token` cleanly
                 # (it was already happening before because the loop re-entered
-                # the `with ClientSession(...)` block — this preserves that).
+                # the `with ClientSession(...)` block â€” this preserves that).
                 async with self._cloud_session() as session:
                     async with session.get(url, headers={"Authorization": self._id_token}) as response:
                         if response.status == 401:
                             if attempt == 0:
-                                _LOGGER.debug("401 on get_device_features — refreshing token and retrying once")
+                                _LOGGER.debug("401 on get_device_features â€” refreshing token and retrying once")
                                 await self._authenticate(force=True)
                                 continue  # next iteration re-reads self._id_token into a fresh request header
                             raise AuthFailedError(
@@ -1907,15 +1894,15 @@ class AqualinkClient:
                 raise  # Re-raise cancellation to preserve shutdown behavior
             except AuthFailedError:
                 # H9b review P1: auth failures must propagate to the coordinator
-                # so HA reauth fires — never swallow them into the resilient
+                # so HA reauth fires â€” never swallow them into the resilient
                 # "return None" path used for transient WS noise.
                 # Sign-off P7: close is best-effort during auth-failure
-                # propagation — a teardown error here must NOT mask the
+                # propagation â€” a teardown error here must NOT mask the
                 # AuthFailedError, or the broad-except below absorbs it and
                 # reauth never fires.
                 try:
                     await self._close_websocket()
-                except Exception:  # noqa: BLE001 — close is best-effort
+                except Exception:  # noqa: BLE001 â€” close is best-effort
                     pass
                 raise
             except Exception as e:
@@ -1951,7 +1938,7 @@ class AqualinkClient:
                     ) as response:
                         if response.status == 401:
                             if attempt == 0:
-                                _LOGGER.debug("401 on post_command_i2d — refreshing token and retrying once")
+                                _LOGGER.debug("401 on post_command_i2d â€” refreshing token and retrying once")
                                 await self._authenticate(force=True)
                                 continue  # next iteration re-reads self._id_token
                             raise AuthFailedError(
@@ -2006,10 +1993,10 @@ class AqualinkClient:
                 # H9b review P1: command-time WS 401 must propagate so HA
                 # reauth fires; the broad-except below is for transient WS
                 # noise only.
-                # Sign-off P7: best-effort close — see get_device_status.
+                # Sign-off P7: best-effort close â€” see get_device_status.
                 try:
                     await self._close_websocket()
-                except Exception:  # noqa: BLE001 — close is best-effort
+                except Exception:  # noqa: BLE001 â€” close is best-effort
                     pass
                 raise
             except Exception as e:
@@ -2035,7 +2022,7 @@ class AqualinkClient:
 
         C4-cmd review F1 (2026-05-18): the original per-site
         ``except Exception`` blocks swallowed ``ConfigEntryAuthFailed``
-        raised by ``_handle_realtime_update`` — the H10 review's
+        raised by ``_handle_realtime_update`` â€” the H10 review's
         precedent explicitly says auth failures must propagate so HA's
         reauth flow fires. This helper preserves the broad-except for
         transient noise (network blips, parser errors during refresh)
@@ -2052,9 +2039,9 @@ class AqualinkClient:
             raise
         except ConfigEntryAuthFailed:
             # H10 precedent: auth failures must surface so HA dispatches
-            # reauth — never swallow them into the transient-noise branch.
+            # reauth â€” never swallow them into the transient-noise branch.
             raise
-        except Exception as e:  # noqa: BLE001 — transient refresh noise
+        except Exception as e:  # noqa: BLE001 â€” transient refresh noise
             _LOGGER.debug(f"Error triggering coordinator callback: {e}")
 
     def _build_state_request(
@@ -2073,22 +2060,22 @@ class AqualinkClient:
         stepper add+reduce) into one canonical shape.
 
         AC#4 ("zero behavior change") is interpreted as **dict-content
-        equal** — recursive value-equality, ignoring JSON key order.
+        equal** â€” recursive value-equality, ignoring JSON key order.
         Confirmed with the user before implementation: the iAqualink
         cloud is AWS IoT-shaped and parses JSON into dicts, so transmit
         key order is unobservable. Every field present in the pre-R23
         envelopes is still present with the same value; nothing was
         dropped. Per-device-type drift is preserved by the caller passing
-        the appropriate ``desired`` / ``namespace`` / ``robot_key`` —
+        the appropriate ``desired`` / ``namespace`` / ``robot_key`` â€”
         cyclonext uses ``robot.1`` instead of ``robot`` and cyclobat
         nests under ``main.ctrl`` / ``main.mode``.
 
         Args:
-            action: Cloud action verb — ``"setCleanerState"``,
+            action: Cloud action verb â€” ``"setCleanerState"``,
                 ``"setCleaningMode"``, or ``"setRemoteSteeringControl"``.
             desired: The dict to nest under
                 ``payload.state.desired.equipment.<robot_key>``. Embedded
-                verbatim — the helper does not transform it.
+                verbatim â€” the helper does not transform it.
             namespace: Override the top-level ``namespace`` field.
                 Defaults to ``self._device_type``.
             robot_key: Equipment dict key. ``"robot"`` (default) for
@@ -2155,7 +2142,7 @@ class AqualinkClient:
                     except Exception:
                         pass
 
-                # C4-cmd: one awaited refresh per command — replaces the
+                # C4-cmd: one awaited refresh per command â€” replaces the
                 # historical 3-task burst (immediate + 0.5s + 1.0s delayed).
                 # The coordinator's debounced `async_request_refresh` (called
                 # inside `_handle_realtime_update`) collapses near-duplicate
@@ -2347,7 +2334,7 @@ class AqualinkClient:
             return await self._set_other_fan_speed(fan_speed)
 
     async def _set_i2d_fan_speed(self, fan_speed: str) -> dict[str, Any] | None:
-        """Set fan speed for i2d robot — delegates to I2DProtocol (R25-i2d)."""
+        """Set fan speed for i2d robot â€” delegates to I2DProtocol (R25-i2d)."""
         i2d = _i2d_protocol()
         request = i2d.set_fan_speed_payload(self, fan_speed)
         if request is None:
@@ -2434,7 +2421,7 @@ class AqualinkClient:
     ) -> None:
         """Send a remote control command with optimized timeout."""
         # R23: envelope literal collapsed. Note the action is
-        # `setRemoteSteeringControl` (not `setCleanerState`) — the cloud
+        # `setRemoteSteeringControl` (not `setCleanerState`) â€” the cloud
         # routes steering commands through a different state-controller verb.
         request = self._build_state_request(
             "setRemoteSteeringControl",
@@ -2515,7 +2502,7 @@ class AqualinkClient:
         Shared body for :meth:`add_fifteen_minutes` (+15) and
         :meth:`reduce_fifteen_minutes` (-15). Replaces two near-identical
         ~95-line methods that pre-R24 differed only in the sign of the
-        delta and the per-direction strings — bug fixes had to be applied
+        delta and the per-direction strings â€” bug fixes had to be applied
         twice and any drift between them was a silent hazard.
 
         Applies ``max(0, current + delta_minutes)`` to clamp the new
@@ -2575,7 +2562,7 @@ class AqualinkClient:
             current_status = await self.fetch_status()
             current_stepper = current_status.get("stepper", 0)
 
-            # R24: clamp non-negative — see docstring.
+            # R24: clamp non-negative â€” see docstring.
             new_stepper = max(0, current_stepper + delta_minutes)
 
             abs_delta = abs(delta_minutes)
@@ -2583,8 +2570,8 @@ class AqualinkClient:
 
             if self._debug_mode:
                 _LOGGER.debug(
-                    f"🔍 {action_label}: Setting stepper "
-                    f"{current_stepper} → {new_stepper}"
+                    f"ðŸ” {action_label}: Setting stepper "
+                    f"{current_stepper} â†’ {new_stepper}"
                 )
                 _LOGGER.debug(
                     f"{action_label}: current stepper={current_stepper}, "
@@ -2605,7 +2592,7 @@ class AqualinkClient:
             await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=15)
 
             if self._debug_mode:
-                _LOGGER.debug(f"✅ {action_label} command completed successfully")
+                _LOGGER.debug(f"âœ… {action_label} command completed successfully")
 
             # C4-cmd: one awaited refresh; helper re-raises ConfigEntryAuthFailed.
             await self._safe_post_command_refresh()
@@ -2620,7 +2607,7 @@ class AqualinkClient:
                 "new_stepper": new_stepper,
                 "message": (
                     f"{past_verb} {abs_delta} minutes {preposition} cleaning time. "
-                    f"Stepper: {current_stepper} → {new_stepper}"
+                    f"Stepper: {current_stepper} â†’ {new_stepper}"
                 ),
             }
 
@@ -2628,7 +2615,7 @@ class AqualinkClient:
             verb = "add" if delta_minutes > 0 else "reduce"
             abs_delta = abs(delta_minutes)
             _LOGGER.error(
-                f"❌ {verb.capitalize()} {abs_delta} minutes command failed: {e}"
+                f"âŒ {verb.capitalize()} {abs_delta} minutes command failed: {e}"
             )
             return {
                 "success": False,

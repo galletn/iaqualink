@@ -20,6 +20,45 @@ DOMAIN: Final = "iaqualink_robots"
 PLATFORMS: Final = [Platform.VACUUM, Platform.SENSOR, Platform.BUTTON]
 
 # API endpoints - cleaned up duplicates
+# ---------------------------------------------------------------------------
+# Cleaner part number → marketing model name.
+#
+# The cloud reports a part number at
+# ``state.reported.eboxData.completeCleanerPn`` — verified present for every
+# family (vr, vortrax, cyclonext, cyclobat), not just vortrax. That value is
+# what the cloud itself uses to derive the ``model`` field returned by
+# ``/devices/v2/{serial}/features``: across four live captures, ``model`` was
+# present exactly when ``completeCleanerPn`` was non-empty, and absent when it
+# was blank. So this table is a *fallback* for devices whose ``features`` call
+# omits ``model`` while still reporting a part number.
+#
+# Why a static table instead of a lookup:
+#
+# * The old ``_get_vortrax_model_from_web`` scraped
+#   ``zodiac-poolcare.com/search?key=<pn>``. That page no longer renders
+#   results server-side — it returns a ~34 KB Adobe Experience Manager shell
+#   containing zero product names — so all six of its regexes matched nothing
+#   and the function returned "Unknown" for every input. Verified by running
+#   it against the three real part numbers below.
+# * ``pro.fluidra.com/bg_en/catalogsearch/result/?q=<pn>`` DOES resolve
+#   correctly (Fluidra owns Zodiac), but it throttles aggressively: a few
+#   sequential requests get 212–960 byte stubs indistinguishable from "no
+#   results". That makes it unfit for a runtime lookup inside HA, and it would
+#   reintroduce the third-party-session concern documented in story L19.
+# * A table needs no network call, cannot be rate-limited, and cannot break
+#   when a vendor site is redesigned.
+#
+# Entries below are verified against live hardware captures. To add one, run
+# ``tools/capture_payload.py`` — it prints ``completeCleanerPn`` — and pair it
+# with the model shown in the iAquaLink app. Unknown part numbers surface as
+# ``"Unknown (WR0xxxxx)"`` in the Model sensor, which is both more useful to
+# the user than a bare "Unknown" and directly actionable as a table addition.
+MODEL_BY_CLEANER_PN: Final[dict[str, str]] = {
+    "WR000219": "RA 6570 iQ",       # vr        — verified, live capture
+    "WR000323": "RE 4600 iQ",       # cyclonext — verified, live capture
+    "WR000500": "CNX 50 iQ",        # cyclonext — verified, live capture
+}
+
 URL_LOGIN: Final = "https://prod.zodiac-io.com/users/v1/login"
 URL_GET_DEVICES: Final = "https://r-api.iaqualink.net/devices.json"
 URL_GET_DEVICE_FEATURES: Final = "https://prod.zodiac-io.com/devices/v2/"

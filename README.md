@@ -77,6 +77,15 @@ Grouped under **Diagnostic** on the device page:
 > Battery Level exists only on battery-powered (CycloBat) models. A sensor
 > reading `Unknown` on your model is worth reporting.
 
+### Selects
+
+* **Cleaning pattern** per cycle (Floor, Floor & Wall, SMART) — `Standard`
+  or `S-Pattern`, matching the toggle in the iAquaLink app.
+
+> Only created for robots whose firmware advertises pattern support, and only
+> for the cycles that actually have a pattern. If your robot doesn't show
+> these, it doesn't support the feature.
+
 ### Buttons
 
 Remote control and time adjustment are only available on **VR** and

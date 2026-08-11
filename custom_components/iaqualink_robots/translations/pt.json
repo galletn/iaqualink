@@ -188,7 +188,30 @@
         "name": "Reduzir 15 Minutos"
       }
     },
-    "vacuum": {}
+    "vacuum": {},
+    "select": {
+      "pattern_floor": {
+        "name": "Fundo padrão",
+        "state": {
+          "standard": "Padrão",
+          "s_pattern": "Padrão em S"
+        }
+      },
+      "pattern_floor_walls": {
+        "name": "Fundo e parede padrão",
+        "state": {
+          "standard": "Padrão",
+          "s_pattern": "Padrão em S"
+        }
+      },
+      "pattern_smart": {
+        "name": "SMART padrão",
+        "state": {
+          "standard": "Padrão",
+          "s_pattern": "Padrão em S"
+        }
+      }
+    }
   },
   "issues": {
     "legacy_service_behavior_change": {

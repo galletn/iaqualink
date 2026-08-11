@@ -188,7 +188,30 @@
         "name": "15 Minuten Verminderen"
       }
     },
-    "vacuum": {}
+    "vacuum": {},
+    "select": {
+      "pattern_floor": {
+        "name": "Bodem patroon",
+        "state": {
+          "standard": "Standaard",
+          "s_pattern": "S-patroon"
+        }
+      },
+      "pattern_floor_walls": {
+        "name": "Bodem & wand patroon",
+        "state": {
+          "standard": "Standaard",
+          "s_pattern": "S-patroon"
+        }
+      },
+      "pattern_smart": {
+        "name": "SMART patroon",
+        "state": {
+          "standard": "Standaard",
+          "s_pattern": "S-patroon"
+        }
+      }
+    }
   },
   "issues": {
     "legacy_service_behavior_change": {

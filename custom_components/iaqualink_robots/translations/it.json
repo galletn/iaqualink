@@ -188,7 +188,30 @@
         "name": "Riduci 15 Minuti"
       }
     },
-    "vacuum": {}
+    "vacuum": {},
+    "select": {
+      "pattern_floor": {
+        "name": "Fondo schema",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "Schema a S"
+        }
+      },
+      "pattern_floor_walls": {
+        "name": "Fondo e parete schema",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "Schema a S"
+        }
+      },
+      "pattern_smart": {
+        "name": "SMART schema",
+        "state": {
+          "standard": "Standard",
+          "s_pattern": "Schema a S"
+        }
+      }
+    }
   },
   "issues": {
     "legacy_service_behavior_change": {

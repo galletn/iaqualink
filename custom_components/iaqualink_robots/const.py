@@ -17,7 +17,56 @@ from homeassistant.const import Platform
 # unit-level guard so CI fails before hassfest gets a chance to.
 DOMAIN: Final = "iaqualink_robots"
 
-PLATFORMS: Final = [Platform.VACUUM, Platform.SENSOR, Platform.BUTTON]
+PLATFORMS: Final = [
+    Platform.VACUUM,
+    Platform.SENSOR,
+    Platform.BUTTON,
+    Platform.SELECT,
+]
+
+# ---------------------------------------------------------------------------
+# Cleaning pattern ("route") — the navigation path within a cycle.
+#
+# Verified end-to-end against a live cyclobat (RA-family, firmware
+# V22E3.25.3): the cloud carries it per-cycle at
+# ``equipment.robot.cycles.<cycleName>.route``, and a write of
+# ``setCleaningMode`` with that nesting changes it (confirmed by flipping the
+# value and observing the cloud echo the change back over StateStreamer,
+# then restoring the original).
+#
+# It is NOT a global setting: each cycle keeps its own pattern, and only
+# cycles that carry a ``route`` key support one. On the captured device
+# ``floorTim`` / ``floorWallsTim`` / ``smartTim`` had one and
+# ``waterlineTim`` / ``wallsTim`` did not — matching the iAquaLink app, which
+# shows the Standard/S-Pattern toggle under Floor only.
+#
+# Gated on the ``quick_snake_pattern`` capability rather than on device type:
+# no vr or cyclonext payload captured so far contains a ``route`` key at all,
+# so this appears cyclobat-only today, but the feature flag is the cloud's own
+# statement of support and is the safer thing to trust.
+PATTERN_FEATURE: Final = "quick_snake_pattern"
+
+#: ``route`` value → HA select option (also the translation key).
+PATTERN_BY_ROUTE: Final[dict[int, str]] = {
+    0: "standard",
+    1: "s_pattern",
+}
+
+#: Inverse, for writes.
+ROUTE_BY_PATTERN: Final[dict[str, int]] = {
+    v: k for k, v in PATTERN_BY_ROUTE.items()
+}
+
+#: Cloud cycle key → the sub-name used in the entity's translation key and
+#: unique_id. Only cycles observed to carry ``route``; a device exposing
+#: ``route`` on some other cycle is handled by falling back to the raw cloud
+#: key, so a new cycle type degrades to a working-but-untranslated entity
+#: rather than vanishing.
+PATTERN_CYCLE_NAMES: Final[dict[str, str]] = {
+    "floorTim": "floor",
+    "floorWallsTim": "floor_walls",
+    "smartTim": "smart",
+}
 
 # API endpoints - cleaned up duplicates
 # ---------------------------------------------------------------------------

@@ -103,6 +103,25 @@ class CycloBatProtocol(RobotProtocol):
 
     # -- Cloud-encoding helpers --------------------------------------------
 
+    def set_pattern_payload(
+        self, client: AqualinkClient, cycle_key: str, route: int
+    ) -> dict[str, Any]:
+        """Envelope that sets the cleaning pattern for one cycle.
+
+        Verified against live hardware: flipping ``floorTim.route`` 1 → 0 with
+        this shape changed it, the cloud echoed the new value back over
+        ``StateStreamer``, and writing the original value restored it.
+
+        Note the nesting is under ``cycles.<cycleKey>``, not ``main`` — unlike
+        every other cyclobat command. ``route`` is per-cycle, so writing one
+        cycle's pattern leaves the others alone.
+        """
+        return client._build_state_request(
+            "setCleaningMode",
+            {"cycles": {cycle_key: {"route": route}}},
+            namespace="cyclobat",
+        )
+
     def fan_speed_codes(self) -> dict[str, str]:
         return dict(_CYCLOBAT_FAN_SPEED_TO_MODE)
 
@@ -247,6 +266,25 @@ class CycloBatProtocol(RobotProtocol):
         result["waterline_duration"] = str(cycles_data.get('waterlineTim', {}).get('duration', '0'))
         result["first_smart_done"] = str(cycles_data.get('firstSmartDone', 'false'))
         result["lift_pattern_time"] = str(cycles_data.get('liftPatternTim', '0'))
+        # ``wallsTim`` was observed on firmware V22E3.25.3 (90 min) and has no
+        # counterpart in the iAquaLink app's mode list, so it looks like
+        # firmware running ahead of the UI. Surfaced for completeness.
+        result["walls_duration"] = str(cycles_data.get('wallsTim', {}).get('duration', '0'))
+
+        # Cleaning pattern ("route") per cycle. Only cycles that carry a
+        # ``route`` key support one — on the captured device that was
+        # floorTim / floorWallsTim / smartTim but not waterlineTim / wallsTim.
+        # Cycles without one are omitted, so no select entity is created for
+        # them. ``bool`` is excluded because it subclasses ``int``.
+        patterns: dict[str, int] = {}
+        for cycle_key, cycle_block in cycles_data.items():
+            if not isinstance(cycle_block, dict):
+                continue
+            route = cycle_block.get('route')
+            if isinstance(route, int) and not isinstance(route, bool):
+                patterns[cycle_key] = route
+        if patterns:
+            result["cleaning_patterns"] = patterns
 
         # H8: aware-UTC datetime objects emitted directly. H8 review
         # follow-up: emit None on never-cleaned + parse failure.

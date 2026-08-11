@@ -88,6 +88,46 @@ def resolve_smart_duration_key_map(
     return redirected
 
 
+def apply_shared_diagnostic_fields(
+    robot_data: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    """Apply firmware version, error code and diagnostic code.
+
+    All three appear under the same key names on every WebSocket family and
+    were previously read by none of the parsers except cyclobat — which does
+    populate ``version`` and ``diagnostic_code``, but had no sensor exposing
+    them, so the values were computed and discarded.
+
+    Verified across four live captures (2x vr, 2x cyclonext):
+
+    * ``vr``          — firmware string, e.g. ``"V32E56"`` / ``"V21E27"``.
+                        Note the unfortunate collision: the *field* is named
+                        ``vr`` on every family, including the family also
+                        called ``vr``. It is a firmware revision, not a
+                        device type.
+    * ``errorCode``   — numeric, distinct from ``errorState``. Present on vr;
+                        cyclonext nests its equivalent under ``errors.code``,
+                        which its own parser already reads into
+                        ``error_state``, so this is a no-op there.
+    * ``diagnostic``  — numeric diagnostic/service code.
+
+    Absent fields are left out of ``result`` entirely rather than defaulted,
+    so the corresponding sensor reads Unknown instead of a misleading 0 —
+    a real distinction on the CNX 50 iQ, which omits several fields the
+    RE 4600 iQ reports.
+    """
+    firmware = robot_data.get('vr')
+    if isinstance(firmware, str) and firmware:
+        result["version"] = firmware
+
+    for src, dest in (("errorCode", "error_code"),
+                      ("diagnostic", "diagnostic_code")):
+        value = robot_data.get(src)
+        if value is not None and not isinstance(value, (dict, list)):
+            result[dest] = value
+
+
 def apply_common_robot_fields(
     client: AqualinkClient,
     robot_data: dict[str, Any],
@@ -142,6 +182,8 @@ def apply_common_robot_fields(
         result["error_state"] = robot_data['errorState']
     except (KeyError, TypeError):
         result["error_state"] = "unknown"
+
+    apply_shared_diagnostic_fields(robot_data, result)
 
     try:
         result["total_hours"] = robot_data['totalHours']

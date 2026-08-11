@@ -198,6 +198,9 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
         self._fan_speed: str | None = self._fan_speed_list[0]
         self._status: Optional[str] = None
         self._restored_collision_logged: bool = False
+        # Rate-limit state for the fan-speed mismatch warning, which sits in
+        # the per-update path. Keyed by (current_display, available_speeds).
+        self._warned_fan_speed_mismatches: set[tuple[str | None, tuple[str, ...]]] = set()
 
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
@@ -332,8 +335,27 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
             _LOGGER.debug(
                 f"After coordinator update - Display fan speed: '{current_display}', Available: {available_speeds}")
             if current_display not in available_speeds:
-                _LOGGER.warning(
-                    f"Fan speed mismatch! Current '{current_display}' not in available speeds {available_speeds}")
+                # Rate-limited: this runs on EVERY coordinator update (~10s),
+                # so an unconditional warning produced ~8,600 log lines a day
+                # for any device stuck in a mismatched state. Warn once per
+                # distinct (current, available) pair instead — the operator
+                # still sees it, exactly once per genuine drift.
+                #
+                # Feature-narrowing (see _narrow_fan_speeds_to_features) makes
+                # a mismatch *more* reachable: a device can report a cloud
+                # fan speed we deliberately removed from its list because it
+                # doesn't advertise the capability. That is a legitimate state,
+                # not a bug, and must not spam.
+                signature = (current_display, tuple(available_speeds))
+                if signature not in self._warned_fan_speed_mismatches:
+                    self._warned_fan_speed_mismatches.add(signature)
+                    _LOGGER.warning(
+                        "Fan speed mismatch: current '%s' is not in the "
+                        "available speeds %s. The device may be reporting a "
+                        "cycle it does not advertise support for; this is "
+                        "logged once per distinct mismatch.",
+                        current_display, available_speeds,
+                    )
             else:
                 _LOGGER.debug(f"Fan speed consistency OK: '{current_display}' is in available speeds")
 

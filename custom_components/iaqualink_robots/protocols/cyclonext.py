@@ -29,6 +29,7 @@ from homeassistant.util import dt as dt_util
 
 from ..parsing import calculate_times, format_time_human, resolve_cycle_duration
 from .base import RobotProtocol
+from .common import apply_shared_diagnostic_fields
 
 if TYPE_CHECKING:
     from ..client import AqualinkClient
@@ -273,6 +274,9 @@ class CycloNextProtocol(RobotProtocol):
             else:
                 client._activity = VacuumActivity.IDLE
                 result["activity"] = "idle"
+
+        # Firmware version + diagnostic code (shared across families).
+        apply_shared_diagnostic_fields(robot_data, result)
 
         # Current cycle → fan-speed key. Pre-fix cyclonext's parser never set
         # `fan_speed`, so the Fan Speed sensor read Unknown forever and the

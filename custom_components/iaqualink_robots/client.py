@@ -226,6 +226,11 @@ class AqualinkClient:
         # features call succeeds; consumers must treat empty as "unknown, use
         # the per-family default" rather than "device supports nothing".
         self._features: list[str] = []
+        # Equipment identity from ``state.reported.eboxData`` — component part
+        # numbers and serials. Cached on each shadow read so ``diagnostics.py``
+        # can include it without issuing its own request. Part numbers identify
+        # a model (not an account) and feed ``MODEL_BY_CLEANER_PN``.
+        self._ebox_data: dict[str, Any] = {}
         self._token_expires_at: datetime.datetime | None = None
         self._model_fetch_attempts: int = 0
         self._model_last_attempt: datetime.datetime | None = None
@@ -1434,6 +1439,48 @@ class AqualinkClient:
             _LOGGER.debug(f"Error getting device model: {e}")
             return self._handle_model_fetch_failure()
 
+    def _apply_last_cloud_contact(
+        self, data: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        """Set ``last_cloud_contact`` from ``aws.timestamp``; cache eboxData.
+
+        The cloud stamps every shadow with the moment the *robot* last talked
+        to it, alongside the ``aws.status`` string this integration already
+        surfaces. Status alone can't distinguish "connected and reporting" from
+        "connected but silent for two hours", which is the ambiguity behind
+        every "is my robot actually updating?" report — the reporter on issue
+        #100 had a Connected status and stale state simultaneously.
+
+        The value is epoch **milliseconds** (verified: 1786201126595 — 13
+        digits), unlike ``cycleStartTime`` which is seconds. Emitted as an
+        aware-UTC datetime so HA renders it as a relative timestamp, matching
+        the H8 convention used for the other datetime fields.
+        """
+        try:
+            reported = data['payload']['robot']['state']['reported']
+        except (KeyError, TypeError):
+            return
+
+        # Cache equipment identity for diagnostics (see ``_ebox_data``).
+        ebox = reported.get('eboxData')
+        if isinstance(ebox, dict) and ebox:
+            self._ebox_data = dict(ebox)
+
+        try:
+            stamp = reported['aws']['timestamp']
+        except (KeyError, TypeError):
+            return
+        if not isinstance(stamp, (int, float)) or isinstance(stamp, bool):
+            return
+        if stamp <= 0:
+            return
+        try:
+            result["last_cloud_contact"] = dt_util.utc_from_timestamp(
+                stamp / 1000
+            )
+        except (OverflowError, OSError, ValueError) as err:
+            _LOGGER.debug("Unusable aws.timestamp %r: %s", stamp, err)
+
     async def _model_from_cleaner_pn(self) -> str | None:
         """Resolve the model from ``eboxData.completeCleanerPn``.
 
@@ -1622,6 +1669,7 @@ class AqualinkClient:
                 result["status"] = self._stabilize_status(raw_status)
                 # Store the last known good status
                 self._last_known_status = raw_status
+                self._apply_last_cloud_contact(data, result)
             else:
                 raw_status = self._get_resilient_status("no_data")
                 result["status"] = self._stabilize_status(raw_status)
@@ -1637,6 +1685,7 @@ class AqualinkClient:
                     result["status"] = self._stabilize_status(raw_status)
                     # Store the last known good status
                     self._last_known_status = raw_status
+                    self._apply_last_cloud_contact(data, result)
                 else:
                     raw_status = self._get_resilient_status("no_data_retry")
                     result["status"] = self._stabilize_status(raw_status)

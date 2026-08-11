@@ -71,55 +71,6 @@
   },
   "entity": {
     "sensor": {
-      "serial_number": {
-        "name": "Serienummer"
-      },
-      "device_type": {
-        "name": "Apparaattype"
-      },
-      "cycle_start_time": {
-        "name": "Cyclus Starttijd"
-      },
-      "cycle_duration": {
-        "name": "Cyclusduur"
-      },
-      "cycle": {
-        "name": "Cyclus"
-      },
-      "battery_level": {
-        "name": "Batterijniveau"
-      },
-      "total_hours": {
-        "name": "Totale Uren"
-      },
-      "canister": {
-        "name": "Filterhouder Niveau"
-      },
-      "error_state": {
-        "name": "Foutstatus"
-      },
-      "temperature": {
-        "name": "Temperatuur"
-      },
-      "time_remaining_human": {
-        "name": "Resterende Tijd"
-      },
-      "estimated_end_time": {
-        "name": "Geschatte Eindtijd"
-      },
-      "model": {
-        "name": "Model"
-      },
-      "fan_speed": {
-        "name": "Ventilatorsnelheid",
-        "state": {
-          "floor_only": "Alleen bodem",
-          "wall_only": "Alleen wand",
-          "walls_only": "Alleen wanden",
-          "floor_and_walls": "Bodem en wanden",
-          "smart_floor_and_walls": "SMART Bodem en wanden"
-        }
-      },
       "activity": {
         "name": "Activiteit",
         "state": {
@@ -131,6 +82,55 @@
           "paused": "Gepauzeerd"
         }
       },
+      "battery_level": {
+        "name": "Batterijniveau"
+      },
+      "canister": {
+        "name": "Filterhouder Niveau"
+      },
+      "cycle": {
+        "name": "Cyclus"
+      },
+      "cycle_duration": {
+        "name": "Cyclusduur"
+      },
+      "cycle_start_time": {
+        "name": "Cyclus Starttijd"
+      },
+      "device_type": {
+        "name": "Apparaattype"
+      },
+      "diagnostic_code": {
+        "name": "Diagnosecode"
+      },
+      "error_code": {
+        "name": "Foutcode"
+      },
+      "error_state": {
+        "name": "Foutstatus"
+      },
+      "estimated_end_time": {
+        "name": "Geschatte Eindtijd"
+      },
+      "fan_speed": {
+        "name": "Ventilatorsnelheid",
+        "state": {
+          "floor_only": "Alleen bodem",
+          "wall_only": "Alleen wand",
+          "walls_only": "Alleen wanden",
+          "floor_and_walls": "Bodem en wanden",
+          "smart_floor_and_walls": "SMART Bodem en wanden"
+        }
+      },
+      "last_cloud_contact": {
+        "name": "Laatste cloudcontact"
+      },
+      "model": {
+        "name": "Model"
+      },
+      "serial_number": {
+        "name": "Serienummer"
+      },
       "status": {
         "name": "Status",
         "state": {
@@ -140,9 +140,6 @@
           "online": "Online"
         }
       },
-      "time_remaining": {
-        "name": "Resterende Tijd (Minuten)"
-      },
       "stepper": {
         "name": "Tijdaanpassingen"
       },
@@ -151,6 +148,21 @@
       },
       "stepper_adjustment_minutes": {
         "name": "Tijd toegevoegd/verminderd"
+      },
+      "temperature": {
+        "name": "Temperatuur"
+      },
+      "time_remaining": {
+        "name": "Resterende Tijd (Minuten)"
+      },
+      "time_remaining_human": {
+        "name": "Resterende Tijd"
+      },
+      "total_hours": {
+        "name": "Totale Uren"
+      },
+      "version": {
+        "name": "Firmwareversie"
       }
     },
     "button": {

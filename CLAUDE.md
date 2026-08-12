@@ -24,6 +24,51 @@ The integration handles **5 distinct device families** with **different cloud en
 
 The `vacuum.py` per-type branching and the `_set_other_fan_speed` per-type `cycle_speed_map`s **must stay in sync**. Both must use snake_case keys (the translation key, not the display name). Issue #76 was both halves of this contract drifting.
 
+## Conventions locked in by CI (3.0.0-rc.4 quality pass)
+
+Four rules that CI now enforces — breaking any of them fails the build:
+
+1. **Lazy logging only.** `_LOGGER.debug("x=%s", x)`, never `f"..."`. At
+   `SCAN_INTERVAL = 3s` an eagerly formatted string costs CPU even with debug
+   logging off. Enforced by ruff `G004` (config in `pyproject.toml`).
+2. **INFO is for once-per-install events only.** Per-poll and per-command
+   logging is DEBUG. A default install should log nothing from this
+   integration unless something is wrong.
+3. **Commands raise, never swallow.** Entity actions raise
+   `HomeAssistantError` (failure) or `ServiceValidationError` (user error,
+   e.g. the stepper debounce), both with a `translation_key` from the
+   `exceptions:` block in `strings.json`. Do not log-and-return: the UI then
+   reports success for a command that never reached the robot.
+4. **Icons live in `icons.json`**, keyed by `translation_key`. No
+   `_attr_icon` in entity modules — `tests/test_translations.py` fails on it,
+   and a hardcoded icon overrides the user's own customisation on restart.
+
+Also: **hassfest is now a blocking CI job** (was informational), and the
+integration must not call another integration's services — the `browser_mod`
+notification path was removed for exactly this reason.
+
+`custom_components/iaqualink_robots/quality_scale.yaml` holds a rule-by-rule
+self-assessment. The manifest deliberately declares no `quality_scale` tier:
+every Bronze rule is met except `brands` (the domain has no entry in the
+`home-assistant/brands` repo), and claiming a tier with an open rule in it
+would be false.
+
+## Account and credential flows
+
+Three distinct paths, easy to confuse:
+
+| Flow | Entry point | Changes | Guard |
+|---|---|---|---|
+| **user** | Add Integration | creates a new entry | dedupes by serial against entries on the same account |
+| **reauth** | fired by `ConfigEntryAuthFailed` | password only | rejects credentials whose account doesn't list this robot (`wrong_account`) |
+| **reconfigure** | ⋮ → Reconfigure | username **and** password | same ownership check, plus `_abort_if_unique_id_mismatch` |
+
+`async_setup_entry` maps startup failures the same way the coordinator maps
+poll failures: `AuthFailedError → ConfigEntryAuthFailed` (triggers reauth),
+anything else → `ConfigEntryNotReady` (retries). Returning `False` from
+setup is a *permanent* failure and is almost never what you want for a cloud
+integration.
+
 ## Tests — Windows constraint
 
 `pytest` **cannot run on Windows** in this repo. Home Assistant's test runner imports `fcntl`, which is Unix-only. The CI GitHub Actions runner (`ubuntu-latest`) is the verifier.
@@ -80,9 +125,13 @@ Push directly to `main` — this project does not gate routine work behind PRs, 
 
 Story **P7** (translations completeness) is the dedicated place to roll up native translations; until it lands, English-fallback is the convention.
 
-## Current state (as of `f9ae8b4`, 2026-05-22)
+## Current state (3.0.0-rc.4 in progress, 2026-08-12)
 
-**46 of 47 stories done.** The full Epic 1-10 sweep has landed: CI + test scaffolding (P1, P2), config-flow hardening (C2/C7 + M12/M17/M18/M19 + H9a/H9b/P4 + C6), service-layer repair (C1a/C1b/P8), refresh-storm reduction + lifecycle (C4-cmd/C4-ws/H6/H7/H10/P10), micro-cleanups (C3/L18/L19/L22/M14/M15/M16), datetime hygiene + display strings (H8/M11/C5), Platinum HA patterns (P3/P5/P6/P7/P9/P11), helper extractions (R23/R24), per-device strategy refactor (R25 × 5 families), module split + typed WS payloads (R26/P12). The `coordinator.py` god-file went from 3566 lines → 704 + `client.py` (2306) + `parsing.py` (152) + `protocols/{base,common,vr,vortrax,cyclobat,cyclonext,i2d}.py`.
+**46 of 47 stories done**, plus an un-storied quality pass ahead of the 3.0.0 release (see the `Unreleased` CHANGELOG section). The full Epic 1-10 sweep has landed: CI + test scaffolding (P1, P2), config-flow hardening (C2/C7 + M12/M17/M18/M19 + H9a/H9b/P4 + C6), service-layer repair (C1a/C1b/P8), refresh-storm reduction + lifecycle (C4-cmd/C4-ws/H6/H7/H10/P10), micro-cleanups (C3/L18/L19/L22/M14/M15/M16), datetime hygiene + display strings (H8/M11/C5), Platinum HA patterns (P3/P5/P6/P7/P9/P11), helper extractions (R23/R24), per-device strategy refactor (R25 × 5 families), module split + typed WS payloads (R26/P12).
+
+Module sizes (ceilings enforced by `tests/test_static.py`): `client.py` ~2810 (ceiling 2900), `coordinator.py` ~795 (900), `parsing.py` ~248 (250 — tight), `vacuum.py` ~663, plus `protocols/{base,common,vr,vortrax,cyclobat,cyclonext,i2d}.py`.
+
+The rc.4 pass fixed four user-visible bugs (no reauth prompt after a password change, permanent-fail on a startup outage, reauth accepting a wrong account, button failures reported as success), added a reconfigure flow, removed the `browser_mod` dependency and the dead `debug_mode` knob, converted ~80 log calls to lazy formatting, and split the worst god functions.
 
 **R30** (drop `_status_history` stabilizer) is the only `backlog` story and is **gated on 4 weeks of Epic-4 production soak with zero flapping bug reports** — soak window begins when Epic 4 hits a released version.
 
@@ -97,9 +146,11 @@ Story **P7** (translations completeness) is the dedicated place to roll up nativ
 
 **Obvious next work** (no story file exists yet for any of these — `bmad-create-story` first):
 
-- **R26-followup** — compact `coordinator.py` toward ≤ 500 lines and `client.py` toward ≤ 800 (currently 704 / 2306) by collapsing per-device-type dispatch ifs and factoring command-method boilerplate. Named in CHANGELOG + deferred-work but never written up.
+- **R26-followup (partially done)** — the 3.0.0-rc.4 quality pass collapsed the *parse-path* per-device-type dispatch into `client.apply_robot_data` (registry-driven) and split the two worst methods. What remains: the five **command-path** `if device_type == ...: _require_protocol("x").<verb>_payload(self)` chains in `client.py` (`start_cleaning`, `stop_cleaning`, `pause_cleaning`, `return_to_base`, `_set_other_fan_speed`). Note these are pinned by ~20 AST tests in `tests/protocols/test_*.py` that assert the literal source shape — collapsing them means rewriting those tests too, which is why it was left alone.
 - **Bug-fix triage of `#76` / `#88` / `#97`** — pick one of the live user-reported issues and turn it into a story.
-- **5 deferred items from R26 review** (in `deferred-work.md`): H8 broad-except in `parsing.calculate_times`, cyclonext strict-int `mode == 1` (cyclobat sibling coerces), `_state_signature` hardcoded to `equipment.robot` (cyclonext's `robot.1` shadow missing), 5 coordinator → `client._foo` private reach-throughs, one-sided size-ceiling guard.
+- **Deferred items from R26 review** (in `deferred-work.md`): H8 broad-except in `parsing.calculate_times`, cyclonext strict-int `mode == 1` (cyclobat sibling coerces), `_state_signature` hardcoded to `equipment.robot` (cyclonext's `robot.1` shadow missing), one-sided size-ceiling guard. *The "5 coordinator → `client._foo` private reach-throughs" item is closed* — all six now go through a public client API, guarded by `tests/test_static.py::test_no_reach_through_to_client_private_methods`.
+- **`brands` submission** — the last open Bronze quality-scale rule. `iaqualink_robots` has no entry in `home-assistant/brands`, so HA renders a generic icon. Images are already in `custom_components/iaqualink_robots/brand/`.
+- **`inject-websession`** — REST already uses HA's shared session; the websocket path still builds its own `ClientSession`. Last open Platinum rule.
 
 See `deferred-work.md` for the full triage table mapping review findings to owning stories.
 

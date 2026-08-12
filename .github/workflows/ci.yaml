@@ -15,8 +15,8 @@ jobs:
   # ---------------------------------------------------------------------------
   # hassfest — HA's official manifest/strings validator.
   #
-  # Currently INFORMATIONAL (continue-on-error). It was set that way for two
-  # known errors, and BOTH now appear resolved:
+  # This is now a REAL GATE. It was informational (continue-on-error) for two
+  # known errors, and BOTH are resolved:
   #
   #   1. "Domain does not match dir name" — was `iaqualinkRobots` (camelCase)
   #      vs. directory `iaqualink_robots`. The domain is now `iaqualink_robots`
@@ -27,16 +27,14 @@ jobs:
   #      under `entity.sensor.fan_speed.state`, which IS schema-valid, and
   #      `entity.vacuum` is an empty object. So this cannot fire either.
   #
-  # `continue-on-error` is deliberately still here: neither claim has been
-  # confirmed against a real hassfest run, and hassfest can only run in CI
-  # (it's a container action). Check the hassfest output on the next run —
-  # if it passes, drop `continue-on-error` and make this a real gate. That
-  # is also a prerequisite for any HA-core submission (issue #99).
+  # A passing hassfest is a prerequisite for any HA-core submission (issue
+  # #99), and letting it fail silently is how manifest/strings drift goes
+  # unnoticed until a user reports it. If it fails, fix the integration —
+  # do not restore continue-on-error.
   # ---------------------------------------------------------------------------
   hassfest:
-    name: hassfest (informational)
+    name: hassfest
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: home-assistant/actions/hassfest@master
@@ -55,6 +53,24 @@ jobs:
           cache: pip
       - run: pip install flake8
       - run: flake8 custom_components/iaqualink_robots
+
+  # ---------------------------------------------------------------------------
+  # ruff — config in pyproject.toml. Runs alongside flake8 for the logging
+  # rules flake8 cannot express without a plugin, chiefly G004 (no f-strings
+  # in logging calls): at SCAN_INTERVAL=3s an eagerly formatted debug string
+  # is permanent wasted CPU even with debug logging switched off.
+  # ---------------------------------------------------------------------------
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install ruff
+      - run: ruff check custom_components/iaqualink_robots tests
 
   # ---------------------------------------------------------------------------
   # mypy — bootstrap config flipped every module to `ignore_errors = False`

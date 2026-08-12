@@ -41,12 +41,56 @@ A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners
 
 > **If not found in search:** Add custom repository `galletn/iaqualink` as type **Integration**.
 
+### Manual installation
+
+1. Copy `custom_components/iaqualink_robots/` into your Home Assistant
+   `config/custom_components/` directory.
+2. Restart Home Assistant.
+
 ## ⚙️ Setup
 
 1. **Settings** → **Devices & Services** → **Add Integration**
 2. Search for **"iAqualink Robots"**
 3. Enter your iAqualink credentials
 4. Select your robot from the detected devices
+
+Adding a **second robot on the same account** is the same flow — sign in
+again and pick the other robot; robots you already added are filtered out of
+the list.
+
+### Options
+
+Reachable via *Settings → Devices & Services → iAqualink Robots → Configure*.
+
+* **Include seconds in time-remaining display** — when on, the
+  `Time Remaining` sensor updates every poll (a few seconds) and shows
+  seconds. Turn it off to update only when the minute changes, which
+  substantially reduces activity-log entries during a long cleaning cycle
+  without slowing down the remote-control buttons. Changing it reloads the
+  integration.
+
+### Changing your iAqualink password
+
+If you change the password on your iAqualink account, Home Assistant will
+show a **Reconfigure / repair** prompt for the integration. Enter the new
+password and it resumes — entity IDs, history and automations are all kept.
+The prompt also appears automatically if Home Assistant was restarted while
+the old password was still stored.
+
+### Moving the robot to a different iAqualink account
+
+Reachable via *Settings → Devices & Services → iAqualink Robots → ⋮ →
+Reconfigure*. Enter the new account's username and password. The robot must still be
+listed on that account — if it isn't, the integration says so and leaves the
+entry untouched rather than accepting credentials that could never work.
+Because the entry keeps its serial number, nothing else changes: same
+entities, same history, same automations.
+
+### Removing the integration
+
+Use *Settings → Devices & Services → iAqualink Robots → ⋮ → Delete*. This
+removes the config entry and all of its entities. Nothing is left behind on
+the robot or in your iAqualink account.
 
 ## 📱 Entities
 
@@ -145,15 +189,40 @@ families, so these buttons are not created for them.
 
 ## 🔧 Troubleshooting
 
-* **Robot shows unavailable** → Check connection in iAqualink mobile app
+* **Robot shows unavailable** → first check the robot is reachable in the
+  iAqualink mobile app. The integration keeps entities available through
+  short cloud outages (serving the last known values, with a `restored`
+  attribute set to `true`) and only marks them unavailable once an outage
+  passes 30 minutes.
+* **Home Assistant asks you to re-enter your password** → your iAqualink
+  credentials were rejected by the cloud. See
+  [Changing your iAqualink password](#changing-your-iaqualink-password).
+* **"This robot is not listed on that iAquaLink account"** → you signed in
+  with a different account than the one the robot is registered to. Nothing
+  was changed; retry with the correct account.
+* **A button press shows an error** → since 3.0.0-rc.4, a command that fails
+  to reach the robot surfaces as an error in the UI instead of silently doing
+  nothing. The message includes the underlying cause.
 
-Enable debug logging by adding to `configuration.yaml`:
+### Reporting a problem
+
+Attach a **diagnostics download**: *Settings → Devices & Services →
+iAqualink Robots → ⋮ → Download diagnostics*. It contains the raw cloud
+values the integration is working from, with credentials, tokens and personal
+details redacted, and usually removes the need for any follow-up questions.
+
+### Debug logging
+
+Add to `configuration.yaml` and restart:
 
 ```yaml
 logger:
   logs:
     custom_components.iaqualink_robots: debug
 ```
+
+Routine operation logs nothing above `debug`; anything at `warning` or
+`error` in your log is worth reporting.
 
 ## 🤝 Contributing
 

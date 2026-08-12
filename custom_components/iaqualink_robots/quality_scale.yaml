@@ -1,0 +1,201 @@
+# Home Assistant integration quality scale — self-assessment.
+#
+# Honest state as of 3.0.0-rc.4. `status: done` means the rule is actually
+# satisfied in this repo today, `exempt` means the rule does not apply (with
+# the reason), and `todo` means it is a known gap.
+#
+# The manifest deliberately does NOT declare `quality_scale` yet: every other
+# Bronze rule is satisfied, but `brands` is not — the domain
+# `iaqualink_robots` has no entry in the home-assistant/brands repository
+# (checked: only the unrelated core `iaqualink` domain is there). Declaring a
+# tier while a rule in it is open would be a false claim. Submitting the
+# brand images under `custom_integrations/iaqualink_robots` in that repo is
+# the single remaining step to Bronze; add `"quality_scale": "bronze"` to
+# manifest.json once that PR is merged.
+#
+# Rule reference: https://developers.home-assistant.io/docs/core/integration-quality-scale/
+
+rules:
+  # -------------------------------------------------------------------------
+  # Bronze
+  # -------------------------------------------------------------------------
+  action-setup:
+    status: exempt
+    comment: >-
+      The seven remote-control actions are entity services registered through
+      `platform.async_register_entity_service` in the vacuum platform setup.
+      The rule targets integration-level service actions registered in
+      `async_setup`; there are none.
+  appropriate-polling:
+    status: done
+    comment: >-
+      SCAN_INTERVAL is 3s, deliberately fast: the vacuum entity must reflect
+      remote-control button presses within a couple of seconds. The coordinator
+      additionally adapts the interval by activity, and a websocket listener
+      carries real-time updates so the poll is a backstop rather than the
+      primary transport.
+  brands:
+    status: todo
+    comment: >-
+      Logos exist under `brand/` in this repo but have not been submitted to
+      the home-assistant/brands repository, which is where HA and HACS read
+      them from.
+  common-modules:
+    status: done
+    comment: Coordinator in coordinator.py, cloud client in client.py, per-family parsing in protocols/.
+  config-flow:
+    status: done
+  config-flow-test-coverage:
+    status: done
+    comment: tests/test_config_flow.py covers user, select_device, reauth, reconfigure and every error branch.
+  dependency-transparency:
+    status: exempt
+    comment: No external requirements; the cloud client is part of this integration.
+  docs-actions:
+    status: done
+    comment: services.yaml plus per-action names/descriptions in strings.json; README documents them.
+  docs-high-level-description:
+    status: done
+  docs-installation-instructions:
+    status: done
+    comment: README covers HACS and manual installation.
+  docs-removal-instructions:
+    status: done
+  entity-event-setup:
+    status: done
+    comment: All entities subscribe via CoordinatorEntity; the P8 started-listener is registered with entry.async_on_unload.
+  entity-unique-id:
+    status: done
+    comment: Every entity derives its unique_id from the robot serial.
+  has-entity-name:
+    status: done
+  runtime-data:
+    status: done
+    comment: Per-entry state lives on entry.runtime_data (typed IaqualinkData).
+  test-before-configure:
+    status: done
+    comment: The config flow runs device discovery before creating an entry.
+  test-before-setup:
+    status: done
+    comment: >-
+      async_setup_entry maps auth failures to ConfigEntryAuthFailed and
+      everything else to ConfigEntryNotReady.
+  unique-config-entry:
+    status: done
+    comment: unique_id is the robot serial; duplicates abort as already_configured.
+
+  # -------------------------------------------------------------------------
+  # Silver
+  # -------------------------------------------------------------------------
+  action-exceptions:
+    status: done
+    comment: >-
+      Button presses and the +/-15-minute stepper raise translated
+      HomeAssistantError / ServiceValidationError instead of logging and
+      returning.
+  config-entry-unloading:
+    status: done
+  docs-configuration-parameters:
+    status: done
+    comment: README documents the options flow (include_seconds_remaining).
+  docs-installation-parameters:
+    status: done
+  entity-unavailable:
+    status: done
+    comment: >-
+      Entities stay available through short cloud blips and flip to
+      unavailable once the outage exceeds LONG_OUTAGE_THRESHOLD_SECONDS.
+  integration-owner:
+    status: done
+  log-when-unavailable:
+    status: done
+    comment: Long outages log once at error; short blips stay at debug.
+  parallel-updates:
+    status: done
+    comment: Every platform module declares PARALLEL_UPDATES.
+  reauthentication-flow:
+    status: done
+    comment: >-
+      Password-only reauth plus a separate reconfigure flow for changing the
+      account; both verify the robot is still on the account.
+  test-coverage:
+    status: todo
+    comment: The suite is broad but the enforced floor is still below the 95% the rule asks for.
+
+  # -------------------------------------------------------------------------
+  # Gold
+  # -------------------------------------------------------------------------
+  devices:
+    status: done
+  diagnostics:
+    status: done
+  discovery:
+    status: exempt
+    comment: Cloud-only devices behind an account login; nothing is discoverable on the local network.
+  discovery-update-info:
+    status: exempt
+    comment: See discovery.
+  docs-data-update:
+    status: done
+  docs-examples:
+    status: todo
+  docs-known-limitations:
+    status: done
+  docs-supported-devices:
+    status: done
+    comment: README lists supported families and verified models.
+  docs-supported-functions:
+    status: done
+  docs-troubleshooting:
+    status: done
+  docs-use-cases:
+    status: todo
+  dynamic-devices:
+    status: exempt
+    comment: One config entry per robot; a new robot is added through the config flow.
+  entity-category:
+    status: done
+    comment: Diagnostic sensors are categorised.
+  entity-device-class:
+    status: done
+  entity-disabled-by-default:
+    status: todo
+    comment: >-
+      Noisy/rarely-used diagnostic sensors should ship disabled. Tracked
+      against issue #81 (hide irrelevant entities per model).
+  entity-translations:
+    status: done
+    comment: strings.json plus 9 locales; all entities use translation keys.
+  exception-translations:
+    status: done
+  icon-translations:
+    status: done
+    comment: icons.json replaces the per-entity _attr_icon assignments.
+  reconfiguration-flow:
+    status: done
+  repair-issues:
+    status: done
+    comment: P8 legacy-service behaviour-change repair, dismissible and persistent.
+  stale-devices:
+    status: exempt
+    comment: >-
+      A robot removed from the cloud account leaves its entry failing rather
+      than silently deleting the user's device and history; removal is a
+      deliberate user action through the UI.
+
+  # -------------------------------------------------------------------------
+  # Platinum
+  # -------------------------------------------------------------------------
+  async-dependency:
+    status: done
+    comment: The cloud client is fully async (aiohttp).
+  inject-websession:
+    status: todo
+    comment: >-
+      REST calls use HA's shared session via async_get_clientsession; the
+      websocket path still creates its own ClientSession.
+  strict-typing:
+    status: done
+    comment: >-
+      mypy --strict runs in CI over every module, with `# type: ignore`
+      banned by test_static.py.

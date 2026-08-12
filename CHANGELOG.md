@@ -4,7 +4,96 @@ All notable changes to the iAqualink Robots Home Assistant integration are docum
 
 ## Unreleased
 
-_None yet._
+A quality pass ahead of the 3.0.0 release, aimed squarely at the things that
+would bite a real user: the account/credential flows, commands that failed
+silently, and log noise. No new device features.
+
+### 🐛 Fixed (user-visible bugs)
+
+- **Changing your iAqualink password no longer breaks the integration.** If
+  the password changed while Home Assistant was down, startup failed with a
+  generic "error setting up entry" and never offered the re-authentication
+  prompt — the only remedy people found was deleting and re-adding the
+  integration, losing all history. Home Assistant now asks for the new
+  password and resumes in place.
+- **A cloud outage at startup is retried instead of giving up.** The same
+  path treated a temporary network failure as permanent, so the integration
+  stayed dead until a restart. It now retries with backoff, like every other
+  cloud integration.
+- **Re-authenticating with the wrong account is rejected.** Signing in with a
+  different iAqualink account used to report success and then fail every
+  poll, silently, forever. The integration now checks that the account
+  actually lists your robot and says so if it doesn't.
+- **Failed button presses now show an error.** Remote-control and ±15-minute
+  buttons caught every failure, wrote it to the log and reported success to
+  the UI — a command that never reached the robot looked exactly like one
+  that worked.
+- **Two sensors had no name.** `Original Duration` and `Total Duration` were
+  created on every robot but had no translation behind them, so Home
+  Assistant had nothing to display for them.
+- **Start / stop / return-home no longer fail silently** when the robot is
+  disconnected. They used to do nothing at all, so a dashboard press or an
+  automation step looked like it had worked.
+- **Debug logging now actually produces the debug output.** About twenty log
+  messages were gated behind an internal flag that was hardcoded off, so
+  turning on debug logging — exactly what the README asks you to do when
+  reporting a problem — still hid them.
+- **Garbled characters in log messages and command results** (`â€”`, `â‰¥`)
+  from a double-encoding accident are fixed.
+
+### ✨ Added
+
+- **Reconfigure flow** — *Settings → Devices & Services → iAqualink Robots →
+  ⋮ → Reconfigure* lets you move an existing entry to a different iAqualink
+  account (changed e-mail address, robot moved to a family member's account)
+  without deleting it. Entity IDs, history, areas and automations are all
+  kept. Previously this required a delete + re-add.
+
+### 🔄 Changed
+
+- **No more pop-up notifications for ±15-minute adjustments.** These used
+  `browser_mod` — a separate custom frontend component most users don't have
+  installed — and fell back to a persistent notification. A successful
+  adjustment is now silent (the time-remaining sensors already show it),
+  pressing the button too quickly shows an inline "wait N seconds" message,
+  and a genuine failure shows an error. Nothing is required to be installed
+  for any of it.
+- **Much quieter logs.** Routine operations no longer log at INFO: a single
+  button press wrote up to three INFO lines, and each finished cleaning cycle
+  wrote another. Everything routine is now DEBUG, so a default installation
+  logs nothing from this integration unless something is actually wrong.
+- **Lower idle CPU.** Every log message now formats lazily, so the ~80 debug
+  strings on the 3-second polling path cost nothing while debug logging is
+  off. A full traceback was also being formatted on *every* failed poll
+  during an outage and then discarded; it is now produced only when logged.
+- **Icons moved to `icons.json`**, the current Home Assistant convention.
+  Icon customisations you make in the UI now stick instead of being
+  overwritten on restart.
+- **The username is whitespace-trimmed** when saved, so a trailing space from
+  a mobile keyboard's autocomplete can no longer cause a login failure that
+  looks like a wrong password.
+
+### 🧹 Internal
+
+- `hassfest` (Home Assistant's official validator) is now a blocking CI
+  check rather than informational, and `ruff` was added for the logging
+  rules that keep the lazy-formatting fix from regressing. The coverage
+  floor was raised from a decorative 5% to a real number.
+- Added `quality_scale.yaml` — an honest, rule-by-rule self-assessment
+  against Home Assistant's integration quality scale, including what is still
+  open.
+- Split the two largest per-update code paths (the vacuum's coordinator
+  handler, the cleaning-time helper) into focused pieces, and replaced the
+  per-device-type fan-speed `if/elif` chain with a table.
+
+### 📝 Notes
+
+- New user-facing strings (the reconfigure step, the "wrong account" error
+  and the new error messages) fall back to English in the 9 non-English
+  locales and would welcome a native-speaker pass.
+- The integration's logos are still not in the `home-assistant/brands`
+  repository, so Home Assistant shows a generic icon for it. That is the one
+  remaining item for the Bronze tier of the quality scale.
 
 ## 3.0.0-rc.3 — 2026-08-11
 

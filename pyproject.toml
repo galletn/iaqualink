@@ -31,8 +31,40 @@ test = [
 dev = [
     "flake8>=7.0",
     "mypy>=1.10",
+    "ruff>=0.6",
     "types-aiofiles",
 ]
+
+# ---------------------------------------------------------------------------
+# ruff
+#
+# Added alongside flake8 rather than replacing it, for one rule that flake8
+# cannot express without a plugin: G004 (f-string in a logging call). That is
+# the rule that keeps the lazy-%-formatting sweep from regressing — at a 3s
+# poll interval an eagerly formatted debug string is permanent wasted CPU.
+#
+# line-length matches the existing .flake8 value (200) on purpose: the goal
+# here is a regression gate, not a reformat of the whole codebase. Tightening
+# toward HA core's 88 is a separate, deliberate piece of work.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 200
+target-version = "py313"
+exclude = ["samples", "tools"]
+
+[tool.ruff.lint]
+select = [
+    "F",     # pyflakes
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "G",     # flake8-logging-format  <- G004 is the reason ruff is here
+    "LOG",   # flake8-logging
+    "T20",   # no print() in the integration
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately print diagnostics and build long literal payloads.
+"tests/**" = ["T20"]
 
 # ---------------------------------------------------------------------------
 # pytest
@@ -75,8 +107,10 @@ exclude_also = [
     "pass",
     "\\.\\.\\.",
 ]
-# Bootstrap threshold for P1. Story-by-story stories ratchet this up.
-# Target by end of Epic 7 (Platinum patterns): 95%
-fail_under = 5
+# Ratcheted from the P1 bootstrap value of 5 (which never failed on anything)
+# to a floor just under the suite's real number, so a regression actually
+# breaks CI. Raise this whenever coverage climbs; the quality-scale
+# `test-coverage` rule asks for 95%.
+fail_under = 80
 show_missing = true
 skip_covered = false

@@ -70,7 +70,9 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     #   1 -> 2  (M12) rewrite button unique_ids from title-derived to serial-based
     #   2 -> 3  (M17) drop the dead `api_key` field from entry.data
     VERSION = 3
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
+    # No CONNECTION_CLASS: HA stopped using those constants in 2021.6 and
+    # keeps them only so old custom integrations don't break on import. The
+    # equivalent live declaration is `iot_class` in manifest.json.
 
     @staticmethod
     @callback
@@ -78,7 +80,7 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: ConfigEntry,
     ) -> IaqualinkOptionsFlow:
         """Return the OptionsFlow for runtime toggles."""
-        return IaqualinkOptionsFlow(config_entry)
+        return IaqualinkOptionsFlow()
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -438,11 +440,14 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     # here, this aborts instead of silently rebinding the
                     # entry (and its history) to a different robot.
                     #
-                    # Skipped for an entry that has no stored serial (predates
-                    # the serial-based unique_id, or was corrupted): there is
-                    # nothing to compare against, and setting a null unique_id
-                    # would be worse than leaving the entry as it is.
-                    if serial:
+                    # Skipped for an entry that has no stored serial, and for
+                    # one whose unique_id was never populated (a pre-C7 entry
+                    # can carry a serial in data while entry.unique_id is
+                    # None). In that second case setting the unique_id here
+                    # would make the mismatch check compare "ABC" against None
+                    # and abort with wrong_robot — blocking the very repair
+                    # this flow exists to perform.
+                    if serial and entry.unique_id:
                         await self.async_set_unique_id(serial)
                         self._abort_if_unique_id_mismatch(reason="wrong_robot")
                     return self.async_update_reload_and_abort(
@@ -475,24 +480,15 @@ class IaqualinkOptionsFlow(config_entries.OptionsFlow):
     Currently exposes one knob: whether `time_remaining_human` includes
     seconds (story T1). Toggling reloads the integration so the coordinator
     picks up the new setting.
+
+    No ``__init__`` and no stored entry: ``OptionsFlow.config_entry`` is a
+    property on the base class that resolves the entry from ``self.handler``
+    on every read. The previous version took the entry as a constructor
+    argument and shadowed that property with its own getter — the shape
+    HA's ``OptionsFlowWithConfigEntry`` used, which HA's own docstring now
+    marks as being phased out and "not to be referenced in new code". It also
+    meant the stored entry could go stale relative to the registry copy.
     """
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        # HA 2024+ defines ``OptionsFlow.config_entry`` as a read-only
-        # @property — assigning to it directly raises AttributeError.
-        # We store the entry on a private slot and expose it through our
-        # own getter that shadows the base property; the read site (HA's
-        # flow runner, our ``async_step_init``) only ever READs
-        # ``self.config_entry``, never writes, so no setter is required.
-        # ``super().__init__()`` is called defensively in case a future
-        # HA release adds initialisation to ``OptionsFlow.__init__`` (it
-        # is currently ``object.__init__``, a no-op).
-        super().__init__()
-        self._config_entry: ConfigEntry = config_entry
-
-    @property
-    def config_entry(self) -> ConfigEntry:
-        return self._config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

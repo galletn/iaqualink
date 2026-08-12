@@ -23,12 +23,14 @@ from typing import Any
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import AqualinkClient
 from .const import (
+    DOMAIN,
     PATTERN_BY_ROUTE,
     PATTERN_CYCLE_NAMES,
     PATTERN_FEATURE,
@@ -168,7 +170,36 @@ class AqualinkPatternSelect(
             "Setting %s pattern to %s (route=%s)",
             self._cycle_key, option, route,
         )
-        await self.client.set_cleaning_pattern(self._cycle_key, route)
+        # The client reports "this family has no pattern support" by RETURNING
+        # {"success": False, ...} rather than raising, and its cloud call can
+        # time out with a bare asyncio.TimeoutError. Neither is a
+        # HomeAssistantError, so without this both surfaced as a silent no-op
+        # or a raw traceback in the UI.
+        try:
+            result = await self.client.set_cleaning_pattern(self._cycle_key, route)
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+                translation_placeholders={
+                    "command": f"set {option} pattern",
+                    "name": str(self.coordinator.title or self.client.serial),
+                    "error": str(err),
+                },
+            ) from err
+
+        if isinstance(result, dict) and not result.get("success", True):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+                translation_placeholders={
+                    "command": f"set {option} pattern",
+                    "name": str(self.coordinator.title or self.client.serial),
+                    "error": str(result.get("error", "the robot rejected the command")),
+                },
+            )
         # The cloud echoes the change back over StateStreamer, which the
         # websocket listener applies — so no optimistic local write here.
         await self.coordinator.async_request_refresh()

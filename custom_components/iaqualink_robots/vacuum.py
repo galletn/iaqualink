@@ -616,11 +616,26 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
             # P10: routed through coordinator so cleanup() can cancel it on unload.
             self.coordinator.schedule_task(self._delayed_refresh())
 
-        except Exception as e:
-            _LOGGER.error("Failed to set fan speed: %s", e)
-            # Revert local state if command failed by requesting refresh
+        except HomeAssistantError:
+            # Already user-facing and translated (and ConfigEntryAuthFailed
+            # arrives through here too, which must reach HA unwrapped so the
+            # reauth flow fires).
             await self.coordinator.async_request_refresh()
             raise
+        except Exception as e:
+            _LOGGER.debug("Failed to set fan speed: %s", e, exc_info=True)
+            # Revert local state if the command failed by requesting a refresh,
+            # then surface a translated error instead of a raw traceback.
+            await self.coordinator.async_request_refresh()
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+                translation_placeholders={
+                    "command": f"set cleaning mode to {internal_key}",
+                    "name": str(self.coordinator.title or self._serial_number),
+                    "error": str(e),
+                },
+            ) from e
 
     async def _delayed_refresh(self) -> None:
         """Trigger a delayed refresh for extra responsiveness."""

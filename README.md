@@ -187,6 +187,23 @@ families, so these buttons are not created for them.
 2. Select your preferred language
 3. Restart Home Assistant and reload the integration
 
+## 🔄 How the data is kept up to date
+
+Two transports, both to the iAqualink cloud (there is no local API):
+
+* **Polling** every few seconds. The interval adapts to what the robot is
+  doing — roughly 1.5s while it's active, 10s while idle, 3s otherwise. It is
+  deliberately fast so the vacuum entity reflects a remote-control button
+  press within a couple of seconds rather than up to a minute later.
+* **A websocket listener** that receives state changes pushed by the cloud
+  and applies them immediately, without waiting for the next poll.
+
+If the cloud becomes unreachable, entities keep their last known values and
+gain a `restored: true` attribute rather than going unavailable straight
+away. Only after roughly 30 minutes of continuous failure do they flip to
+unavailable — so a brief ISP or cloud blip won't break automations that
+depend on the robot's state.
+
 ## 🔧 Troubleshooting
 
 * **Robot shows unavailable** → first check the robot is reachable in the

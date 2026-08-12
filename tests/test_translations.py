@@ -142,6 +142,100 @@ def test_every_created_sensor_has_a_name_translation() -> None:
     )
 
 
+def _exception_raise_sites() -> dict[str, list[tuple[str, int, set[str]]]]:
+    """Map translation_key -> [(file, line, supplied placeholder names)].
+
+    Parses the package with ``ast`` rather than importing it, so this works
+    without instantiating HA objects.
+    """
+    import ast
+
+    sites: dict[str, list[tuple[str, int, set[str]]]] = {}
+    for path in PACKAGE_DIR.rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            kwargs = {k.arg: k.value for k in node.keywords if k.arg}
+            if "translation_key" not in kwargs:
+                continue
+            try:
+                key = ast.literal_eval(kwargs["translation_key"])
+            except (ValueError, SyntaxError):
+                continue
+            supplied: set[str] = set()
+            placeholders = kwargs.get("translation_placeholders")
+            if isinstance(placeholders, ast.Dict):
+                for k in placeholders.keys:
+                    try:
+                        supplied.add(ast.literal_eval(k))
+                    except (ValueError, SyntaxError):
+                        pass
+            sites.setdefault(key, []).append((path.name, node.lineno, supplied))
+    return sites
+
+
+def test_every_exception_placeholder_is_supplied_at_every_raise_site() -> None:
+    """A `{placeholder}` in an exception message with no matching entry in
+    ``translation_placeholders`` is a runtime KeyError in the user's UI — in
+    whichever locale they happen to run.
+
+    This is checked against ALL ten files, not just English: a translator can
+    introduce a placeholder that the raise site never supplies, and nothing
+    else in the test suite would notice until a user in that locale hit the
+    error path.
+    """
+    import re
+
+    placeholder_re = re.compile(r"\{(\w+)\}")
+    sites = _exception_raise_sites()
+    problems: list[str] = []
+
+    for path in [STRINGS_JSON, *_all_locale_files()]:
+        exceptions = _load(path).get("exceptions", {})
+        for key, occurrences in sites.items():
+            if key not in exceptions:
+                continue  # entity translation_keys also match; not our concern
+            needed = set(placeholder_re.findall(exceptions[key].get("message", "")))
+            for filename, line, supplied in occurrences:
+                missing = needed - supplied
+                if missing:
+                    problems.append(
+                        f"{path.name}: exceptions.{key} uses {sorted(missing)} "
+                        f"but {filename}:{line} does not supply them"
+                    )
+
+    assert not problems, "Exception placeholder mismatch:\n" + "\n".join(problems)
+
+
+def test_exceptions_block_matches_the_keys_actually_raised() -> None:
+    """Every `exceptions:` key is raised somewhere, and every raised
+    exception translation_key is declared. A raise with an undeclared key
+    renders as the raw key in the UI.
+    """
+    declared = set(_load(STRINGS_JSON).get("exceptions", {}))
+    raised = set(_exception_raise_sites())
+    # Entity translation_keys share the attribute name; only compare against
+    # keys that appear in one set or the other's exception namespace.
+    raised_exceptions = {k for k in raised if k in declared} | (declared & raised)
+
+    undeclared = {
+        k for k in raised
+        if k not in declared and k.endswith(("_failed", "_supported", "_connected",
+                                             "_rate_limited", "_fan_speed"))
+    }
+    assert not undeclared, (
+        f"Raised with an undeclared exception translation_key: {sorted(undeclared)}"
+    )
+    unused = declared - raised_exceptions
+    assert not unused, (
+        f"Declared in exceptions: but never raised: {sorted(unused)}. Remove the "
+        "key, or wire up the raise it was written for."
+    )
+
+
 def test_icons_json_covers_every_entity_translation_key() -> None:
     """icons.json is the icon source of truth (`icon-translations` rule).
 

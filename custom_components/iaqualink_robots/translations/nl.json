@@ -292,6 +292,9 @@
     },
     "invalid_fan_speed": {
       "message": "{fan_speed} is not a cleaning mode this robot supports. Supported modes: {options}."
+    },
+    "command_not_supported": {
+      "message": "This robot ({device_type}) does not support the {command} command. Remote control and cleaning-time adjustment are only available on VR and VortraX models."
     }
   }
 }

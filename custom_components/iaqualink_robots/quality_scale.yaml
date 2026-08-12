@@ -29,11 +29,14 @@ rules:
   appropriate-polling:
     status: done
     comment: >-
-      SCAN_INTERVAL is 3s, deliberately fast: the vacuum entity must reflect
-      remote-control button presses within a couple of seconds. The coordinator
-      additionally adapts the interval by activity, and a websocket listener
-      carries real-time updates so the poll is a backstop rather than the
-      primary transport.
+      Defensible rather than uncontroversial, and worth re-litigating before
+      any core submission: SCAN_INTERVAL is 3s, which is aggressive for a
+      cloud API. It is deliberate — the vacuum entity has to reflect
+      remote-control button presses within a couple of seconds — and the
+      coordinator adapts the interval by activity (1.5s active / 10s idle).
+      A websocket listener also pushes real state changes, but the poll is a
+      genuine second transport rather than a pure backstop, which is why the
+      manifest declares `cloud_polling` and not `cloud_push`.
   brands:
     status: todo
     comment: >-
@@ -90,9 +93,12 @@ rules:
   action-exceptions:
     status: done
     comment: >-
-      Button presses and the +/-15-minute stepper raise translated
-      HomeAssistantError / ServiceValidationError instead of logging and
-      returning.
+      Every action path raises rather than returning quietly: button presses,
+      the +/-15-minute stepper (including the debounce, as
+      ServiceValidationError), vacuum start/stop/return-home when the robot is
+      disconnected, an unsupported fan speed, the cleaning-pattern select, and
+      the remote-control services when called on a family whose cloud API has
+      no such command. All are translated via the `exceptions:` block.
   config-entry-unloading:
     status: done
   docs-configuration-parameters:
@@ -109,7 +115,11 @@ rules:
     status: done
   log-when-unavailable:
     status: done
-    comment: Long outages log once at error; short blips stay at debug.
+    comment: >-
+      Short blips log at debug; the long-outage traceback is latched so it is
+      written once on the not-long -> long transition and reset on the next
+      successful update, rather than once per 3-second poll for the duration
+      of the outage.
   parallel-updates:
     status: done
     comment: Every platform module declares PARALLEL_UPDATES.
@@ -157,7 +167,16 @@ rules:
     status: done
     comment: Diagnostic sensors are categorised.
   entity-device-class:
-    status: done
+    status: todo
+    comment: >-
+      Only the timestamp sensors declare a device class. `battery_level` and
+      `temperature` should carry SensorDeviceClass.BATTERY / TEMPERATURE, no
+      sensor sets a state_class (so nothing produces long-term statistics),
+      and units are hardcoded strings rather than the HA constants. The
+      values are identical strings today, so the constants are a safe swap;
+      the device/state classes are not, because a sensor that intermittently
+      reports a non-numeric value would start throwing once one is declared.
+      That needs checking against live hardware first.
   entity-disabled-by-default:
     status: todo
     comment: >-

@@ -475,6 +475,7 @@ def _stepper_coordinator(result: dict | None = None, last_command: float = 0.0):
     coord.client.reduce_fifteen_minutes = AsyncMock(
         return_value=result if result is not None else {"success": True, "message": "ok"}
     )
+    coord.client.remote_forward = AsyncMock()
     coord._last_timing_command = last_command
     coord.hass = MagicMock()
     coord.hass.services = MagicMock()
@@ -526,6 +527,41 @@ async def test_stepper_failure_raises_home_assistant_error() -> None:
         await coord.async_add_fifteen_minutes()
 
     coord.hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("device_type", ["cyclobat", "cyclonext", "i2d_robot"])
+async def test_unsupported_family_raises_instead_of_no_op(device_type: str) -> None:
+    """The seven remote-control services are registered on the vacuum entity
+    for EVERY device type (buttons are not — they're vr/vortrax only). So a
+    cyclonext owner calling `iaqualink_robots.remote_forward` used to get a
+    reported success and no movement at all: the same silent-no-op failure
+    mode as issue #76, reached through the service API instead of the
+    fan-speed list.
+    """
+    from homeassistant.exceptions import ServiceValidationError
+
+    coord = _stepper_coordinator()
+    coord.client.device_type = device_type
+
+    with pytest.raises(ServiceValidationError):
+        await coord.async_add_fifteen_minutes()
+
+    with pytest.raises(ServiceValidationError):
+        await coord.async_remote_forward()
+
+    coord.client.add_fifteen_minutes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_supported_family_still_dispatches() -> None:
+    """The guard must not break the families that DO support the commands."""
+    coord = _stepper_coordinator()
+    coord.client.device_type = "vortrax"
+
+    await coord.async_add_fifteen_minutes()
+
+    coord.client.add_fifteen_minutes.assert_awaited_once()
 
 
 @pytest.mark.asyncio

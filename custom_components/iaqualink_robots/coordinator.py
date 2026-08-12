@@ -73,6 +73,10 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         # could trigger after as little as 45 s of failures at the fast
         # adaptive polling rate.
         self._first_failure_at: datetime.datetime | None = None
+        # Latch so the long-outage traceback is logged once per outage rather
+        # than on every poll for its whole duration. Cleared alongside
+        # ``_first_failure_at`` on the next successful update.
+        self._long_outage_logged: bool = False
         # Backs the public ``title`` property; set by ``__init__.py`` from
         # ``entry.title`` so entities and tests can read a stable display
         # name via the public API (story M15). Kept underscored so the
@@ -323,6 +327,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             # healthy without waiting for the next polled cycle (story H7).
             self._consecutive_failures = 0
             self._first_failure_at = None
+            self._long_outage_logged = False
             client.reset_websocket_failures()
 
             # Adaptive polling: a state-bearing push is fresh evidence the
@@ -528,6 +533,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             # poll succeeds (AC #6).
             self._consecutive_failures = 0
             self._first_failure_at = None
+            self._long_outage_logged = False
 
             # Reset websocket failure count on successful status update
             self.client.reset_websocket_failures()
@@ -605,17 +611,25 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                         "error_state": "connection_failed"
                     }
             else:
-                # The traceback is formatted here, not before the branch:
-                # at SCAN_INTERVAL=3s a pre-computed format_exc() ran on every
-                # failed poll of an outage and was then thrown away in the
-                # short-blip path below.
-                _LOGGER.exception(
-                    "Update failed after %s attempts (%.0fs outage, > %ss threshold): %s",
-                    self._consecutive_failures,
-                    self._outage_age_seconds(),
-                    LONG_OUTAGE_THRESHOLD_SECONDS,
-                    err,
-                )
+                # Logged ONCE per outage, on the not-long -> long transition.
+                #
+                # `is_long_outage` stays true for the rest of the outage, so an
+                # unlatched log here writes a full traceback every polling
+                # cycle: a multi-hour cloud outage produced thousands of them.
+                # The traceback is still worth having — it is the one place the
+                # cause of a sustained outage is recorded — but once is enough,
+                # and DataUpdateCoordinator already logs the UpdateFailed
+                # raised below. The latch resets with `_first_failure_at` on
+                # the next successful update.
+                if not self._long_outage_logged:
+                    self._long_outage_logged = True
+                    _LOGGER.exception(
+                        "Update failed after %s attempts (%.0fs outage, > %ss threshold): %s",
+                        self._consecutive_failures,
+                        self._outage_age_seconds(),
+                        LONG_OUTAGE_THRESHOLD_SECONDS,
+                        err,
+                    )
                 # Long-outage threshold exceeded — raise UpdateFailed so HA
                 # marks the entity unavailable. The `is_long_outage` gate on
                 # entity `available` properties also short-circuits to False
@@ -637,12 +651,37 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         """Return to base - centralized business logic."""
         await self.client.return_to_base()
 
+    #: Families whose cloud API exposes the remote-steering and cleaning-time
+    #: commands. The buttons are only created for these, but the seven
+    #: *services* are registered on the vacuum entity for every device type,
+    #: so the guard has to live here.
+    _REMOTE_COMMAND_DEVICE_TYPES = frozenset({"vr", "vortrax"})
+
+    def _require_remote_command_support(self, command: str) -> None:
+        """Raise unless this robot's family supports the remote commands.
+
+        Previously an unsupported family made these methods ``return``
+        silently, so ``iaqualink_robots.remote_forward`` called on a cyclonext
+        reported success and did nothing at all — the same silent-no-op
+        failure mode as issue #76, reached through the service API instead of
+        the fan-speed list.
+        """
+        if self.client.device_type in self._REMOTE_COMMAND_DEVICE_TYPES:
+            return
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="command_not_supported",
+            translation_placeholders={
+                "command": command,
+                "device_type": str(self.client.device_type),
+            },
+        )
+
     async def _execute_remote_command(
         self, command_method: Callable[[], Awaitable[None]]
     ) -> None:
         """Execute a remote command with device type checking but no automatic refresh."""
-        if self.client.device_type not in {"vr", "vortrax"}:
-            return
+        self._require_remote_command_support(getattr(command_method, "__name__", "command"))
         await command_method()
         # Remove automatic refresh to improve responsiveness - let normal polling handle updates
 
@@ -701,8 +740,9 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         ``HomeAssistantError``, and success is silent — the time-remaining
         entities already reflect it after the refresh below.
         """
-        if self.client.device_type not in {"vr", "vortrax"}:
-            return
+        self._require_remote_command_support(
+            "add_fifteen_minutes" if delta_minutes > 0 else "reduce_fifteen_minutes"
+        )
 
         current_time = time.time()
         time_since_last = current_time - self._last_timing_command

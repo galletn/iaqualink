@@ -47,6 +47,16 @@ silently, and log noise. No new device features.
 - **A robot that is no longer on your iAqualink account now says so.** Home
   Assistant used to retry the setup forever without explaining anything;
   it now reports the problem and points at Reconfigure.
+- **Remote-control services on a robot that doesn't support them now say so.**
+  The seven `iaqualink_robots.*` services are offered on every robot, but only
+  VR and VortraX models have these cloud commands. On the others the call
+  reported success and did nothing — the same silent no-op behind issue #76,
+  reached through automations instead of the UI.
+- **Cleaning-pattern and cleaning-mode failures surface as errors** instead of
+  a silent no-op or a raw traceback.
+- **A long cloud outage no longer floods the log.** It wrote a full traceback
+  on every poll — thousands of them over a multi-hour outage. It is now
+  logged once when the outage starts.
 
 ### ✨ Added
 

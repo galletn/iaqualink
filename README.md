@@ -234,9 +234,61 @@ We welcome:
 
 ## 🙏 Credits
 
-* Developed by [@galletn](https://github.com/galletn)
-* Translation help from Home Assistant community
-* Based on reverse-engineered iAqualink API
+Maintained by [@galletn](https://github.com/galletn), built on a
+reverse-engineered iAqualink API — and on a lot of community work.
+
+**Translations**
+
+* 🇨🇿 Čeština + 🇸🇰 Slovenčina — [@FejbyK](https://github.com/FejbyK)
+* 🇮🇹 Italiano — [@ppastur](https://github.com/ppastur)
+* Other locales started as English fallbacks; native-speaker PRs are always
+  welcome.
+
+**Code contributions**
+
+* [@flimzy](https://github.com/flimzy) — diagnosed and fixed the
+  auto-restart-after-cycle bug (#89 / #94)
+* [@CLARENNE-Q](https://github.com/CLARENNE-Q) — i2d estimated-end-time fix
+  and compatible-device filtering (#48 / #49)
+* [@FejbyK](https://github.com/FejbyK) — README and CI improvements
+
+**Hardware access and verification**
+
+Several features exist only because owners let their robot be poked at.
+Notably **Brian**, whose CycloBat made it possible to verify the
+cleaning-pattern (Standard / S-Pattern) support against real hardware in both
+directions — reading *and* writing — rather than inferring it. A control that
+silently does nothing is the failure mode behind issue #76; that is what
+hands-on verification prevents.
+
+**Reports, testing and model confirmations**
+
+[@AlexeiakaTechnik](https://github.com/AlexeiakaTechnik),
+[@beit-no1](https://github.com/beit-no1),
+[@chansearrington](https://github.com/chansearrington),
+[@ConRodLou](https://github.com/ConRodLou),
+[@craigcurtin-dev](https://github.com/craigcurtin-dev),
+[@danielegger1](https://github.com/danielegger1),
+[@DeltaFox0018](https://github.com/DeltaFox0018),
+[@fdarden](https://github.com/fdarden),
+[@filmackay](https://github.com/filmackay),
+[@Gamester17](https://github.com/Gamester17),
+[@GizmoGoody](https://github.com/GizmoGoody),
+[@jiggahertz86](https://github.com/jiggahertz86),
+[@johntdyer](https://github.com/johntdyer),
+[@nylesmail](https://github.com/nylesmail),
+[@Osconse](https://github.com/Osconse),
+[@OtisPresley](https://github.com/OtisPresley),
+[@piejanssens](https://github.com/piejanssens),
+[@quartit](https://github.com/quartit),
+[@smuliv](https://github.com/smuliv),
+[@socalsharky](https://github.com/socalsharky),
+[@sv-kov](https://github.com/sv-kov),
+[@virtualbitzz](https://github.com/virtualbitzz).
+
+Every supported model on the list above got there because someone reported
+theirs, ran a pre-release, and said whether it worked. If you did that and
+aren't listed, please open an issue — it's an oversight, not a judgement.
 
 ## 📄 License
 

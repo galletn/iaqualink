@@ -86,11 +86,64 @@ silently, and log noise. No new device features.
   handler, the cleaning-time helper) into focused pieces, and replaced the
   per-device-type fan-speed `if/elif` chain with a table.
 
+### 🙏 Thanks
+
+This release, and the 3.x line generally, is community work as much as
+maintainer work.
+
+- **[@FejbyK](https://github.com/FejbyK)** — native **Czech** and **Slovak**
+  translations ([#103](https://github.com/galletn/iaqualink/pull/103),
+  [#104](https://github.com/galletn/iaqualink/pull/104)), on top of a long
+  run of README improvements, CI updates and some of the most precise bug
+  reports this project has had (#63, #64, #71, #76, #79, #81).
+- **[@ppastur](https://github.com/ppastur)** — Italian translation.
+- **[@flimzy](https://github.com/flimzy)** — diagnosed *and* fixed the
+  auto-restart-after-cycle bug (#89, PR #94).
+- **[@CLARENNE-Q](https://github.com/CLARENNE-Q)** — i2d fixes: estimated end
+  time, and restricting device selection to compatible robots (PRs #48, #49).
+- **Brian** — gave hands-on access to a CycloBat robot, which is the only
+  reason the cleaning-pattern (Standard / S-Pattern) support in `3.0.0-rc.3`
+  could be verified against real hardware instead of guessed at. Features
+  built on guesses are how you end up with a control that silently does
+  nothing (see #76); this one was confirmed in both directions before it
+  shipped.
+
+And to everyone who reported a problem, tested a pre-release, or confirmed
+their model works — that is what turns a reverse-engineered protocol into a
+supported one:
+
+[@AlexeiakaTechnik](https://github.com/AlexeiakaTechnik),
+[@beit-no1](https://github.com/beit-no1),
+[@chansearrington](https://github.com/chansearrington),
+[@ConRodLou](https://github.com/ConRodLou),
+[@craigcurtin-dev](https://github.com/craigcurtin-dev),
+[@danielegger1](https://github.com/danielegger1),
+[@DeltaFox0018](https://github.com/DeltaFox0018),
+[@fdarden](https://github.com/fdarden),
+[@filmackay](https://github.com/filmackay),
+[@Gamester17](https://github.com/Gamester17),
+[@GizmoGoody](https://github.com/GizmoGoody),
+[@jiggahertz86](https://github.com/jiggahertz86),
+[@johntdyer](https://github.com/johntdyer),
+[@nylesmail](https://github.com/nylesmail),
+[@Osconse](https://github.com/Osconse),
+[@OtisPresley](https://github.com/OtisPresley),
+[@piejanssens](https://github.com/piejanssens),
+[@quartit](https://github.com/quartit),
+[@smuliv](https://github.com/smuliv),
+[@socalsharky](https://github.com/socalsharky),
+[@sv-kov](https://github.com/sv-kov),
+[@virtualbitzz](https://github.com/virtualbitzz).
+
+If you tested something and aren't listed, that's an oversight rather than a
+judgement — open an issue and it gets fixed.
+
 ### 📝 Notes
 
 - New user-facing strings (the reconfigure step, the "wrong account" error
   and the new error messages) fall back to English in the 9 non-English
-  locales and would welcome a native-speaker pass.
+  locales and would welcome a native-speaker pass. Czech and Slovak now have
+  native translations for everything that predates this release.
 - The integration's logos are still not in the `home-assistant/brands`
   repository, so Home Assistant shows a generic icon for it. That is the one
   remaining item for the Bronze tier of the quality scale.

@@ -1820,7 +1820,7 @@ class AqualinkClient:
     @property
     def supports_realtime_shadow(self) -> bool:
         """Whether this robot's state arrives over the websocket shadow stream."""
-        return self._device_type in self._SHADOW_STREAM_DEVICE_TYPES
+        return self.device_type in self._SHADOW_STREAM_DEVICE_TYPES
 
     @property
     def has_pending_stop_reset(self) -> bool:
@@ -1859,12 +1859,15 @@ class AqualinkClient:
         and a cloud that starts reporting a family we don't parse yet should
         degrade to "no device-specific fields", not crash the update.
         """
-        protocol = get_protocol(self._device_type)
+        # Dispatches on the public `device_type` property, not the private
+        # attribute: this is the client's public surface, and the coordinator
+        # (whose if/elif chain this replaced) also keyed off the public name.
+        protocol = get_protocol(self.device_type)
         if protocol is None:
             _LOGGER.debug(
                 "No protocol registered for device_type=%r; skipping "
                 "device-specific parsing",
-                self._device_type,
+                self.device_type,
             )
             return
         protocol.parse_status(self, data, result)

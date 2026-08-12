@@ -545,5 +545,9 @@ async def test_stepper_no_browser_mod_dependency_in_source() -> None:
         / "coordinator.py"
     ).read_text(encoding="utf-8")
 
-    assert "browser_mod" not in source
-    assert "persistent_notification" not in source
+    # Matches the *service call* form ("browser_mod", "notification"), not the
+    # prose: the docstring deliberately explains what was removed and why, so a
+    # bare substring check would fail on its own explanation.
+    assert '"browser_mod"' not in source
+    assert '"persistent_notification"' not in source
+    assert "hass.services.async_call" not in source

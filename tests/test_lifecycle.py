@@ -11,7 +11,7 @@ P10 code review (commit ``c762b52``) fixes encoded here:
 - F5 / F7: done-task exceptions are retrieved; pending-task set is cleared on timeout.
 - F9: ``test_cleanup_ws_task_timeout_does_not_hang`` narrows the ``wait_for`` patch
   to the listener task only via a filtering side_effect.
-- F10: ``test_reload_cycle_no_leak`` asserts per-cycle ``_close_websocket`` was awaited
+- F10: ``test_reload_cycle_no_leak`` asserts per-cycle ``close_websocket`` was awaited
   exactly once instead of an unreliable ``asyncio.all_tasks()`` count.
 - F11: done-callback synchronisation uses a bounded loop of ``asyncio.sleep(0)``
   yields, not a single tick.
@@ -39,7 +39,7 @@ def _build_mock_client() -> MagicMock:
     client.set_coordinator_callback = MagicMock()
     client.set_realtime_push_callback = MagicMock()
     client.set_coordinator_reference = MagicMock()
-    client._close_websocket = AsyncMock()
+    client.close_websocket = AsyncMock()
     return client
 
 
@@ -94,7 +94,7 @@ async def test_cleanup_ws_task_timeout_does_not_hang(coordinator, caplog) -> Non
     F9: patches ``asyncio.wait_for`` with a *narrow* side_effect that raises
     ``TimeoutError`` only when called for the listener task. Other call sites
     (``_cancel_pending_tasks`` batch ``asyncio.wait`` is not affected; the
-    ``client._close_websocket`` ``wait_for`` IS still filtered through but
+    ``client.close_websocket`` ``wait_for`` IS still filtered through but
     only when the awaitable is the listener task). Also asserts the WARNING
     log fires.
     """
@@ -127,7 +127,7 @@ async def test_cleanup_ws_task_timeout_does_not_hang(coordinator, caplog) -> Non
         await asyncio.wait_for(coordinator.cleanup(), timeout=2.0)
 
     # cleanup() reached the close_websocket phase despite the WS-listener timeout
-    coordinator.client._close_websocket.assert_awaited()
+    coordinator.client.close_websocket.assert_awaited()
     assert any(
         "Websocket listener did not cancel within 5s" in r.message
         for r in caplog.records
@@ -147,18 +147,18 @@ async def test_cleanup_ws_task_timeout_does_not_hang(coordinator, caplog) -> Non
 
 
 async def test_cleanup_closes_owned_session_via_client(coordinator) -> None:
-    """cleanup() must delegate to client._close_websocket(), which closes the
+    """cleanup() must delegate to client.close_websocket(), which closes the
     owned ws_session + ws_connection. This is the contract that wraps AC #2 —
     the only persistent aiohttp ClientSession in the integration lives on
-    ``client._ws_session`` and is released inside ``client._close_websocket``.
+    ``client._ws_session`` and is released inside ``client.close_websocket``.
     """
     await coordinator.cleanup()
 
-    coordinator.client._close_websocket.assert_awaited_once()
+    coordinator.client.close_websocket.assert_awaited_once()
 
 
 async def test_close_websocket_timeout_does_not_hang(coordinator, caplog) -> None:
-    """F3: phase 3 of cleanup wraps client._close_websocket in wait_for(5s).
+    """F3: phase 3 of cleanup wraps client.close_websocket in wait_for(5s).
 
     A stuck TLS shutdown inside ws_session.close() must not strand unload.
     """
@@ -166,7 +166,7 @@ async def test_close_websocket_timeout_does_not_hang(coordinator, caplog) -> Non
     async def slow_close():
         await asyncio.sleep(60)
 
-    coordinator.client._close_websocket = AsyncMock(side_effect=slow_close)
+    coordinator.client.close_websocket = AsyncMock(side_effect=slow_close)
 
     # Capture the real wait_for BEFORE the patch so the test harness can use
     # it for the outer guardrail timeout without being affected by the patch.
@@ -195,7 +195,7 @@ async def test_close_websocket_timeout_does_not_hang(coordinator, caplog) -> Non
         await real_wait_for(coordinator.cleanup(), timeout=2.0)
 
     assert any(
-        "_close_websocket() did not return within 5s" in r.message
+        "close_websocket() did not return within 5s" in r.message
         for r in caplog.records
     ), "Expected WARNING about close_websocket timeout was not logged"
 
@@ -294,24 +294,24 @@ async def test_cleanup_safe_when_idle(coordinator) -> None:
 
     await coordinator.cleanup()
 
-    coordinator.client._close_websocket.assert_awaited_once()
+    coordinator.client.close_websocket.assert_awaited_once()
 
 
 async def test_cleanup_idempotent_on_double_call(coordinator) -> None:
     """F4: cleanup() guards against re-entry; the second call short-circuits."""
     await coordinator.cleanup()
-    coordinator.client._close_websocket.assert_awaited_once()
+    coordinator.client.close_websocket.assert_awaited_once()
 
     await coordinator.cleanup()  # second call
 
     # Still only one invocation — phase 3 did not re-run.
-    coordinator.client._close_websocket.assert_awaited_once()
+    coordinator.client.close_websocket.assert_awaited_once()
     assert coordinator._cleanup_done is True
 
 
 async def test_reload_cycle_no_leak(hass) -> None:
     """20× create/schedule/cleanup. F10: assert each cycle awaited
-    _close_websocket exactly once and left _pending_tasks empty, instead of
+    close_websocket exactly once and left _pending_tasks empty, instead of
     the previous brittle asyncio.all_tasks() count comparison.
     """
     from custom_components.iaqualink_robots.coordinator import (
@@ -331,5 +331,5 @@ async def test_reload_cycle_no_leak(hass) -> None:
             f"Cycle {i}: pending tasks should drain to empty"
         )
         # F10: pin the actual no-leak contract — each cycle's client got
-        # _close_websocket invoked exactly once.
-        client._close_websocket.assert_awaited_once()
+        # close_websocket invoked exactly once.
+        client.close_websocket.assert_awaited_once()

@@ -220,7 +220,7 @@ def test_all_three_entity_platforms_share_device_identifiers() -> None:
     coord = _coordinator_for(serial="SHARED-SERIAL-001")
     client = coord.client
 
-    button = AqualinkRemoteButton(coord, client, "forward", "remote_forward", "mdi:x")
+    button = AqualinkRemoteButton(coord, client, "forward", "remote_forward")
 
     # AqualinkSensor takes (coordinator, sensor_type) tuple as a key,name pair.
     # We instantiate via __new__ to avoid pulling in the full entity wiring.

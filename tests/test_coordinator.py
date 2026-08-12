@@ -36,7 +36,13 @@ def _build_mock_client(
     client = MagicMock()
     client.robot_id = "test_robot"
     client.device_type = device_type
-    client._pending_stop_reset = pending_stop_reset
+    # These must be set explicitly even when False/no-op: on a bare MagicMock
+    # every attribute is a truthy auto-mock, so `not client.has_pending_stop_reset`
+    # would silently evaluate False and skip the natural-completion branch.
+    client.has_pending_stop_reset = pending_stop_reset
+    client.apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
+    client.reset_websocket_failures = MagicMock()
+    client.supports_realtime_shadow = device_type != "i2d_robot"
     # Constructor wiring
     client.set_hass = MagicMock()
     client.set_coordinator_callback = MagicMock()
@@ -44,7 +50,6 @@ def _build_mock_client(
     # _async_update_data wiring
     client.fetch_status = AsyncMock(return_value=fetch_status_return or {"activity": "idle"})
     client.clear_desired_state = AsyncMock()
-    client._reset_websocket_failures = MagicMock()
     return client
 
 

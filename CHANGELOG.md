@@ -2,11 +2,21 @@
 
 All notable changes to the iAqualink Robots Home Assistant integration are documented here.
 
-## Unreleased
+## 3.0.0 — 2026-08-12
 
-A quality pass ahead of the 3.0.0 release, aimed squarely at the things that
-would bite a real user: the account/credential flows, commands that failed
-silently, and log noise. No new device features.
+**First stable release of the 3.x line.** If you are coming from `2.5.1`,
+this release contains everything from `3.0.0-beta.1`, `-rc.1`, `-rc.2` and
+`-rc.3` as well — those sections are kept below for detail, and you do not
+need to read them to upgrade.
+
+Verified against live hardware before release (RA 6570 iQ): account
+discovery, start/stop, all three cleaning modes the robot actually
+advertises, remote steering in all four directions, and the ±15-minute
+adjustment including its rate limit.
+
+The section below is the final quality pass, aimed squarely at the things
+that would bite a real user: the account/credential flows, commands that
+failed silently, and log noise. No new device features.
 
 ### 🐛 Fixed (user-visible bugs)
 

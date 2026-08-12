@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iaqualink-robots"
-# PEP 440 spelling of the manifest's "3.0.0-rc.2". The two differ by
-# necessity: HACS/HA read manifest.json (SemVer), Python packaging reads this
-# (PEP 440, which has no hyphen/dot form for pre-releases). manifest.json is
-# authoritative for what users install.
-version = "3.0.0rc3"
+# Keep in step with manifest.json, which is authoritative for what users
+# install. The two spellings can differ for pre-releases (HACS/HA read
+# SemVer from the manifest, Python packaging reads PEP 440 here, and PEP 440
+# has no hyphen form); for a final release they are identical.
+version = "3.0.0"
 description = "Home Assistant custom integration for iAqualink pool robots."
 readme = "README.md"
 requires-python = ">=3.13"

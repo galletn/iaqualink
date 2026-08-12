@@ -372,7 +372,6 @@ class I2DProtocol(RobotProtocol):
                 # non-status command. Nothing to parse out of the body.
                 return
             debug = data.get("command", {}).get("response", "")
-            result["debug"] = str(debug) if client._debug_mode else ""
 
             frame = parse_i2d_payload(debug)
 
@@ -433,9 +432,8 @@ class I2DProtocol(RobotProtocol):
             # Catching ``BaseException``-shaped surprises (``CancelledError``
             # on HA shutdown) was both unnecessary and harmful — they
             # need to propagate.
-            if client._debug_mode:
-                _LOGGER.error(f"Error updating i2d robot status: {e}")
+            _LOGGER.error("Error updating i2d robot status: %s", e)
+            _LOGGER.debug("i2d payload that failed to parse: %s", data)
             if isinstance(data, dict) and data.get("status") == "500":
                 result["status"] = "offline"
-            result["debug"] = str(data) if client._debug_mode else ""
             result["error_state"] = "update_failed"

@@ -332,7 +332,7 @@ class CycloBatProtocol(RobotProtocol):
                 result["time_remaining"] = 0
                 result["time_remaining_human"] = format_time_human(0, 0, 0)
         except Exception as e:
-            _LOGGER.debug(f"Error processing cycle times for cyclobat robot: {e}")
+            _LOGGER.debug("Error processing cycle times for cyclobat robot: %s", e)
             result["cycle_start_time"] = None
             result["cycle_end_time"] = None
             result["estimated_end_time"] = None

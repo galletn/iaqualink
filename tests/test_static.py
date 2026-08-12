@@ -96,6 +96,37 @@ _COORDINATOR_GETATTR_TITLE = re.compile(
 )
 
 
+# Coordinator → client reach-throughs closed in the 3.0.0-rc.4 quality pass.
+# Each of these now has a public counterpart on ``AqualinkClient``:
+#
+#   client._update_<family>_robot_data  ->  client.apply_robot_data(...)
+#                                           (+ client.supports_realtime_shadow)
+#   client._apply_pending_stop_reset    ->  client.apply_pending_stop_reset(...)
+#   client._pending_stop_reset          ->  client.has_pending_stop_reset
+#   client._reset_websocket_failures    ->  client.reset_websocket_failures()
+#   client._close_websocket             ->  client.close_websocket()
+#   client._websocket_listener          ->  client.run_websocket_listener()
+#
+# The implementations stay private; these are the supported names. Tests are
+# exempt (they legitimately drive internals), so this scan runs over the
+# production package only.
+_CLIENT_PRIVATE_METHOD_REACH_THROUGH = re.compile(
+    r"""(?<!\w)
+        (?:[A-Za-z_]\w*\.)*
+        _?client
+        \._(
+            update_\w+_robot_data
+            |apply_pending_stop_reset
+            |pending_stop_reset
+            |reset_websocket_failures
+            |close_websocket
+            |websocket_listener
+        )\b
+    """,
+    re.VERBOSE,
+)
+
+
 def _scan(pattern: re.Pattern[str], files: list[Path]) -> list[tuple[Path, int, str]]:
     """Return (path, line_no, line) for every match across ``files``.
 
@@ -136,6 +167,25 @@ def test_no_external_reach_through_to_client_private_serial_or_device_type() -> 
         "``client.device_type`` properties (story M15); replace ``client._model`` "
         "reads with ``coordinator.data.get('model')`` (story P9, where "
         "``device.build_device_info`` centralises the live-model lookup):\n"
+        + "\n".join(f"  {p.name}:{n}: {line}" for p, n, line in hits)
+    )
+
+
+def test_no_reach_through_to_client_private_methods() -> None:
+    """The coordinator must drive the client through its public surface.
+
+    Pre-3.0.0-rc.4 the coordinator called six private client members, one of
+    which (`_update_<family>_robot_data`) it selected with its own copy of
+    the per-device-type if/elif chain — so the dispatch existed in two places
+    and could drift, which is the same failure class as issue #76.
+    """
+    hits = _scan(_CLIENT_PRIVATE_METHOD_REACH_THROUGH, _ALL_PYTHON_FILES)
+    assert not hits, (
+        "Private reach-through to an AqualinkClient internal detected. Use "
+        "the public counterpart (apply_robot_data / supports_realtime_shadow "
+        "/ apply_pending_stop_reset / has_pending_stop_reset / "
+        "reset_websocket_failures / close_websocket / "
+        "run_websocket_listener):\n"
         + "\n".join(f"  {p.name}:{n}: {line}" for p, n, line in hits)
     )
 

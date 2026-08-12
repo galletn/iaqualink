@@ -170,7 +170,8 @@ class VRProtocol(RobotProtocol):
             result["stepper"] = robot_data['stepper']
             result["stepper_adj_time"] = robot_data.get('stepperAdjTime', 15)
             _LOGGER.debug(
-                f"Stepper info: value={robot_data['stepper']}, adj_time={robot_data.get('stepperAdjTime', 15)}"
+                "Stepper info: value=%s, adj_time=%s",
+                robot_data['stepper'], robot_data.get('stepperAdjTime', 15)
             )
         except (KeyError, TypeError):
             result["stepper"] = 0
@@ -184,7 +185,7 @@ class VRProtocol(RobotProtocol):
             client._fan_speed = _VR_PRCYC_TO_FAN_SPEED.get(current_cycle, "floor_only")
             result["fan_speed"] = client._fan_speed
         except Exception as e:
-            _LOGGER.debug(f"Error setting fan speed for VR robot: {e}")
+            _LOGGER.debug("Error setting fan speed for VR robot: %s", e)
             client._fan_speed = "floor_only"
             result["fan_speed"] = client._fan_speed
 
@@ -217,7 +218,7 @@ class VRProtocol(RobotProtocol):
                 result["time_remaining"] = 0
                 result["time_remaining_human"] = format_time_human(0, 0, 0)
         except Exception as e:
-            _LOGGER.debug(f"Error processing cycle times for VR robot: {e}")
+            _LOGGER.debug("Error processing cycle times for VR robot: %s", e)
             result["cycle_start_time"] = None
             result["cycle_end_time"] = None
             result["estimated_end_time"] = None

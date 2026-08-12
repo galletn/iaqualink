@@ -38,7 +38,6 @@ def _build_client(device_type: str):
     client._id = "user-id"
     client._auth_token = "token"
     client._app_client_id = "app-client"
-    client._debug_mode = False
     # Patch the I/O entry point so we can capture the request that would have
     # been sent. Returns a dummy response shaped like the production code's
     # success path so the wrapper unwraps it without errors.

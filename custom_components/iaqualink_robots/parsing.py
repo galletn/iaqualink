@@ -1,8 +1,8 @@
 """Pure date/time/duration helpers used by the client and protocol parsers (R26).
 
 These were previously instance methods on ``AqualinkClient`` but read no
-client state beyond two flags (``_include_seconds_remaining`` / ``_debug_mode``)
-that are passed through verbatim. R26 splits them into this module so the
+client state beyond one flag (``_include_seconds_remaining``) that is passed
+through verbatim. R26 splits them into this module so the
 protocol parsers in ``protocols/`` can import them as free functions rather
 than reach across the ``client.parse_status(...)`` boundary on every call
 site (``client._calculate_times`` / ``client._format_time_human`` etc.).
@@ -170,8 +170,7 @@ def calculate_times(
     ``stepper_value``, and ``stepper_adjustment_minutes``.
 
     Reads ``client._include_seconds_remaining`` (gates seconds in the
-    human-readable string) and ``client._debug_mode`` (verbose error
-    logging) — these are the only client deps so the function stays
+    human-readable string) — the only client dep, so the function stays
     decoupled from the rest of the client surface.
     """
     try:
@@ -183,8 +182,9 @@ def calculate_times(
             stepper_adj_time = robot_data.get('stepperAdjTime', 15)
 
             _LOGGER.debug(
-                f"Stepper calculation: base_duration={duration_minutes}, "
-                f"stepper={stepper_value}, stepper_adj_time={stepper_adj_time}")
+                "Stepper calculation: base_duration=%s, "
+                "stepper=%s, stepper_adj_time=%s",
+                duration_minutes, stepper_value, stepper_adj_time)
 
         adjusted_duration = duration_minutes + stepper_value
 
@@ -241,8 +241,7 @@ def calculate_times(
             result["time_remaining_human"] = format_time_human(0, 0, 0)
 
     except Exception as e:
-        if client._debug_mode:
-            _LOGGER.warning(f"Error calculating times: {e}")
+        _LOGGER.warning("Error calculating times: %s", e)
         result["cycle_end_time"] = None
         result["estimated_end_time"] = None
         result["time_remaining"] = 0

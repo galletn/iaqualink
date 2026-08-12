@@ -744,43 +744,54 @@ def test_coordinator_vr_branch_routes_through_protocol(
     )
 
 
-def test_update_vr_robot_data_delegates_to_protocol_parse_status() -> None:
-    """The legacy ``_update_vr_robot_data`` method on ``AqualinkClient``
-    is kept as a stable seam (called by both the polled path and the
-    push path) but its body must delegate to VRProtocol.parse_status —
-    the duplicated ~120-line parser body is gone.
-    """
-    import ast
-    from pathlib import Path
+def test_apply_robot_data_dispatches_vr_to_vr_protocol() -> None:
+    """``AqualinkClient.apply_robot_data`` routes a vr robot to VRProtocol.
 
-    client_path = (
-        Path(__file__).parent.parent.parent
-        / "custom_components"
-        / "iaqualink_robots"
-        / "client.py"
-    )
-    tree = ast.parse(client_path.read_text(encoding="utf-8"))
-    method_body = None
-    for class_node in ast.walk(tree):
-        if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":
-            continue
-        for method in class_node.body:
-            if (
-                isinstance(method, ast.FunctionDef)
-                and method.name == "_update_vr_robot_data"
-            ):
-                method_body = method
-                break
-    assert method_body is not None, "AqualinkClient._update_vr_robot_data missing"
-    # Body should be just a docstring + one delegating call expression.
-    # The check is structural: <=3 top-level statements (docstring + delegate
-    # + optional trailing blank). Pre-R25 had ~30 top-level statements.
-    assert len(method_body.body) <= 3, (
-        f"_update_vr_robot_data has {len(method_body.body)} top-level "
-        f"statements post-R25; expected <=3 (docstring + delegate). Did a "
-        f"regression re-inline the parser body?"
-    )
-    source = ast.unparse(method_body)
-    assert "_require_protocol('vr').parse_status" in source, (
-        "_update_vr_robot_data must delegate to _require_protocol('vr').parse_status"
-    )
+    R25 left four near-identical ``_update_<family>_robot_data`` seams, and
+    the two callers (polled path + realtime push path) each carried their own
+    if/elif chain to choose between them — the coordinator's copy reaching
+    through to the client's privates to do it. 3.0.0-rc.4 collapsed all of
+    that into one public dispatch driven by the ``protocols`` registry, so
+    the family lists can no longer drift apart.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from custom_components.iaqualink_robots.client import AqualinkClient
+
+    client = AqualinkClient.__new__(AqualinkClient)
+    client._device_type = "vr"
+
+    protocol = MagicMock()
+    with patch(
+        "custom_components.iaqualink_robots.client.get_protocol",
+        return_value=protocol,
+    ) as get_protocol:
+        result: dict = {}
+        client.apply_robot_data({"payload": {}}, result)
+
+    get_protocol.assert_called_once_with("vr")
+    protocol.parse_status.assert_called_once_with(client, {"payload": {}}, result)
+
+
+def test_apply_robot_data_is_a_noop_for_unknown_device_type() -> None:
+    """An unrecognised family must degrade, not crash.
+
+    The polled path has already filled in a coherent offline-shaped result by
+    the time this is called, so skipping device-specific parsing is the safe
+    behaviour if the cloud ever reports a family we don't parse yet.
+    """
+    from unittest.mock import patch
+
+    from custom_components.iaqualink_robots.client import AqualinkClient
+
+    client = AqualinkClient.__new__(AqualinkClient)
+    client._device_type = "some_future_robot"
+
+    with patch(
+        "custom_components.iaqualink_robots.client.get_protocol",
+        return_value=None,
+    ):
+        result: dict = {"status": "connected"}
+        client.apply_robot_data({"payload": {}}, result)
+
+    assert result == {"status": "connected"}

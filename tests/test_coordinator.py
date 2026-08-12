@@ -1125,7 +1125,6 @@ def _build_client_for_command() -> object:
     client._id = "user-id"
     client._auth_token = "tok"
     client._app_client_id = "acid"
-    client._debug_mode = False
     # Cloud roundtrip stubbed; the command method's wait_for completes immediately.
     client.set_cleaner_state = AsyncMock(return_value={"ok": True})
     # post_command_i2d is the i2d path; not exercised for `device_type="vr"` tests
@@ -1855,9 +1854,10 @@ async def test_apply_realtime_envelope_pushes_via_async_set_updated_data(
     # whose `serial_number` field is a MagicMock auto-attribute. The two tests
     # that don't assert on serial_number tolerated this silently pre-fix.
     client.serial = "TEST"
-    client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
-    client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
-    client._pending_stop_reset = None
+    client.apply_robot_data = AqualinkClient.apply_robot_data.__get__(client)
+    client.supports_realtime_shadow = True
+    client.apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
+    client.has_pending_stop_reset = False
     client._include_seconds_remaining = True
     client._stepper_adj_time = 15
     client._activity = None
@@ -1918,9 +1918,10 @@ async def test_apply_realtime_envelope_does_not_call_async_request_refresh(
     # whose `serial_number` field is a MagicMock auto-attribute. The two tests
     # that don't assert on serial_number tolerated this silently pre-fix.
     client.serial = "TEST"
-    client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
-    client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
-    client._pending_stop_reset = None
+    client.apply_robot_data = AqualinkClient.apply_robot_data.__get__(client)
+    client.supports_realtime_shadow = True
+    client.apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
+    client.has_pending_stop_reset = False
     client._include_seconds_remaining = True
     client._stepper_adj_time = 15
     client._activity = None
@@ -1988,9 +1989,10 @@ async def test_apply_realtime_envelope_clears_desired_state_on_natural_completio
     # whose `serial_number` field is a MagicMock auto-attribute. The two tests
     # that don't assert on serial_number tolerated this silently pre-fix.
     client.serial = "TEST"
-    client._update_vr_robot_data = AqualinkClient._update_vr_robot_data.__get__(client)
-    client._apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
-    client._pending_stop_reset = None
+    client.apply_robot_data = AqualinkClient.apply_robot_data.__get__(client)
+    client.supports_realtime_shadow = True
+    client.apply_pending_stop_reset = MagicMock(side_effect=lambda d: d)
+    client.has_pending_stop_reset = False
     client._include_seconds_remaining = True
     client._stepper_adj_time = 15
     client._activity = None

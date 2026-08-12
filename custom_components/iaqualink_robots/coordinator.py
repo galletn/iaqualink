@@ -11,8 +11,8 @@ facing :class:`~.client.AqualinkClient`. It owns:
   deep-merged shadow envelope and pushes via ``async_set_updated_data``
   without a refresh roundtrip
 - P10 lifecycle: fire-and-forget task tracking + bounded cleanup
-- HA-bound stepper-adjust business logic (browser_mod notification fallback,
-  debounce, refresh wiring)
+- HA-bound stepper-adjust business logic (debounce, translated
+  ServiceValidationError / HomeAssistantError reporting, refresh wiring)
 
 The cloud client (auth, REST, websocket, command surface) lives in
 ``client.py``. Pure date/time helpers live in ``parsing.py``.
@@ -29,14 +29,18 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    HomeAssistantError,
+    ServiceValidationError,
+)
 from homeassistant.util import dt as dt_util
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 from .client import AqualinkClient, AuthFailedError
-from .const import LONG_OUTAGE_THRESHOLD_SECONDS
+from .const import DOMAIN, LONG_OUTAGE_THRESHOLD_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,7 +53,6 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         hass: HomeAssistant,
         client: AqualinkClient,
         interval: float,
-        debug_mode: bool = False,
     ) -> None:
         super().__init__(
             hass,
@@ -59,7 +62,6 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         )
         self.client = client
         self.client.set_hass(hass)  # Set hass reference for translations
-        self._debug_mode: bool = debug_mode
         self._last_data: dict[str, Any] = {}
         self._consecutive_failures: int = 0
         # Wall-clock timestamp of the first failure in the current outage
@@ -236,21 +238,21 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             # and HA's coordinator-level auth escalation kicks in.
             raise
         except Exception as e:
-            _LOGGER.debug(f"Error handling real-time update: {e}")
+            _LOGGER.debug("Error handling real-time update: %s", e)
 
     async def _apply_realtime_envelope(self, envelope: dict[str, Any]) -> None:
         """Apply a merged shadow envelope to coordinator state without polling (story C4-ws).
 
-        Invoked by ``AqualinkClient._websocket_listener`` with the deep-merge of
-        the cached baseline (last successful ``_ws_subscribe`` response) and the
+        Invoked by the client's websocket listener with the deep-merge of the
+        cached baseline (last successful ``_ws_subscribe`` response) and the
         inbound StateReported delta. The envelope therefore has the same shape
-        the per-device-type parsers (``_update_vr_robot_data`` etc.) already
-        expect, so we re-use the parser unchanged on the push path — no
-        ``fetch_status`` HTTP roundtrip, no debouncer delay, target ~<200 ms
-        latency from cloud → entity (AC #4).
+        the per-device-type parsers already expect, so the push path re-uses
+        ``client.apply_robot_data`` unchanged — no ``fetch_status`` HTTP
+        roundtrip, no debouncer delay, target ~<200 ms latency from cloud →
+        entity (AC #4).
 
         Re-uses the post-fetch orchestration from ``_async_update_data`` (natural
-        cleaning→idle clearing, ``_apply_pending_stop_reset``, failure-counter
+        cleaning→idle clearing, ``apply_pending_stop_reset``, failure-counter
         reset, adaptive polling update, ``_last_data`` snapshot) so the two
         update paths (polled & pushed) keep `self.data` semantically identical.
 
@@ -280,30 +282,22 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             except (KeyError, TypeError):
                 pass  # Keep the preserved value from _last_data.
 
-            # Dispatch to the existing per-device-type parser. The envelope was
-            # built from the cached baseline merged with the inbound delta, so
-            # the parsers see a full canonical shape and behave identically to
-            # the polled path.
-            device_type = client.device_type
-            if device_type == "vr":
-                client._update_vr_robot_data(envelope, result)
-            elif device_type == "vortrax":
-                client._update_vortrax_robot_data(envelope, result)
-            elif device_type == "cyclobat":
-                client._update_cyclobat_robot_data(envelope, result)
-            elif device_type == "cyclonext":
-                client._update_cyclonext_robot_data(envelope, result)
-            else:
+            # Dispatch to the per-device-type parser. The envelope was built
+            # from the cached baseline merged with the inbound delta, so the
+            # parsers see a full canonical shape and behave identically to the
+            # polled path.
+            if not client.supports_realtime_shadow:
                 # i2d has no shadow stream; if we somehow got here, bail without
                 # mutating state so the polled HTTP path stays canonical.
                 _LOGGER.debug(
                     "Skipping realtime envelope apply for device_type=%r (no shadow stream)",
-                    device_type,
+                    client.device_type,
                 )
                 return
+            client.apply_robot_data(envelope, result)
 
             # Honour a queued manual-stop reset (H6) on the push path too.
-            client._apply_pending_stop_reset(result)
+            client.apply_pending_stop_reset(result)
 
             # Natural-completion detector (PR #94 fix): if the user-visible
             # activity transitioned cleaning → idle without a manual stop in
@@ -312,16 +306,16 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             if (
                 self._last_data.get("activity") == "cleaning"
                 and result.get("activity") == "idle"
-                and not client._pending_stop_reset
+                and not client.has_pending_stop_reset
             ):
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Robot finished cleaning naturally (realtime push) - clearing desired state to prevent auto-restart"
                 )
                 try:
                     await client.clear_desired_state()
                 except Exception as e:
                     _LOGGER.warning(
-                        f"Failed to clear desired state after natural completion (push path): {e}"
+                        "Failed to clear desired state after natural completion (push path): %s", e
                     )
 
             # Successful push counts as a successful update — reset outage state
@@ -329,7 +323,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             # healthy without waiting for the next polled cycle (story H7).
             self._consecutive_failures = 0
             self._first_failure_at = None
-            client._reset_websocket_failures()
+            client.reset_websocket_failures()
 
             # Adaptive polling: a state-bearing push is fresh evidence the
             # robot is active or recently commanded, so feed the same signal
@@ -347,7 +341,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             # ConfigEntryAuthFailed: surface to HA so reauth fires (H10 precedent).
             raise
         except Exception as e:  # noqa: BLE001 - listener task isolation
-            _LOGGER.debug(f"Error applying realtime envelope: {e}")
+            _LOGGER.debug("Error applying realtime envelope: %s", e)
 
     def schedule_task(
         self, coro: "Coroutine[Any, Any, Any]"
@@ -428,11 +422,11 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
 
         try:
             self._websocket_listener_task = asyncio.create_task(
-                self.client._websocket_listener()
+                self.client.run_websocket_listener()
             )
             _LOGGER.debug("Started websocket listener for real-time updates")
         except Exception as e:
-            _LOGGER.warning(f"Failed to start websocket listener: {e}")
+            _LOGGER.warning("Failed to start websocket listener: %s", e)
 
     async def _stop_websocket_listener(self) -> None:
         """Stop the websocket listener task.
@@ -481,10 +475,10 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             current_interval = self.update_interval.total_seconds() if self.update_interval else self._base_interval
             if abs(current_interval - new_interval) > 0.5:
                 self.update_interval = timedelta(seconds=new_interval)
-                _LOGGER.debug(f"Adaptive polling: {current_activity} -> {new_interval}s interval")
+                _LOGGER.debug("Adaptive polling: %s -> %ss interval", current_activity, new_interval)
 
         except Exception as e:
-            _LOGGER.debug(f"Error updating polling interval: {e}")
+            _LOGGER.debug("Error updating polling interval: %s", e)
 
     def _mark_recent_activity(self) -> None:
         """Mark recent activity to trigger faster polling temporarily."""
@@ -520,12 +514,12 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             # This prevents the cloud from auto-restarting the robot
             if (self._last_data.get("activity") == "cleaning" and
                 merged_data.get("activity") == "idle" and
-                    not self.client._pending_stop_reset):  # Not a manual stop
-                _LOGGER.info("Robot finished cleaning naturally - clearing desired state to prevent auto-restart")
+                    not self.client.has_pending_stop_reset):  # Not a manual stop
+                _LOGGER.debug("Robot finished cleaning naturally - clearing desired state to prevent auto-restart")
                 try:
                     await self.client.clear_desired_state()
                 except Exception as e:
-                    _LOGGER.warning(f"Failed to clear desired state after natural completion: {e}")
+                    _LOGGER.warning("Failed to clear desired state after natural completion: %s", e)
 
             # Reset failure count + outage timestamp on successful update.
             # H7: clearing ``_first_failure_at`` here flips
@@ -536,7 +530,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             self._first_failure_at = None
 
             # Reset websocket failure count on successful status update
-            self.client._reset_websocket_failures()
+            self.client.reset_websocket_failures()
 
             # Adaptive polling based on robot activity for CPU efficiency
             self._update_polling_interval(merged_data)
@@ -572,16 +566,14 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
             if self._first_failure_at is None:
                 self._first_failure_at = dt_util.utcnow()
 
-            # Get detailed error information
-            import traceback
-            error_details = traceback.format_exc()
-
             if not self.is_long_outage:
-                if self._debug_mode:
-                    _LOGGER.warning(
-                        f"Update failed (attempt {self._consecutive_failures}, "
-                        f"outage age {self._outage_age_seconds():.0f}s "
-                        f"< {LONG_OUTAGE_THRESHOLD_SECONDS}s threshold): {err}")
+                _LOGGER.warning(
+                    "Update failed (attempt %s, "
+                    "outage age %.0fs "
+                    "< %ss threshold): %s",
+                    self._consecutive_failures,
+                    self._outage_age_seconds(),
+                    LONG_OUTAGE_THRESHOLD_SECONDS, err)
 
                 # Return last known good data if available to keep entity available.
                 # Entity `available` properties also consult `is_long_outage`,
@@ -603,11 +595,17 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                         "error_state": "connection_failed"
                     }
             else:
-                _LOGGER.error(
-                    f"Update failed after {self._consecutive_failures} attempts "
-                    f"({self._outage_age_seconds():.0f}s outage, "
-                    f"> {LONG_OUTAGE_THRESHOLD_SECONDS}s threshold): {err}"
-                    f"\nDetails:\n{error_details}")
+                # The traceback is formatted here, not before the branch:
+                # at SCAN_INTERVAL=3s a pre-computed format_exc() ran on every
+                # failed poll of an outage and was then thrown away in the
+                # short-blip path below.
+                _LOGGER.exception(
+                    "Update failed after %s attempts (%.0fs outage, > %ss threshold): %s",
+                    self._consecutive_failures,
+                    self._outage_age_seconds(),
+                    LONG_OUTAGE_THRESHOLD_SECONDS,
+                    err,
+                )
                 # Long-outage threshold exceeded — raise UpdateFailed so HA
                 # marks the entity unavailable. The `is_long_outage` gate on
                 # entity `available` properties also short-circuits to False
@@ -669,8 +667,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         :meth:`async_reduce_fifteen_minutes` (R24).
 
         Owns the HA-side concerns the client helper doesn't: the
-        3-second debounce on ``_last_timing_command``, the
-        browser_mod-or-persistent notification fallback, and the
+        3-second debounce on ``_last_timing_command`` and the
         post-command ``async_request_refresh``.
 
         ``client_method`` is the unbound-but-pre-bound coroutine to
@@ -678,6 +675,21 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         ``self.client.reduce_fifteen_minutes``). The default messages
         are the user-visible fallbacks when the client helper's
         ``result.message`` is missing.
+
+        Outcome reporting (changed in 3.0.0-rc.4)
+        -----------------------------------------
+        This method used to call ``browser_mod.notification`` and fall
+        back to ``persistent_notification.create`` for all three outcomes
+        (debounced / succeeded / failed). Two problems: an integration
+        must not depend on a custom frontend component being installed,
+        and creating a notification for an ordinary successful command is
+        exactly the log/UI spam this release is removing.
+
+        Now: a debounced press raises ``ServiceValidationError`` (HA shows
+        it inline on the offending action, and it is classed as a user
+        error, not an integration bug), a failed command raises
+        ``HomeAssistantError``, and success is silent — the time-remaining
+        entities already reflect it after the refresh below.
         """
         if self.client.device_type not in {"vr", "vortrax"}:
             return
@@ -687,68 +699,33 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         debounce_seconds = 3
 
         if time_since_last < debounce_seconds:
-            wait_msg = (
-                f"Please wait {debounce_seconds - time_since_last:.1f} more "
-                "seconds before next timing adjustment."
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="timing_command_rate_limited",
+                translation_placeholders={
+                    "seconds": f"{debounce_seconds - time_since_last:.1f}",
+                },
             )
-            try:
-                await self.hass.services.async_call(
-                    "browser_mod",
-                    "notification",
-                    {
-                        "message": wait_msg,
-                        "duration": 2000,
-                        "action_text": "OK",
-                    },
-                )
-            except Exception:
-                await self.hass.services.async_call(
-                    "persistent_notification",
-                    "create",
-                    {
-                        "title": "Rate Limited",
-                        "message": wait_msg,
-                        "notification_id": f"timing_rate_limit_{self.client.robot_id}",
-                    },
-                )
-            return
 
         self._last_timing_command = current_time
 
         result = await client_method()
 
-        if result and isinstance(result, dict):
-            if result.get("success"):
-                try:
-                    await self.hass.services.async_call(
-                        "browser_mod",
-                        "notification",
-                        {
-                            "message": result.get("message", success_message_default),
-                            "duration": 4000,
-                            "action_text": "OK",
-                        },
-                    )
-                except Exception:
-                    await self.hass.services.async_call(
-                        "persistent_notification",
-                        "create",
-                        {
-                            "title": "Pool Robot",
-                            "message": result.get("message", success_message_default),
-                            "notification_id": f"robot_time_change_{self.client.serial}",
-                        },
-                    )
-            else:
-                await self.hass.services.async_call(
-                    "persistent_notification",
-                    "create",
-                    {
-                        "title": "Pool Robot Error",
-                        "message": result.get("message", failure_message_default),
-                        "notification_id": f"robot_error_{self.client.serial}",
-                    },
-                )
+        if isinstance(result, dict) and not result.get("success"):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="timing_command_failed",
+                translation_placeholders={
+                    "error": str(result.get("message", failure_message_default)),
+                },
+            )
+
+        _LOGGER.debug(
+            "Cleaning time adjusted by %s minutes: %s",
+            delta_minutes,
+            result.get("message", success_message_default)
+            if isinstance(result, dict) else success_message_default,
+        )
 
         await self.async_request_refresh()
 
@@ -805,10 +782,10 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
         # P10 review F3: wrap in wait_for so a stuck TLS shutdown can't
         # strand the unload — symmetric with the other two phases.
         try:
-            await asyncio.wait_for(self.client._close_websocket(), timeout=5.0)
+            await asyncio.wait_for(self.client.close_websocket(), timeout=5.0)
         except asyncio.TimeoutError:
             _LOGGER.warning(
-                "client._close_websocket() did not return within 5s; abandoning wait"
+                "client.close_websocket() did not return within 5s; abandoning wait"
             )
 
         _LOGGER.debug(

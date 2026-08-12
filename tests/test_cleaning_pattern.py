@@ -61,7 +61,6 @@ def _client() -> Any:
     c._activity = None
     c._fan_speed = None
     c._include_seconds_remaining = False
-    c._debug_mode = False
     c._features = [PATTERN_FEATURE]
     c._status_history = []
     c._status_stabilization_window = 30

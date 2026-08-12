@@ -38,7 +38,6 @@ def _make_client() -> Any:
     c._device_type = "i2d_robot"
     c._activity = None
     c._fan_speed = None
-    c._debug_mode = False
     return c
 
 

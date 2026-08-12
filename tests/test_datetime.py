@@ -54,7 +54,6 @@ def _build_client() -> AqualinkClient:
     client = AqualinkClient.__new__(AqualinkClient)
     client._device_type = "vr"
     client._serial = "TEST-SERIAL"
-    client._debug_mode = False
     client._include_seconds_remaining = True
     client._hass = None
     return client

@@ -37,7 +37,6 @@ These tests lock in:
 from __future__ import annotations
 
 import ast
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -68,7 +67,6 @@ def _build_stepper_client(
     client._id = "user-id"
     client._auth_token = "tok"
     client._app_client_id = "acid"
-    client._debug_mode = False
     # Stubs.
     client.set_cleaner_state = AsyncMock(return_value={"ok": True})
     client._should_use_websocket = MagicMock(return_value=True)
@@ -446,3 +444,106 @@ async def test_coordinator_helper_dispatches_reduce_to_client_reduce() -> None:
 
     coord.client.reduce_fifteen_minutes.assert_awaited_once()
     coord.client.add_fifteen_minutes.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Outcome reporting (3.0.0-rc.4).
+#
+# The coordinator used to report every stepper outcome — debounced, succeeded
+# and failed — through `browser_mod.notification`, falling back to
+# `persistent_notification.create`. That made the integration depend on a
+# custom frontend component being installed and turned an ordinary successful
+# command into a UI pop-up. It now raises translated HA exceptions instead,
+# and says nothing at all on success.
+# ---------------------------------------------------------------------------
+
+
+def _stepper_coordinator(result: dict | None = None, last_command: float = 0.0):
+    """Build a bare coordinator wired for the stepper path."""
+    from custom_components.iaqualink_robots.coordinator import (
+        AqualinkDataUpdateCoordinator,
+    )
+
+    coord = AqualinkDataUpdateCoordinator.__new__(AqualinkDataUpdateCoordinator)
+    coord.client = MagicMock()
+    coord.client.device_type = "vr"
+    coord.client.robot_id = "rid"
+    coord.client.serial = "ser"
+    coord.client.add_fifteen_minutes = AsyncMock(
+        return_value=result if result is not None else {"success": True, "message": "ok"}
+    )
+    coord.client.reduce_fifteen_minutes = AsyncMock(
+        return_value=result if result is not None else {"success": True, "message": "ok"}
+    )
+    coord._last_timing_command = last_command
+    coord.hass = MagicMock()
+    coord.hass.services = MagicMock()
+    coord.hass.services.async_call = AsyncMock()
+    coord.async_request_refresh = AsyncMock()
+    return coord
+
+
+@pytest.mark.asyncio
+async def test_stepper_success_creates_no_notification() -> None:
+    """A successful adjustment must be silent — no service calls at all."""
+    coord = _stepper_coordinator()
+
+    await coord.async_add_fifteen_minutes()
+
+    coord.hass.services.async_call.assert_not_awaited()
+    coord.async_request_refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stepper_debounce_raises_service_validation_error() -> None:
+    """A press inside the 3s debounce window is a user error, not an
+    integration failure — HA renders ServiceValidationError inline on the
+    offending action rather than as an integration bug report."""
+    import time
+
+    from homeassistant.exceptions import ServiceValidationError
+
+    coord = _stepper_coordinator(last_command=time.time())
+
+    with pytest.raises(ServiceValidationError):
+        await coord.async_add_fifteen_minutes()
+
+    # The cloud must not be touched, and no notification service invoked.
+    coord.client.add_fifteen_minutes.assert_not_awaited()
+    coord.hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stepper_failure_raises_home_assistant_error() -> None:
+    """A failed adjustment surfaces as HomeAssistantError so the UI shows it."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    coord = _stepper_coordinator(
+        result={"success": False, "message": "Connection issues detected."}
+    )
+
+    with pytest.raises(HomeAssistantError):
+        await coord.async_add_fifteen_minutes()
+
+    coord.hass.services.async_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stepper_no_browser_mod_dependency_in_source() -> None:
+    """Regression guard: coordinator.py must not call browser_mod again.
+
+    Depending on a custom frontend component is disallowed for HA core and
+    is a smell for HACS; the previous implementation called
+    ``browser_mod.notification`` with a ``persistent_notification`` fallback.
+    """
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parent.parent
+        / "custom_components"
+        / "iaqualink_robots"
+        / "coordinator.py"
+    ).read_text(encoding="utf-8")
+
+    assert "browser_mod" not in source
+    assert "persistent_notification" not in source

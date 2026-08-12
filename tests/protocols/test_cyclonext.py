@@ -756,29 +756,31 @@ def test_coordinator_cyclonext_branch_routes_through_protocol(
     )
 
 
-def test_update_cyclonext_robot_data_delegates_to_protocol() -> None:
-    client_path = (
-        Path(__file__).parent.parent.parent
-        / "custom_components"
-        / "iaqualink_robots"
-        / "client.py"
+def test_apply_robot_data_dispatches_cyclonext() -> None:
+    """3.0.0-rc.4 replaced the per-family ``_update_<family>_robot_data``
+    seams with one ``AqualinkClient.apply_robot_data`` driven by the
+    ``protocols`` registry — see the same test in ``test_vr.py`` for why.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from custom_components.iaqualink_robots.client import AqualinkClient
+    from custom_components.iaqualink_robots.protocols import (
+        CycloNextProtocol,
+        get_protocol,
     )
-    tree = ast.parse(client_path.read_text(encoding="utf-8"))
-    method_body = None
-    for class_node in ast.walk(tree):
-        if not isinstance(class_node, ast.ClassDef) or class_node.name != "AqualinkClient":
-            continue
-        for method in class_node.body:
-            if (
-                isinstance(method, ast.FunctionDef)
-                and method.name == "_update_cyclonext_robot_data"
-            ):
-                method_body = method
-                break
-    assert method_body is not None
-    assert len(method_body.body) <= 3, (
-        f"_update_cyclonext_robot_data has {len(method_body.body)} top-level "
-        f"statements post-R25-cyclonext; expected <=3."
-    )
-    source = ast.unparse(method_body)
-    assert "_require_protocol('cyclonext').parse_status" in source
+
+    assert isinstance(get_protocol("cyclonext"), CycloNextProtocol)
+
+    client = AqualinkClient.__new__(AqualinkClient)
+    client._device_type = "cyclonext"
+
+    protocol = MagicMock()
+    with patch(
+        "custom_components.iaqualink_robots.client.get_protocol",
+        return_value=protocol,
+    ) as get_protocol_mock:
+        result: dict = {}
+        client.apply_robot_data({"payload": {}}, result)
+
+    get_protocol_mock.assert_called_once_with("cyclonext")
+    protocol.parse_status.assert_called_once_with(client, {"payload": {}}, result)

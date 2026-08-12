@@ -35,7 +35,6 @@ def _client(device_type: str) -> Any:
     c._activity = None
     c._fan_speed = None
     c._include_seconds_remaining = False
-    c._debug_mode = False
     c._ebox_data = {}
     return c
 

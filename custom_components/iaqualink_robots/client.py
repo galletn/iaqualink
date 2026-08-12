@@ -3,10 +3,10 @@
 Owns:
 - authentication (Cognito login + JWT exp decode + safety-margin handling)
 - REST session lifecycle (``_cloud_session`` reuses HA's pooled connector
-  with a private cookie jar â€” L19)
+  with a private cookie jar — L19)
 - persistent websocket connection + listener + state-shadow merge (C4-ws)
 - per-device command surface (start/stop/pause/return/set_fan_speed/
-  remote-steering/stepper-adjust) â€” dispatched through ``protocols/``
+  remote-steering/stepper-adjust) — dispatched through ``protocols/``
 
 The HA-side ``AqualinkDataUpdateCoordinator`` (and its adaptive-polling
 logic, realtime-envelope apply, and entity lifecycle plumbing) lives in
@@ -64,7 +64,7 @@ def _i2d_protocol() -> I2DProtocol:
     ``RobotProtocol`` base) without each site repeating the cast.
 
     Uses an explicit ``isinstance``-guard + ``raise`` (NOT an ``assert``)
-    so the type narrowing survives ``python -O`` â€” assertions are
+    so the type narrowing survives ``python -O`` — assertions are
     stripped under optimisation and the helper would silently return
     whatever ``get_protocol`` returned, defeating the whole point of
     centralising the cast (review MED).
@@ -84,7 +84,7 @@ def _require_protocol(device_type: str) -> RobotProtocol:
     assertion so the call-site type-narrows to non-None. Every call here
     is gated by ``self._device_type in (...)`` checks that match the keys
     in ``_DEVICE_PROTOCOLS``, so the None branch is unreachable at runtime
-    â€” the explicit raise replaces what would otherwise be a silent
+    — the explicit raise replaces what would otherwise be a silent
     ``AttributeError`` on a future cloud surfacing an unknown
     ``device_type`` value.
     """
@@ -103,7 +103,7 @@ class AuthFailedError(Exception):
     Converted to ``homeassistant.exceptions.ConfigEntryAuthFailed`` at the
     coordinator boundary so HA stops polling and dispatches its reauth flow.
     Keeping this as a separate internal type lets the REST/WS layers stay
-    framework-agnostic â€” only ``AqualinkDataUpdateCoordinator._async_update_data``
+    framework-agnostic — only ``AqualinkDataUpdateCoordinator._async_update_data``
     translates to the HA-specific exception.
     """
 
@@ -124,7 +124,7 @@ def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
     """Decode the `exp` claim from a JWT and return an aware-UTC datetime.
 
     The Cognito `IdToken` is a standard JWT (`<header>.<payload>.<signature>`).
-    The middle segment is base64url-encoded JSON containing an `exp` field â€”
+    The middle segment is base64url-encoded JSON containing an `exp` field —
     seconds-since-epoch. We trust transport security (TLS) and the iAqualink
     auth flow rather than verifying the signature, which would require
     fetching Cognito's public JWKs.
@@ -143,7 +143,7 @@ def _decode_jwt_exp(token: str | None) -> datetime.datetime | None:
         payload_b64 = parts[1]
         # base64url decoding needs the trailing '=' padding (multiple of 4).
         # M19 AC#9: split the negative-modulo trick into two named steps for
-        # readability. Behavior unchanged â€” `test_unpadded_base64_handled`
+        # readability. Behavior unchanged — `test_unpadded_base64_handled`
         # still covers it.
         missing = (4 - len(payload_b64) % 4) % 4
         padded = payload_b64 + "=" * missing
@@ -199,7 +199,6 @@ class AqualinkClient:
         username: str,
         password: str,
         api_key: str,
-        debug_mode: bool = False,
         include_seconds_remaining: bool = True,
     ) -> None:
         self._username: str = username
@@ -252,7 +251,6 @@ class AqualinkClient:
             "Connection": "keep-alive",
             "Accept": "*/*",
         }
-        self._debug_mode: bool = debug_mode
         # Persistent websocket connection for commands and status updates
         self._ws_connection: aiohttp.ClientWebSocketResponse | None = None
         self._ws_session: aiohttp.ClientSession | None = None
@@ -261,7 +259,7 @@ class AqualinkClient:
         self._coordinator_callback: Callable[[], Awaitable[None]] | None = None
         # C4-ws: push-callback wired by the coordinator. The WS listener uses
         # this to apply a merged shadow envelope directly via
-        # ``coordinator.async_set_updated_data`` â€” no HTTP refresh roundtrip.
+        # ``coordinator.async_set_updated_data`` — no HTTP refresh roundtrip.
         self._realtime_push_callback: (
             Callable[[dict[str, Any]], Awaitable[None]] | None
         ) = None
@@ -269,7 +267,7 @@ class AqualinkClient:
         # The WS listener deep-merges inbound shadow deltas into this baseline
         # so the existing per-device-type parsers (which expect a complete
         # envelope) keep working unchanged on the push path. ``None`` until the
-        # first successful ``_ws_subscribe`` â€” the listener falls back to
+        # first successful ``_ws_subscribe`` — the listener falls back to
         # ``_coordinator_callback`` (refresh) for that first race window.
         self._last_ws_envelope: dict[str, Any] | None = None
         # C4-ws: tuple of (state, errorState, prCyc, cycleStartTime, stepper,
@@ -311,7 +309,7 @@ class AqualinkClient:
         # family doesn't crash on first read. Typed as ``Any`` because the
         # VR / vortrax / cyclobat / cyclonext families write a translation
         # key string here while the i2d family writes the cloud-side int
-        # code â€” the inconsistency predates P6 and tightening it is out
+        # code — the inconsistency predates P6 and tightening it is out
         # of scope.
         self._fan_speed: Any = None
 
@@ -342,16 +340,18 @@ class AqualinkClient:
         if self._ws_consecutive_failures >= self._max_ws_failures_before_offline:
             # Multiple consecutive connection failures - communication is likely offline
             _LOGGER.warning(
-                f"Device communication marked offline after {self._ws_consecutive_failures} consecutive websocket connection failures")
+                "Device communication marked offline after %s consecutive websocket connection failures",
+                self._ws_consecutive_failures)
             return "offline"
         elif self._last_known_status:
             # Temporary connection failure - preserve last known status
             _LOGGER.debug(
-                f"Preserving last known status '{self._last_known_status}' during temporary connection failure ({error_context})")
+                "Preserving last known status '%s' during temporary connection failure (%s)",
+                self._last_known_status, error_context)
             return self._last_known_status
         else:
             # No previous status available - default to a neutral status
-            _LOGGER.debug(f"No previous status available, using 'unknown' for {error_context}")
+            _LOGGER.debug("No previous status available, using 'unknown' for %s", error_context)
             return "unknown"
 
     def _should_use_websocket(self) -> bool:
@@ -366,14 +366,15 @@ class AqualinkClient:
         # During high connection failure periods, consider temporary fallback to HTTP-only operations
         if self._ws_consecutive_failures >= 3:
             _LOGGER.debug(
-                f"Websocket operations temporarily suspended due to {self._ws_consecutive_failures} consecutive connection failures")
+                "Websocket operations temporarily suspended due to %s consecutive connection failures",
+                self._ws_consecutive_failures)
             return False
         return True
 
     def _reset_websocket_failures(self) -> None:
         """Reset websocket failure counters after successful operation."""
         if self._ws_consecutive_failures > 0:
-            _LOGGER.debug(f"Resetting websocket failure counter (was {self._ws_consecutive_failures})")
+            _LOGGER.debug("Resetting websocket failure counter (was %s)", self._ws_consecutive_failures)
             self._ws_consecutive_failures = 0
 
     def _stabilize_status(self, raw_status: str) -> str:
@@ -414,8 +415,7 @@ class AqualinkClient:
         if self._stable_status is None:
             self._stable_status = raw_status
             self._last_status_change_time = current_time
-            if self._debug_mode:
-                _LOGGER.debug(f"Status stabilizer: Initial status set to '{raw_status}'")
+            _LOGGER.debug("Status stabilizer: Initial status set to '%s'", raw_status)
             return self._stable_status
 
         # If the current raw status matches our stable status, just return it
@@ -427,9 +427,9 @@ class AqualinkClient:
 
         if time_since_last_change < self._minimum_status_duration:
             # Not enough time has passed - keep the stable status
-            if self._debug_mode:
-                _LOGGER.debug(
-                    f"Status stabilizer: Ignoring rapid change from '{self._stable_status}' to '{raw_status}' (only {time_since_last_change:.1f}s elapsed, need {self._minimum_status_duration}s)")
+            _LOGGER.debug(
+                "Status stabilizer: Ignoring rapid change from '%s' to '%s' (only %.1fs elapsed, need %ss)",
+                self._stable_status, raw_status, time_since_last_change, self._minimum_status_duration)
             return self._stable_status
 
         # Enough time has passed - analyze the recent history to see if the new status is consistent
@@ -444,17 +444,17 @@ class AqualinkClient:
 
         # If most recent readings are the new status, accept the change
         if total_recent_count > 0 and (matching_count / total_recent_count) >= 0.7:  # 70% threshold
-            if self._debug_mode:
-                _LOGGER.debug(
-                    f"Status stabilizer: Status change accepted from '{self._stable_status}' to '{raw_status}' ({matching_count}/{total_recent_count} recent readings match)")
+            _LOGGER.debug(
+                "Status stabilizer: Status change accepted from '%s' to '%s' (%s/%s recent readings match)",
+                self._stable_status, raw_status, matching_count, total_recent_count)
             self._stable_status = raw_status
             self._last_status_change_time = current_time
             return self._stable_status
         else:
             # Not enough consistency - keep the stable status
-            if self._debug_mode:
-                _LOGGER.debug(
-                    f"Status stabilizer: Status change rejected from '{self._stable_status}' to '{raw_status}' ({matching_count}/{total_recent_count} recent readings match, need â‰¥70%)")
+            _LOGGER.debug(
+                "Status stabilizer: Status change rejected from '%s' to '%s' (%s/%s recent readings match, need ≥70%%)",
+                self._stable_status, raw_status, matching_count, total_recent_count)
             return self._stable_status
 
     @property
@@ -500,7 +500,7 @@ class AqualinkClient:
         and exposed via ``coordinator.title``) so log lines render
         "Add 15 minutes command sent to Pool Robot" instead of the
         synthetic "vr_R23X12345678" fallback. Pre-review this looked at
-        ``getattr(self, "_title", ...)`` â€” but ``_title`` lives on the
+        ``getattr(self, "_title", ...)`` — but ``_title`` lives on the
         coordinator, NOT the client, so the getattr always fell through
         to the synthetic.
         """
@@ -532,9 +532,9 @@ class AqualinkClient:
 
         When ``self._hass`` is set, constructs a per-call ``aiohttp.ClientSession``
         that **reuses HA's pooled connector** (so the integration keeps the
-        connection-pooling win â€” no fresh TLS handshake per request) but with
+        connection-pooling win — no fresh TLS handshake per request) but with
         its own private ``aiohttp.DummyCookieJar``. ``connector_owner=False``
-        means closing the wrapper does NOT close the connector â€” HA still
+        means closing the wrapper does NOT close the connector — HA still
         owns its lifecycle. This is cheap: ``aiohttp.ClientSession``
         construction is pure Python (no I/O); the TCP/TLS work is in the
         connector, which we share.
@@ -546,11 +546,11 @@ class AqualinkClient:
         ``AWSALBCORS``) on responses. Without isolation, those persist
         for the HA-process lifetime and auto-attach to any other
         integration's requests within a matching ``Domain``/``Path``
-        scope â€” the symmetric risk to the header leak the story's
+        scope — the symmetric risk to the header leak the story's
         original AC#1 defended via headers-on-request. A
         ``DummyCookieJar`` silently drops every cookie set on every
         cloud response, defending the leak without affecting auth (we
-        don't rely on cookies â€” every request carries its own
+        don't rely on cookies — every request carries its own
         Authorization header).
 
         When ``self._hass`` is None (config-flow discovery via the
@@ -559,15 +559,15 @@ class AqualinkClient:
         that closes on exit. Pooling has no value for a single-shot
         discovery probe.
 
-        Headers are NOT passed to the session here â€” callers MUST attach
+        Headers are NOT passed to the session here — callers MUST attach
         them per-request (``session.get(url, headers=...)``). The shared
         HA connector is shared across many integrations, so setting default
         headers on the wrapper would still leak auth via the request path
-        if the wrapper were ever reused â€” keep headers per-request for
+        if the wrapper were ever reused — keep headers per-request for
         the same defence-in-depth reasoning the original L19 patch used.
 
         Note: the websocket session at ``_ensure_websocket_connection`` is
-        intentionally owned by this client (not shared) â€” it holds the live
+        intentionally owned by this client (not shared) — it holds the live
         WS connection and is closed via ``_close_websocket``.
 
         There is no longer any third-party HTTP call to isolate: the Vortrax
@@ -650,8 +650,8 @@ class AqualinkClient:
              silently lying to the UI about what the robot was doing.
 
           2) **Stale zombie reset.** If a poll never lands (long
-             disconnect, network drop), the next successful poll â€” possibly
-             minutes later â€” applied the reset and clobbered whatever the
+             disconnect, network drop), the next successful poll — possibly
+             minutes later — applied the reset and clobbered whatever the
              robot was doing by then.
 
         H6 guards (1) with a state-awareness check against
@@ -660,7 +660,7 @@ class AqualinkClient:
 
         Extracted into a method so the logic is directly unit-testable
         without spinning up the full ``fetch_status`` cloud round-trip
-        (see ``tests/test_coordinator.py`` â€” apply-pending-stop-reset block).
+        (see ``tests/test_coordinator.py`` — apply-pending-stop-reset block).
         """
         if not self._pending_stop_reset or not self._pending_stop_reset_at:
             return data
@@ -702,7 +702,7 @@ class AqualinkClient:
         single Cognito refresh. The second caller acquires the lock after the
         first completed, sees a valid token, and returns without re-auth.
 
-        ``force=True`` bypasses the recheck â€” used by the 401-retry paths so
+        ``force=True`` bypasses the recheck — used by the 401-retry paths so
         the spec's "refresh-then-retry" mitigation does an actual Cognito
         round-trip even when the local token still looks valid (a cloud-side
         revocation looks locally-valid until the response says otherwise).
@@ -718,11 +718,9 @@ class AqualinkClient:
             # attribute the caller gates on removes the asymmetry that could
             # let a partial-failure state slip past the recheck.
             if not force and self._id_token and not self._is_token_expired():
-                if self._debug_mode:
-                    _LOGGER.debug("Skipping authenticate â€” token still valid")
+                _LOGGER.debug("Skipping authenticate — token still valid")
                 return
-            if self._debug_mode:
-                _LOGGER.debug("Authenticating with iAqualink API...")
+            _LOGGER.debug("Authenticating with iAqualink API...")
             try:
                 payload = {
                     "apiKey": self._api_key,
@@ -758,11 +756,9 @@ class AqualinkClient:
                 # conservative 1h (minus the safety margin, consistent with the
                 # decoded happy path) if the token is missing/malformed.
                 self._token_expires_at = _resolve_token_expiry(self._id_token)
-                if self._debug_mode:
-                    _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
+                _LOGGER.debug("Authentication successful, token expires at: %s", self._token_expires_at)
             except asyncio.CancelledError:
-                if self._debug_mode:
-                    _LOGGER.debug("Authentication cancelled")
+                _LOGGER.debug("Authentication cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
 
     async def _discover_device(self, target_serial: str | None = None) -> None:
@@ -785,7 +781,7 @@ class AqualinkClient:
 
             for device in devices:
                 device_type = device.get("device_type")
-                _LOGGER.debug("ðŸ” Devices found : %s", device)
+                _LOGGER.debug("Devices found : %s", device)
                 if device_type in supported_device_types:
                     serial = device["serial_number"]
                     compatible_devices.append(device)
@@ -794,10 +790,10 @@ class AqualinkClient:
                     if target_serial and serial == target_serial:
                         self._serial = serial
                         self._device_type = device_type
-                        _LOGGER.debug(f"âœ… Target device selected: {device_type} - {serial}")
+                        _LOGGER.debug("Target device selected: %s - %s", device_type, serial)
                         return
                 else:
-                    _LOGGER.debug(f"â© Device ignored (unsupported type): {device_type}")
+                    _LOGGER.debug("Device ignored (unsupported type): %s", device_type)
 
             # If we have compatible devices but weren't looking for a specific one,
             # select the first compatible device
@@ -805,20 +801,19 @@ class AqualinkClient:
                 device = compatible_devices[0]
                 self._serial = device["serial_number"]
                 self._device_type = device["device_type"]
-                _LOGGER.debug(f"âœ… Device selected: {self._device_type} - {self._serial}")
+                _LOGGER.debug("Device selected: %s - %s", self._device_type, self._serial)
                 return
 
             # If we were looking for a specific device but didn't find it,
             # or if we found no compatible devices at all
             if target_serial:
-                _LOGGER.error(f"âŒ Target device {target_serial} not found in the device list.")
+                _LOGGER.error("Target device %s not found in the device list.", target_serial)
                 raise RuntimeError(f"Target device {target_serial} not found")
             else:
-                _LOGGER.error("âŒ No compatible robot found in the device list.")
+                _LOGGER.error("No compatible robot found in the device list.")
                 raise RuntimeError("No supported robot found")
         except asyncio.CancelledError:
-            if self._debug_mode:
-                _LOGGER.debug("Device discovery cancelled")
+            _LOGGER.debug("Device discovery cancelled")
             raise  # Re-raise cancellation to preserve shutdown behavior
 
     @classmethod
@@ -896,19 +891,19 @@ class AqualinkClient:
 
                 self._last_ws_activity = time.time()
                 self._ws_consecutive_failures = 0  # Reset failure counter on success
-                _LOGGER.debug(f"Established persistent websocket connection for robot {self._serial}")
+                _LOGGER.debug("Established persistent websocket connection for robot %s", self._serial)
                 return
 
             except aiohttp.WSServerHandshakeError as e:
                 # Typed status check replaces the pre-H9b fragile substring
-                # match on the exception message (AC#3). 401 is auth-failed â†’
+                # match on the exception message (AC#3). 401 is auth-failed →
                 # surface to coordinator as AuthFailedError so HA reauth
                 # fires. 403 stays an error log.
                 self._ws_consecutive_failures += 1
                 await self._close_websocket()
                 if e.status == 401:
                     _LOGGER.warning(
-                        f"Websocket authentication failed (attempt {attempt + 1}): {e}"
+                        "Websocket authentication failed (attempt %s): %s", attempt + 1, e
                     )
                     if attempt < max_retries - 1:
                         # Try a token refresh and retry once. If re-auth itself
@@ -919,46 +914,46 @@ class AqualinkClient:
                             await self._authenticate(force=True)
                         except asyncio.CancelledError:
                             # H9b review P7: never swallow cancellation as auth
-                            # failure â€” propagate the shutdown signal.
+                            # failure — propagate the shutdown signal.
                             raise
                         except Exception as auth_err:
-                            _LOGGER.debug(f"Re-auth after WS 401 failed: {auth_err}")
+                            _LOGGER.debug("Re-auth after WS 401 failed: %s", auth_err)
                             # H9b review P8: include both the WS handshake error
                             # and the re-auth error in the message so the traceback
                             # surfaces full context (was only `auth_err` before).
                             raise AuthFailedError(
                                 f"WS handshake 401 ({e}) and re-auth failed: {auth_err}"
                             ) from e
-                        _LOGGER.debug(f"Retrying websocket connection in {retry_delay}s...")
+                        _LOGGER.debug("Retrying websocket connection in %ss...", retry_delay)
                         await asyncio.sleep(retry_delay)
                         retry_delay *= 1.5
                         continue
                     # H9b review P6: drop the misleading "fall through to next
-                    # iteration" comment â€” we `raise` immediately here.
+                    # iteration" comment — we `raise` immediately here.
                     raise AuthFailedError(f"WS handshake 401 after {max_retries} attempts") from e
                 if e.status == 403:
-                    _LOGGER.error(f"Websocket access forbidden (attempt {attempt + 1}): {e}")
+                    _LOGGER.error("Websocket access forbidden (attempt %s): %s", attempt + 1, e)
                 else:
-                    _LOGGER.warning(f"Websocket handshake failed (attempt {attempt + 1}): {e}")
+                    _LOGGER.warning("Websocket handshake failed (attempt %s): %s", attempt + 1, e)
                 if attempt < max_retries - 1:
-                    _LOGGER.debug(f"Retrying websocket connection in {retry_delay}s...")
+                    _LOGGER.debug("Retrying websocket connection in %ss...", retry_delay)
                     await asyncio.sleep(retry_delay)
                     retry_delay *= 1.5
                 else:
                     _LOGGER.error(
-                        f"Failed to establish websocket connection after {max_retries} attempts: {e}"
+                        "Failed to establish websocket connection after %s attempts: %s", max_retries, e
                     )
                     raise
             except Exception as e:
                 self._ws_consecutive_failures += 1
                 await self._close_websocket()
-                _LOGGER.warning(f"Websocket connection failed (attempt {attempt + 1}): {e}")
+                _LOGGER.warning("Websocket connection failed (attempt %s): %s", attempt + 1, e)
                 if attempt < max_retries - 1:
-                    _LOGGER.debug(f"Retrying websocket connection in {retry_delay}s...")
+                    _LOGGER.debug("Retrying websocket connection in %ss...", retry_delay)
                     await asyncio.sleep(retry_delay)
                     retry_delay *= 1.5  # Exponential backoff
                 else:
-                    _LOGGER.error(f"Failed to establish websocket connection after {max_retries} attempts: {e}")
+                    _LOGGER.error("Failed to establish websocket connection after %s attempts: %s", max_retries, e)
                     raise
 
     async def _close_websocket(self) -> None:
@@ -968,7 +963,7 @@ class AqualinkClient:
                 if not self._ws_connection.closed:
                     await self._ws_connection.close()
             except Exception as e:
-                _LOGGER.debug(f"Error closing websocket connection: {e}")
+                _LOGGER.debug("Error closing websocket connection: %s", e)
             finally:
                 self._ws_connection = None
 
@@ -977,7 +972,7 @@ class AqualinkClient:
                 if not self._ws_session.closed:
                     await self._ws_session.close()
             except Exception as e:
-                _LOGGER.debug(f"Error closing websocket session: {e}")
+                _LOGGER.debug("Error closing websocket session: %s", e)
             finally:
                 self._ws_session = None
 
@@ -1010,11 +1005,11 @@ class AqualinkClient:
         - **AC #2 + AC #4 (direct push):** on a real state change, the inbound
           ``reported`` delta is deep-merged into the cached baseline envelope
           and dispatched once via ``await self._realtime_push_callback(...)``
-          â€” which the coordinator implements as ``async_set_updated_data``
+          — which the coordinator implements as ``async_set_updated_data``
           (no fetch_status, no debouncer, no HTTP roundtrip).
 
         The pre-C4-ws code fired up to two ``asyncio.create_task`` callbacks
-        per message (one for stepper, one for state) â€” both unawaited, both
+        per message (one for stepper, one for state) — both unawaited, both
         funnelling into ``async_request_refresh``. A chatty cloud session
         therefore produced multiple overlapping refresh fan-outs per inbound
         StateReported plus a duplicated dispatch when a single message
@@ -1047,114 +1042,19 @@ class AqualinkClient:
             }
 
             await self._ws_connection.send_json(subscribe_req)
-            _LOGGER.debug(f"Started websocket listener for robot {self._serial}")
+            _LOGGER.debug("Started websocket listener for robot %s", self._serial)
 
             # Listen for incoming messages
             async for message in self._ws_connection:
                 if message.type == aiohttp.WSMsgType.TEXT:
                     message_count += 1
-                    try:
-                        message_json = message.json()
-                    except Exception as parse_err:
-                        _LOGGER.debug(f"Could not JSON-decode websocket message: {parse_err}")
-                        continue
-
-                    # P12 AC #1 + AC #2: typed classifier. ``parse_ws_message``
-                    # narrows the raw dict into ``WSStateEnvelope`` /
-                    # ``WSAck`` / ``WSError`` / ``WSHeartbeat``, or returns
-                    # None (logging DEBUG on truly unknown shapes,
-                    # rate-limited so a chatty cloud session doesn't spam).
-                    typed_payload = parse_ws_message(message_json)
-                    if typed_payload is None:
-                        continue
-                    # Only StateStreamer envelopes carry the reported delta
-                    # we apply. ACK / error / heartbeat messages are
-                    # recognised + classified above so they don't trip the
-                    # "unknown shape" DEBUG log, but they have no payload
-                    # for us to act on here. The runtime ``service`` check
-                    # narrows the value to a state envelope; mypy can't
-                    # prove TypedDict-union narrowing through a ``.get()``
-                    # call so the explicit ``cast`` here documents the
-                    # invariant without a runtime cost (TypedDict is just
-                    # a dict at runtime, ``cast`` is a no-op).
-                    if typed_payload.get("service") != "StateStreamer":
-                        continue
-                    state_envelope = cast(WSStateEnvelope, typed_payload)
-                    # P12 AC #3: top-level field validation â€” warns once
-                    # per missing field per process so cloud-shape drift
-                    # surfaces with an actionable log line.
-                    if not validate_state_envelope_fields(state_envelope):
-                        continue
-                    # AC #1 (original C4-ws intake filter): extract the
-                    # reported delta from the typed envelope. ``None`` here
-                    # covers StateReported envelopes with no
-                    # ``equipment.robot`` content (status-only pings).
-                    inbound_reported = self._parse_ws_state_message(state_envelope)
+                    inbound_reported = self._extract_ws_state_delta(message)
                     if inbound_reported is None:
                         continue
 
                     try:
-                        # First-push fallback: no cached baseline yet â†’ route
-                        # to the refresh callback so the next ``_ws_subscribe``
-                        # seeds ``_last_ws_envelope``. Avoids parsing a partial
-                        # envelope that would silently overwrite cached fields
-                        # with parser defaults.
-                        if self._last_ws_envelope is None:
-                            _LOGGER.debug(
-                                "WS state arrived before baseline envelope cached; falling back to refresh"
-                            )
-                            if self._coordinator_callback is not None:
-                                await self._coordinator_callback()
-                            continue
-
-                        # Deep-merge the inbound delta onto the cached baseline.
-                        # ``_deep_merge_dict`` is pure and returns a fresh dict
-                        # so the in-memory baseline isn't mutated under us if
-                        # the callback yields mid-merge.
-                        cached_reported = (
-                            self._last_ws_envelope
-                            .get("payload", {})
-                            .get("robot", {})
-                            .get("state", {})
-                            .get("reported", {})
-                        )
-                        merged_reported = self._deep_merge_dict(
-                            cached_reported, inbound_reported
-                        )
-
-                        # AC #3: dedup. Build a signature of the user-visible
-                        # state and bail if it's identical to what we last
-                        # pushed. Defends against the cloud emitting repeated
-                        # StateReported events with no functional change.
-                        merged_robot = (
-                            merged_reported.get("equipment", {}).get("robot", {})
-                        )
-                        new_signature = self._state_signature(merged_robot)
-                        if new_signature == self._last_applied_state_signature:
-                            continue
-
-                        # Refresh the baseline so the next inbound delta sees
-                        # this push as part of the merge target.
-                        self._last_ws_envelope["payload"]["robot"]["state"]["reported"] = (
-                            merged_reported
-                        )
-                        self._last_applied_state_signature = new_signature
-
-                        # AC #2 + AC #4: single awaited push. The coordinator
-                        # implements this as ``async_set_updated_data`` â€” no
-                        # HTTP roundtrip, no debouncer.
-                        if self._realtime_push_callback is not None:
-                            await self._realtime_push_callback(self._last_ws_envelope)
+                        if await self._apply_ws_state_delta(inbound_reported):
                             applied_count += 1
-                        elif self._coordinator_callback is not None:
-                            # Defensive fallback if push wasn't wired (shouldn't
-                            # happen post-C4-ws, but keep behaviour intact).
-                            await self._coordinator_callback()
-                        # P12: clear the drift-warning sets on each
-                        # successful push so a transient partial-payload
-                        # phase doesn't permanently silence the WARNING /
-                        # DEBUG diagnostics.
-                        reset_drift_warnings()
                     except asyncio.CancelledError:
                         raise
                     except ConfigEntryAuthFailed:
@@ -1164,7 +1064,7 @@ class AqualinkClient:
                         raise
                     except Exception as apply_err:  # noqa: BLE001 - per-message isolation
                         _LOGGER.debug(
-                            f"Error applying realtime websocket message: {apply_err}"
+                            "Error applying realtime websocket message: %s", apply_err
                         )
 
                 elif message.type == aiohttp.WSMsgType.ERROR:
@@ -1182,19 +1082,134 @@ class AqualinkClient:
             # MUST propagate up to HA's coordinator so reauth dispatches.
             # Pre-fix, the broad-except below caught the propagated value
             # (ConfigEntryAuthFailed inherits from Exception) and demoted
-            # it to WARNING â€” the listener task died silently and the
+            # it to WARNING — the listener task died silently and the
             # user never saw the reauth prompt until the next polled
             # cycle's 401 hit. Same H10 precedent as the C4-cmd command
             # sites: never swallow auth failures.
             _LOGGER.debug("Websocket listener exiting on ConfigEntryAuthFailed")
             raise
         except Exception as e:
-            _LOGGER.warning(f"Websocket listener error: {e}")
+            _LOGGER.warning("Websocket listener error: %s", e)
         finally:
             _LOGGER.debug(
-                f"Websocket listener stopped after {message_count} messages "
-                f"({applied_count} applied)"
+                "Websocket listener stopped after %s messages (%s applied)",
+                message_count, applied_count
             )
+
+    # -- _websocket_listener helpers ---------------------------------------
+    #
+    # Split out of what used to be a single 200-line method with two
+    # independent concerns (classify the inbound message / apply the delta)
+    # tangled inside one loop body. Behaviour is unchanged: the intake filter
+    # returns None for everything that used to `continue`, and the apply step
+    # returns True exactly when a push happened (the old `applied_count += 1`).
+
+    def _extract_ws_state_delta(
+        self, message: aiohttp.WSMessage
+    ) -> dict[str, Any] | None:
+        """Return the ``reported`` delta of a state message, else ``None``.
+
+        Rejects, in order: undecodable JSON, message shapes the typed
+        classifier doesn't recognise, non-StateStreamer services (ACK /
+        error / heartbeat), envelopes failing top-level field validation,
+        and StateReported envelopes carrying no ``equipment.robot`` content
+        (status-only pings).
+        """
+        try:
+            message_json = message.json()
+        except Exception as parse_err:
+            _LOGGER.debug("Could not JSON-decode websocket message: %s", parse_err)
+            return None
+
+        # P12 AC #1 + AC #2: typed classifier. ``parse_ws_message`` narrows
+        # the raw dict into ``WSStateEnvelope`` / ``WSAck`` / ``WSError`` /
+        # ``WSHeartbeat``, or returns None (logging DEBUG on truly unknown
+        # shapes, rate-limited so a chatty cloud session doesn't spam).
+        typed_payload = parse_ws_message(message_json)
+        if typed_payload is None:
+            return None
+
+        # Only StateStreamer envelopes carry the reported delta we apply.
+        # ACK / error / heartbeat messages are recognised + classified above
+        # so they don't trip the "unknown shape" DEBUG log, but they have no
+        # payload for us to act on. The runtime ``service`` check narrows the
+        # value to a state envelope; mypy can't prove TypedDict-union
+        # narrowing through a ``.get()`` call, so the explicit ``cast``
+        # documents the invariant without a runtime cost (TypedDict is just a
+        # dict at runtime, ``cast`` is a no-op).
+        if typed_payload.get("service") != "StateStreamer":
+            return None
+        state_envelope = cast(WSStateEnvelope, typed_payload)
+
+        # P12 AC #3: top-level field validation — warns once per missing
+        # field per process so cloud-shape drift surfaces with an actionable
+        # log line.
+        if not validate_state_envelope_fields(state_envelope):
+            return None
+
+        # AC #1 (original C4-ws intake filter).
+        return self._parse_ws_state_message(state_envelope)
+
+    async def _apply_ws_state_delta(self, inbound_reported: dict[str, Any]) -> bool:
+        """Merge one inbound delta into the baseline and push it.
+
+        Returns ``True`` when a realtime push actually happened, ``False``
+        when the delta was deduped away or routed to the refresh fallback.
+        """
+        # First-push fallback: no cached baseline yet → route to the refresh
+        # callback so the next ``_ws_subscribe`` seeds ``_last_ws_envelope``.
+        # Avoids parsing a partial envelope that would silently overwrite
+        # cached fields with parser defaults.
+        if self._last_ws_envelope is None:
+            _LOGGER.debug(
+                "WS state arrived before baseline envelope cached; falling back to refresh"
+            )
+            if self._coordinator_callback is not None:
+                await self._coordinator_callback()
+            return False
+
+        # Deep-merge the inbound delta onto the cached baseline.
+        # ``_deep_merge_dict`` is pure and returns a fresh dict so the
+        # in-memory baseline isn't mutated under us if the callback yields
+        # mid-merge.
+        cached_reported = (
+            self._last_ws_envelope
+            .get("payload", {})
+            .get("robot", {})
+            .get("state", {})
+            .get("reported", {})
+        )
+        merged_reported = self._deep_merge_dict(cached_reported, inbound_reported)
+
+        # AC #3: dedup. Build a signature of the user-visible state and bail
+        # if it's identical to what we last pushed. Defends against the cloud
+        # emitting repeated StateReported events with no functional change.
+        merged_robot = merged_reported.get("equipment", {}).get("robot", {})
+        new_signature = self._state_signature(merged_robot)
+        if new_signature == self._last_applied_state_signature:
+            return False
+
+        # Refresh the baseline so the next inbound delta sees this push as
+        # part of the merge target.
+        self._last_ws_envelope["payload"]["robot"]["state"]["reported"] = merged_reported
+        self._last_applied_state_signature = new_signature
+
+        # AC #2 + AC #4: single awaited push. The coordinator implements this
+        # as ``async_set_updated_data`` — no HTTP roundtrip, no debouncer.
+        applied = False
+        if self._realtime_push_callback is not None:
+            await self._realtime_push_callback(self._last_ws_envelope)
+            applied = True
+        elif self._coordinator_callback is not None:
+            # Defensive fallback if push wasn't wired (shouldn't happen
+            # post-C4-ws, but keep behaviour intact).
+            await self._coordinator_callback()
+
+        # P12: clear the drift-warning sets on each successful push so a
+        # transient partial-payload phase doesn't permanently silence the
+        # WARNING / DEBUG diagnostics.
+        reset_drift_warnings()
+        return applied
 
     def set_coordinator_callback(
         self, callback: Callable[[], Awaitable[None]]
@@ -1209,8 +1224,8 @@ class AqualinkClient:
 
         The push callback is invoked with a deep-merged shadow envelope
         (the same shape ``_ws_subscribe`` returns). The coordinator implements
-        the merge target â€” running the per-device-type parser on the envelope
-        and calling ``async_set_updated_data`` â€” so the WS listener side stays
+        the merge target — running the per-device-type parser on the envelope
+        and calling ``async_set_updated_data`` — so the WS listener side stays
         a pure dispatcher.
 
         Distinct from ``set_coordinator_callback`` (the legacy callback that
@@ -1232,7 +1247,7 @@ class AqualinkClient:
         """Return a new dict with ``overlay`` overlaid onto ``base`` (story C4-ws).
 
         Recursive on nested dicts. Scalars and lists are replaced wholesale
-        (no list concatenation) â€” matches the AWS IoT shadow document
+        (no list concatenation) — matches the AWS IoT shadow document
         semantics where a delta's array overwrites the previous array.
 
         Used by the WS listener to apply incremental ``StateReported`` deltas
@@ -1240,7 +1255,7 @@ class AqualinkClient:
         parsers receive a complete, well-shaped dict regardless of whether
         the cloud pushed a full state or just the changed sub-tree.
 
-        Does NOT mutate either input â€” returns a fresh dict so the cached
+        Does NOT mutate either input — returns a fresh dict so the cached
         baseline isn't side-channelled into divergent states by callers
         retaining references to it.
         """
@@ -1270,7 +1285,7 @@ class AqualinkClient:
         body so the AC #1 filter is independently testable.
 
         P12: accepts ``WSStateEnvelope`` (the classified-typed shape from
-        ``parse_ws_message``) in addition to the raw ``dict[str, Any]`` â€”
+        ``parse_ws_message``) in addition to the raw ``dict[str, Any]`` —
         the runtime ``isinstance`` + ``service`` / ``event`` guards stay
         because callers in test fixtures may pass raw dicts directly.
         """
@@ -1291,21 +1306,21 @@ class AqualinkClient:
         # push at the empty-robot check and the entire device family
         # silently fell back to polled-only updates (~3 s latency vs the
         # ~<200 ms push path everyone else got). Fallback to ``robot.1``
-        # lets the parser see cyclonext deltas â€” the per-device-type
+        # lets the parser see cyclonext deltas — the per-device-type
         # apply path at ``_apply_realtime_envelope`` already dispatches
         # to ``_update_cyclonext_robot_data`` which reads from the same
         # key.
         robot = equipment.get("robot") or equipment.get("robot.1") or {}
         if not isinstance(robot, dict) or not robot:
-            # No equipment.robot content â†’ nothing to apply. Heartbeats and
+            # No equipment.robot content → nothing to apply. Heartbeats and
             # status-only messages land here.
             return None
         # ``reported`` is a TypedDict in the WSStateEnvelope path; widen to
         # the legacy ``dict[str, Any]`` return shape downstream consumers
         # (``_deep_merge_dict``, ``_apply_realtime_envelope``) expect.
         # Runtime ``isinstance`` guard (review MED) before the cast so a
-        # drifted ``reported`` value (string, scalar, list â€” possible if
-        # the cloud emits a partial-render shape) surfaces as ``None`` â€”
+        # drifted ``reported`` value (string, scalar, list — possible if
+        # the cloud emits a partial-render shape) surfaces as ``None`` —
         # the listener's per-message ``continue`` handles None gracefully.
         # Without this guard the cast would type-promise a dict and the
         # next call (``_deep_merge_dict``) would hit AttributeError mid-
@@ -1318,7 +1333,7 @@ class AqualinkClient:
     def _state_signature(robot_data: dict[str, Any]) -> tuple[Any, ...]:
         """Build a comparable signature of the ``equipment.robot`` fields that drive entity state (story C4-ws).
 
-        The dedup check at AC #3 ("60 s of unchanged WS chatter â†’ 0
+        The dedup check at AC #3 ("60 s of unchanged WS chatter → 0
         ``_async_update_data`` invocations") relies on this signature being
         stable when the user-visible state hasn't moved. Includes top-level
         VR/vortrax/cyclonext keys *and* cyclobat's nested ``main`` /
@@ -1352,7 +1367,7 @@ class AqualinkClient:
             # instead of ``errorState``). Without these the signature
             # tuple was all-None for cyclonext, every consecutive push
             # deduped against the previous all-None tuple, and only the
-            # FIRST push after baseline-cache ever fired â€” real
+            # FIRST push after baseline-cache ever fired — real
             # subsequent state changes were silently dropped.
             # ``_update_cyclonext_robot_data`` at L1985 confirms these
             # are the fields the parser actually reads.
@@ -1380,17 +1395,20 @@ class AqualinkClient:
         """Get device model information."""
         # Return cached model if available and valid (not "Unknown" or "Not Supported")
         if self._model and self._model not in ["Unknown", "Not Supported"]:
-            _LOGGER.debug(f"Using cached model: {self._model}")
+            _LOGGER.debug("Using cached model: %s", self._model)
             return self._model
 
         # Check if we should retry fetching the model
         should_retry = self._should_retry_model_fetch()
         if not should_retry:
-            _LOGGER.debug(f"Skipping model fetch - too many recent attempts. Current model: {self._model or 'None'}")
+            _LOGGER.debug(
+                "Skipping model fetch - too many recent attempts. Current model: %s",
+                self._model or 'None')
             return self._model or "Unknown"
 
         _LOGGER.debug(
-            f"Fetching model for device type: {self._device_type}, serial: {self._serial} (attempt {self._model_fetch_attempts + 1})")
+            "Fetching model for device type: %s, serial: %s (attempt %s)",
+            self._device_type, self._serial, self._model_fetch_attempts + 1)
 
         # Record this attempt
         self._model_fetch_attempts += 1
@@ -1411,11 +1429,11 @@ class AqualinkClient:
 
             # Handle empty or malformed responses
             if not data or not isinstance(data, dict):
-                _LOGGER.debug(f"Empty or invalid features response for device {self._serial}")
+                _LOGGER.debug("Empty or invalid features response for device %s", self._serial)
                 return self._handle_model_fetch_failure()
 
             # Capture the capability list regardless of whether a model comes
-            # back â€” the two are independent, and a device with no `model` still
+            # back — the two are independent, and a device with no `model` still
             # advertises its features (verified on a live vr robot that returned
             # 19 features and no model at all).
             advertised = data.get('features')
@@ -1431,14 +1449,14 @@ class AqualinkClient:
             if features_model is not None and features_model != "":
                 self._model = str(features_model)  # Cache the successful result
                 self._model_fetch_attempts = 0  # Reset attempts on success
-                _LOGGER.debug(f"Successfully cached model from features API: {self._model}")
+                _LOGGER.debug("Successfully cached model from features API: %s", self._model)
                 return self._model
 
             # Only mark as "Not Supported" if we get an explicit indication
             if data.get('modelSupported') is False:
                 self._model = "Not Supported"
                 self._model_fetch_attempts = 0  # Don't retry for "Not Supported"
-                _LOGGER.debug(f"Model not supported for device {self._serial}")
+                _LOGGER.debug("Model not supported for device %s", self._serial)
                 return self._model
 
             # The features call gave no model. Fall back to the part number.
@@ -1451,7 +1469,7 @@ class AqualinkClient:
             return self._handle_model_fetch_failure()
 
         except Exception as e:
-            _LOGGER.debug(f"Error getting device model: {e}")
+            _LOGGER.debug("Error getting device model: %s", e)
             return self._handle_model_fetch_failure()
 
     def _apply_last_cloud_contact(
@@ -1535,7 +1553,7 @@ class AqualinkClient:
         Replaces ``_get_vortrax_model_from_web``, which scraped
         ``zodiac-poolcare.com`` for vortrax only. That page is now a
         client-rendered shell with no product names in the HTML, so the scrape
-        returned "Unknown" for every input â€” verified against the three known
+        returned "Unknown" for every input — verified against the three known
         part numbers. This path needs no network call beyond the shadow the
         client already fetches, and it works for every family rather than one.
 
@@ -1559,7 +1577,7 @@ class AqualinkClient:
 
         if not pn or not isinstance(pn, str):
             # An empty string is the *expected* value for a device whose cloud
-            # record was never fully provisioned â€” which is also exactly why
+            # record was never fully provisioned — which is also exactly why
             # its features call carried no model. Nothing to resolve.
             _LOGGER.debug(
                 "No completeCleanerPn for device (got %r); model unresolvable",
@@ -1574,7 +1592,7 @@ class AqualinkClient:
             return known
 
         _LOGGER.info(
-            "Unrecognised cleaner part number %s â€” please report it so the "
+            "Unrecognised cleaner part number %s — please report it so the "
             "model can be mapped (see MODEL_BY_CLEANER_PN in const.py)", pn,
         )
         return f"Unknown ({pn})"
@@ -1592,7 +1610,7 @@ class AqualinkClient:
         # If we've tried too many times, give up
         max_attempts = 5
         if self._model_fetch_attempts >= max_attempts:
-            _LOGGER.debug(f"Max model fetch attempts ({max_attempts}) reached for device {self._serial}")
+            _LOGGER.debug("Max model fetch attempts (%s) reached for device %s", max_attempts, self._serial)
             return False
 
         # If we haven't tried recently, allow retry
@@ -1606,7 +1624,7 @@ class AqualinkClient:
 
         time_since_last = dt_util.utcnow() - self._model_last_attempt
         if time_since_last.total_seconds() >= (wait_minutes * 60):
-            _LOGGER.debug(f"Retrying model fetch after {wait_minutes} minute wait")
+            _LOGGER.debug("Retrying model fetch after %s minute wait", wait_minutes)
             return True
 
         return False
@@ -1616,14 +1634,14 @@ class AqualinkClient:
         # Only cache "Unknown" if we've exhausted all attempts
         if self._model_fetch_attempts >= 5:
             self._model = "Unknown"
-            _LOGGER.debug(f"Caching 'Unknown' model after {self._model_fetch_attempts} failed attempts")
+            _LOGGER.debug("Caching 'Unknown' model after %s failed attempts", self._model_fetch_attempts)
         else:
-            _LOGGER.debug(f"Model fetch failed (attempt {self._model_fetch_attempts}/5), will retry later")
+            _LOGGER.debug("Model fetch failed (attempt %s/5), will retry later", self._model_fetch_attempts)
 
         return self._model or "Unknown"
 
     async def _update_i2d_robot(self) -> dict[str, Any]:
-        """Update status for i2d_robot type â€” HTTP fetch + protocol parse.
+        """Update status for i2d_robot type — HTTP fetch + protocol parse.
 
         R25-i2d (R27 fold): the 138-line god-function body now lives as
         ``I2DProtocol.parse_status`` + the pure ``parse_i2d_payload``
@@ -1647,59 +1665,84 @@ class AqualinkClient:
         i2d.parse_status(self, data, result)
         return result
 
+    def _degraded_result(self, error_state: str) -> dict[str, Any]:
+        """Minimal but coherent payload for a shadow read that produced nothing.
+
+        Callers return this instead of raising so the entity keeps rendering
+        a sane state (and the coordinator's outage ladder decides when to go
+        unavailable). ``_get_resilient_status`` is deliberately NOT wrapped in
+        ``_stabilize_status`` here — matching the pre-refactor behaviour of
+        all four early-return paths this replaces.
+        """
+        return {
+            "serial_number": self._serial,
+            "device_type": self._device_type,
+            "status": self._get_resilient_status(error_state),
+            "error_state": error_state,
+        }
+
+    def _cache_ws_envelope(self, data: Any) -> None:
+        """C4-ws: snapshot the full envelope as the WS listener's merge baseline.
+
+        Deep-copied via a json round-trip to insulate the cache from later
+        in-place mutation of ``data`` (the per-device-type parsers read it but
+        shouldn't mutate; this is belt-and-braces). The ``isinstance`` guard
+        covers a defensive caller returning a non-dict on edge paths.
+        """
+        if not (isinstance(data, dict) and "payload" in data):
+            return
+        try:
+            self._last_ws_envelope = json.loads(json.dumps(data))
+        except (TypeError, ValueError) as cache_err:  # non-serialisable contents
+            _LOGGER.debug(
+                "Could not snapshot _last_ws_envelope (non-JSON-serialisable contents): %s",
+                cache_err,
+            )
+
+    def _read_reported_status(
+        self, data: Any, result: dict[str, Any], fallback_state: str
+    ) -> None:
+        """Read ``aws.status`` out of a shadow envelope into ``result``.
+
+        Raises on an unexpected envelope shape — the caller retries the
+        subscribe once before giving up, which is the historical behaviour
+        (the cloud intermittently answers a subscribe with an empty message).
+        """
+        if data and 'payload' in data:
+            raw_status = data['payload']['robot']['state']['reported']['aws']['status']
+            result["status"] = self._stabilize_status(raw_status)
+            # Store the last known good status
+            self._last_known_status = raw_status
+            self._apply_last_cloud_contact(data, result)
+        else:
+            result["status"] = self._stabilize_status(
+                self._get_resilient_status(fallback_state)
+            )
+            _LOGGER.debug("No data received from websocket: %s", data)
+
     async def _update_other_robots(self) -> dict[str, Any]:
-        """Update status for non-i2d robot types."""
+        """Update status for non-i2d robot types (the shadow-stream families)."""
         try:
             data = await self._ws_subscribe()
-            # Check if we got valid data
             if data is None:
                 _LOGGER.debug("No data received from websocket subscribe")
-                # Only increment failures if this was a websocket connection issue,
-                # not if the device is legitimately offline
-                # The get_device_status method already handles websocket failure counting
-                return {
-                    "serial_number": self._serial,
-                    "device_type": self._device_type,
-                    "status": self._get_resilient_status("no_data"),
-                    "error_state": "no_data"
-                }
+                # Failure counting for genuine websocket problems happens in
+                # get_device_status; a legitimately offline device must not
+                # inflate the counter here.
+                return self._degraded_result("no_data")
             # Reset failure count on successful websocket operation
             self._ws_consecutive_failures = 0
-            # C4-ws: cache the full envelope so the WS listener has a baseline
-            # to merge inbound shadow deltas into. Deep-copy via json round-trip
-            # to insulate the cache from later in-place mutations of ``data``
-            # (the per-device-type parsers below read it but shouldn't mutate;
-            # this is belt-and-braces). ``isinstance(data, dict)`` guards
-            # against a defensive caller returning a non-dict on edge paths.
-            if isinstance(data, dict) and "payload" in data:
-                try:
-                    self._last_ws_envelope = json.loads(json.dumps(data))
-                except (TypeError, ValueError) as cache_err:  # non-serialisable contents
-                    _LOGGER.debug(
-                        "Could not snapshot _last_ws_envelope (non-JSON-serialisable contents): %s",
-                        cache_err,
-                    )
+            self._cache_ws_envelope(data)
         except asyncio.CancelledError:
             # If cancelled during setup, return minimal data to allow integration to continue
             _LOGGER.debug("Robot update cancelled - returning minimal data")
             self._ws_consecutive_failures += 1
-            return {
-                "serial_number": self._serial,
-                "device_type": self._device_type,
-                "status": self._get_resilient_status("setup_cancelled"),
-                "error_state": "setup_cancelled"
-            }
+            return self._degraded_result("setup_cancelled")
         except Exception as e:
             # If websocket fails, increment failure count
             self._ws_consecutive_failures += 1
-            _LOGGER.debug(f"Robot update failed (attempt {self._ws_consecutive_failures}): {e}")
-
-            return {
-                "serial_number": self._serial,
-                "device_type": self._device_type,
-                "status": self._get_resilient_status("update_failed"),
-                "error_state": "update_failed"
-            }
+            _LOGGER.debug("Robot update failed (attempt %s): %s", self._ws_consecutive_failures, e)
+            return self._degraded_result("update_failed")
 
         result: dict[str, Any] = {
             "serial_number": self._serial,
@@ -1707,31 +1750,19 @@ class AqualinkClient:
         }
 
         try:
-            if data and 'payload' in data:
-                raw_status = data['payload']['robot']['state']['reported']['aws']['status']
-                result["status"] = self._stabilize_status(raw_status)
-                # Store the last known good status
-                self._last_known_status = raw_status
-                self._apply_last_cloud_contact(data, result)
-            else:
-                raw_status = self._get_resilient_status("no_data")
-                result["status"] = self._stabilize_status(raw_status)
-                result["debug"] = f"No data received: {data}" if self._debug_mode else ""
+            self._read_reported_status(data, result, "no_data")
         except Exception:
-            # Returns empty message sometimes, try second call
-            result["debug"] = str(data) if self._debug_mode else ""  # Always store a string value
+            # The cloud returns an empty message sometimes — try a second call.
+            #
+            # The former `result["debug"]` field was dropped here: it was
+            # gated on the hardcoded-False debug_mode (so always ""), was
+            # never read by any entity, and duplicated what
+            # `tools/capture_payload.py` does properly.
+            _LOGGER.debug("Websocket status read failed; retrying. Payload: %s", data)
 
             try:
                 data = await self._ws_subscribe()
-                if data and 'payload' in data:
-                    raw_status = data['payload']['robot']['state']['reported']['aws']['status']
-                    result["status"] = self._stabilize_status(raw_status)
-                    # Store the last known good status
-                    self._last_known_status = raw_status
-                    self._apply_last_cloud_contact(data, result)
-                else:
-                    raw_status = self._get_resilient_status("no_data_retry")
-                    result["status"] = self._stabilize_status(raw_status)
+                self._read_reported_status(data, result, "no_data_retry")
             except asyncio.CancelledError:
                 # If second call is also cancelled, return what we have
                 self._ws_consecutive_failures += 1
@@ -1754,15 +1785,7 @@ class AqualinkClient:
             result["last_online"] = dt_util.utc_from_timestamp(timestamp)
 
             # Only update device-specific data if we have valid payload data
-            # Update based on device type
-            if self._device_type == "vr":
-                self._update_vr_robot_data(data, result)
-            elif self._device_type == "vortrax":
-                self._update_vortrax_robot_data(data, result)
-            elif self._device_type == "cyclobat":
-                self._update_cyclobat_robot_data(data, result)
-            elif self._device_type == "cyclonext":
-                self._update_cyclonext_robot_data(data, result)
+            self.apply_robot_data(data, result)
         else:
             # H8 review follow-up: emit None instead of "unknown" string.
             # `last_online` sensor declares device_class=TIMESTAMP and HA's
@@ -1776,54 +1799,75 @@ class AqualinkClient:
 
         return result
 
-    def _update_vr_robot_data(
-        self, data: dict[str, Any], result: dict[str, Any]
-    ) -> None:
-        """Update status for VR type robot â€” delegates to VRProtocol.parse_status.
+    # ------------------------------------------------------------------
+    # Public surface for the coordinator.
+    #
+    # The coordinator used to reach through to five private client members
+    # (`_update_<family>_robot_data`, `_apply_pending_stop_reset`,
+    # `_pending_stop_reset`, `_reset_websocket_failures`, `_close_websocket`).
+    # `tests/test_static.py` already forbids that pattern for `_serial` /
+    # `_device_type` / `_title`; these are the same class of leak. The
+    # implementations stay private — these are the supported names.
+    # ------------------------------------------------------------------
 
-        R25-vr: the parser body lives on ``VRProtocol`` so each device family
-        owns its own parsing logic. This method stays as a stable seam for
-        the two callers (``fetch_status`` and ``_apply_realtime_envelope``)
-        so the push-path dispatch doesn't need to know about the protocol
-        package yet (the dispatch will collapse once all five R25 stories
-        land â€” story R26).
+    #: Families whose state arrives over the AWS IoT shadow stream. i2d speaks
+    #: the REST hex protocol only, so a realtime envelope can never be for it
+    #: and the push path must not try to parse one.
+    _SHADOW_STREAM_DEVICE_TYPES = frozenset(
+        {"vr", "cyclonext_vr", "vortrax", "cyclobat", "cyclonext"}
+    )
+
+    @property
+    def supports_realtime_shadow(self) -> bool:
+        """Whether this robot's state arrives over the websocket shadow stream."""
+        return self._device_type in self._SHADOW_STREAM_DEVICE_TYPES
+
+    @property
+    def has_pending_stop_reset(self) -> bool:
+        """Whether a manual-stop reset is queued but not yet applied (H6)."""
+        return self._pending_stop_reset is not None
+
+    def apply_pending_stop_reset(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Apply and clear a queued manual-stop reset. See H6."""
+        return self._apply_pending_stop_reset(data)
+
+    def reset_websocket_failures(self) -> None:
+        """Clear the consecutive-websocket-failure counter after a good update."""
+        self._reset_websocket_failures()
+
+    async def close_websocket(self) -> None:
+        """Close the persistent websocket connection and its session."""
+        await self._close_websocket()
+
+    async def run_websocket_listener(self) -> None:
+        """Run the realtime websocket listener until cancelled or closed."""
+        await self._websocket_listener()
+
+    def apply_robot_data(self, data: dict[str, Any], result: dict[str, Any]) -> None:
+        """Parse a cloud payload for THIS robot's family into ``result``.
+
+        The single dispatch point for both the polled path
+        (``_update_other_robots``) and the push path
+        (``coordinator._apply_realtime_envelope``). It replaces four
+        near-identical ``_update_<family>_robot_data`` seams and the two
+        copies of the if/elif chain that selected between them — one of which
+        lived in the coordinator and reached through to the client's private
+        methods to do it.
+
+        Unknown ``device_type`` values are a no-op rather than an error: the
+        polled path already fills in a coherent offline-shaped ``result``,
+        and a cloud that starts reporting a family we don't parse yet should
+        degrade to "no device-specific fields", not crash the update.
         """
-        _require_protocol("vr").parse_status(self, data, result)
-
-    def _update_cyclobat_robot_data(
-        self, data: dict[str, Any], result: dict[str, Any]
-    ) -> None:
-        """Update status for cyclobat type robot â€” delegates to
-        CycloBatProtocol.parse_status (story R25-cyclobat).
-
-        Stable 2-line seam called by both the polled path
-        (``fetch_status``) and the push path (``_apply_realtime_envelope``).
-        """
-        _require_protocol("cyclobat").parse_status(self, data, result)
-
-    def _update_vortrax_robot_data(
-        self, data: dict[str, Any], result: dict[str, Any]
-    ) -> None:
-        """Update status for vortrax type robot â€” delegates to
-        VortraxProtocol.parse_status (story R25-vortrax).
-
-        Mirrors the ``_update_vr_robot_data`` shape â€” stable 2-line seam
-        called by both the polled path (``fetch_status``) and the push
-        path (``_apply_realtime_envelope``). The legacy method stays
-        until story R26 (module split) collapses the dispatch.
-        """
-        _require_protocol("vortrax").parse_status(self, data, result)
-
-    def _update_cyclonext_robot_data(
-        self, data: dict[str, Any], result: dict[str, Any]
-    ) -> None:
-        """Update status for cyclonext type robot â€” delegates to
-        CycloNextProtocol.parse_status (story R25-cyclonext).
-
-        Stable 2-line seam called by both the polled path
-        (``fetch_status``) and the push path (``_apply_realtime_envelope``).
-        """
-        _require_protocol("cyclonext").parse_status(self, data, result)
+        protocol = get_protocol(self._device_type)
+        if protocol is None:
+            _LOGGER.debug(
+                "No protocol registered for device_type=%r; skipping "
+                "device-specific parsing",
+                self._device_type,
+            )
+            return
+        protocol.parse_status(self, data, result)
 
     async def send_login(
         self, data: str | bytes, headers: dict[str, str]
@@ -1837,32 +1881,29 @@ class AqualinkClient:
         expected JSON envelope (Cognito occasionally returns a 200 with an
         error body or a non-JSON content type). Without this, a 200-shaped
         rejection slipped through and only blew up on the ``auth["...":]``
-        dict accesses in ``_authenticate`` as ``KeyError`` â€” which the
+        dict accesses in ``_authenticate`` as ``KeyError`` — which the
         coordinator broad-except handled as transient noise and the user
         never saw the reauth prompt.
         """
         try:
             # L19: shared HA pool via _cloud_session (falls back to ephemeral
-            # session when self._hass is None â€” config-flow discovery + tests).
+            # session when self._hass is None — config-flow discovery + tests).
             # Headers go on the request, not the session, to avoid leaking
             # auth into the shared pool.
             async with self._cloud_session() as session:
                 async with session.post(URL_LOGIN, data=data, headers=headers) as response:
                     if response.status == 401:
-                        if self._debug_mode:
-                            _LOGGER.debug("Authentication failed: 401 Unauthorized.")
+                        _LOGGER.debug("Authentication failed: 401 Unauthorized.")
                         raise AuthFailedError("401 Unauthorized on send_login")
 
                     if response.status == 403:
-                        if self._debug_mode:
-                            _LOGGER.error("Authentication failed: 403 Forbidden. Check your credentials or API key.")
+                        _LOGGER.error("Authentication failed: 403 Forbidden. Check your credentials or API key.")
                         raise AuthFailedError("403 Forbidden on send_login")
 
                     content_type = response.headers.get('Content-Type', '')
                     if 'application/json' not in content_type:
                         text = await response.text()
-                        if self._debug_mode:
-                            _LOGGER.error(f"Unexpected content type: {content_type}. Response: {text[:200]}...")
+                        _LOGGER.error("Unexpected content type: %s. Response: %s...", content_type, text[:200])
                         # Cognito returns non-JSON only when the request is
                         # rejected (e.g. an HTML error page on auth failure).
                         raise AuthFailedError(
@@ -1872,8 +1913,7 @@ class AqualinkClient:
                     body: dict[str, Any] = await response.json()
                     return body
         except asyncio.CancelledError:
-            if self._debug_mode:
-                _LOGGER.debug("Login request cancelled")
+            _LOGGER.debug("Login request cancelled")
             raise  # Re-raise cancellation to preserve shutdown behavior
         raise RuntimeError("send_login exited without returning")
 
@@ -1893,7 +1933,7 @@ class AqualinkClient:
                     async with session.get(URL_GET_DEVICES, params=params, headers=headers) as response:
                         if response.status == 401:
                             if attempt == 0:
-                                _LOGGER.debug("401 on get_devices â€” refreshing token and retrying once")
+                                _LOGGER.debug("401 on get_devices — refreshing token and retrying once")
                                 await self._authenticate(force=True)
                                 # `params` carries `authentication_token` from the caller; refresh it
                                 # in-place so the retry uses the new token.
@@ -1906,8 +1946,7 @@ class AqualinkClient:
                         body: list[dict[str, Any]] = await response.json()
                         return body
             except asyncio.CancelledError:
-                if self._debug_mode:
-                    _LOGGER.debug("Get devices request cancelled")
+                _LOGGER.debug("Get devices request cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
         raise RuntimeError("get_devices exited without returning")
 
@@ -1921,12 +1960,12 @@ class AqualinkClient:
                 # L19: shared HA pool. Auth header constructed per-request so
                 # the retry path picks up the rotated `self._id_token` cleanly
                 # (it was already happening before because the loop re-entered
-                # the `with ClientSession(...)` block â€” this preserves that).
+                # the `with ClientSession(...)` block — this preserves that).
                 async with self._cloud_session() as session:
                     async with session.get(url, headers={"Authorization": self._id_token}) as response:
                         if response.status == 401:
                             if attempt == 0:
-                                _LOGGER.debug("401 on get_device_features â€” refreshing token and retrying once")
+                                _LOGGER.debug("401 on get_device_features — refreshing token and retrying once")
                                 await self._authenticate(force=True)
                                 continue  # next iteration re-reads self._id_token into a fresh request header
                             raise AuthFailedError(
@@ -1935,8 +1974,7 @@ class AqualinkClient:
                         body: dict[str, Any] = await response.json()
                         return body
             except asyncio.CancelledError:
-                if self._debug_mode:
-                    _LOGGER.debug("Get device features request cancelled")
+                _LOGGER.debug("Get device features request cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
         raise RuntimeError("get_device_features exited without returning")
 
@@ -1970,42 +2008,43 @@ class AqualinkClient:
                         continue  # Try again
                     return None
                 elif message.type == aiohttp.WSMsgType.ERROR:
-                    _LOGGER.debug(f"Websocket error during device status request: {message.data}")
+                    _LOGGER.debug("Websocket error during device status request: %s", message.data)
                     await self._close_websocket()  # Clean up error connection
                     if attempt < max_retries - 1:
                         continue  # Try again
                     return None
                 else:
                     _LOGGER.debug(
-                        f"Unexpected websocket message type {message.type} ({message.type.name if hasattr(message.type, 'name') else 'unknown'}) in device status request")
+                        "Unexpected websocket message type %s (%s) in device status request",
+                        message.type,
+                        message.type.name if hasattr(message.type, 'name') else 'unknown')
                     return None
 
             except asyncio.CancelledError:
-                if self._debug_mode:
-                    _LOGGER.debug("Get device status request cancelled")
+                _LOGGER.debug("Get device status request cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
             except AuthFailedError:
                 # H9b review P1: auth failures must propagate to the coordinator
-                # so HA reauth fires â€” never swallow them into the resilient
+                # so HA reauth fires — never swallow them into the resilient
                 # "return None" path used for transient WS noise.
                 # Sign-off P7: close is best-effort during auth-failure
-                # propagation â€” a teardown error here must NOT mask the
+                # propagation — a teardown error here must NOT mask the
                 # AuthFailedError, or the broad-except below absorbs it and
                 # reauth never fires.
                 try:
                     await self._close_websocket()
-                except Exception:  # noqa: BLE001 â€” close is best-effort
+                except Exception:  # noqa: BLE001 — close is best-effort
                     pass
                 raise
             except Exception as e:
                 if attempt < max_retries - 1:
-                    _LOGGER.debug(f"Device status attempt {attempt + 1} failed: {e}. Retrying...")
+                    _LOGGER.debug("Device status attempt %s failed: %s. Retrying...", attempt + 1, e)
                     await self._close_websocket()
                     await asyncio.sleep(0.5)  # Brief pause before retry
                 else:
                     # Only increment failure counter after all retries exhausted
                     self._ws_consecutive_failures += 1
-                    _LOGGER.debug(f"Device status websocket connection failed after retries: {e}")
+                    _LOGGER.debug("Device status websocket connection failed after retries: %s", e)
                     await self._close_websocket()
                     # Return None instead of raising to let callers handle gracefully
                     return None
@@ -2030,7 +2069,7 @@ class AqualinkClient:
                     ) as response:
                         if response.status == 401:
                             if attempt == 0:
-                                _LOGGER.debug("401 on post_command_i2d â€” refreshing token and retrying once")
+                                _LOGGER.debug("401 on post_command_i2d — refreshing token and retrying once")
                                 await self._authenticate(force=True)
                                 continue  # next iteration re-reads self._id_token
                             raise AuthFailedError(
@@ -2039,8 +2078,7 @@ class AqualinkClient:
                         body: dict[str, Any] = await response.json()
                         return body
             except asyncio.CancelledError:
-                if self._debug_mode:
-                    _LOGGER.debug("Post command i2d request cancelled")
+                _LOGGER.debug("Post command i2d request cancelled")
                 raise  # Re-raise cancellation to preserve shutdown behavior
         raise RuntimeError("post_command_i2d exited without returning")
 
@@ -2067,7 +2105,7 @@ class AqualinkClient:
                     response = await asyncio.wait_for(self._ws_connection.receive(), timeout=10)
                     if response.type == aiohttp.WSMsgType.TEXT:
                         response_data = response.json()
-                        _LOGGER.debug(f"Command response received: {response_data}")
+                        _LOGGER.debug("Command response received: %s", response_data)
                         return response_data  # Success - return immediately
                     elif response.type == aiohttp.WSMsgType.CLOSED:
                         _LOGGER.debug("Websocket closed during command, will retry")
@@ -2077,7 +2115,7 @@ class AqualinkClient:
                     _LOGGER.debug("No response received within timeout, command may still succeed")
                     return response_data  # Command sent successfully, just no response
                 except Exception as e:
-                    _LOGGER.debug(f"Error receiving response: {e}")
+                    _LOGGER.debug("Error receiving response: %s", e)
                     # Don't fail the command just because we can't get a response
                     return response_data
 
@@ -2085,20 +2123,20 @@ class AqualinkClient:
                 # H9b review P1: command-time WS 401 must propagate so HA
                 # reauth fires; the broad-except below is for transient WS
                 # noise only.
-                # Sign-off P7: best-effort close â€” see get_device_status.
+                # Sign-off P7: best-effort close — see get_device_status.
                 try:
                     await self._close_websocket()
-                except Exception:  # noqa: BLE001 â€” close is best-effort
+                except Exception:  # noqa: BLE001 — close is best-effort
                     pass
                 raise
             except Exception as e:
                 if attempt < max_retries - 1:
-                    _LOGGER.debug(f"Websocket command attempt {attempt + 1} failed: {e}. Retrying...")
+                    _LOGGER.debug("Websocket command attempt %s failed: %s. Retrying...", attempt + 1, e)
                     await self._close_websocket()
                     await asyncio.sleep(1)  # Brief pause before retry
                 else:
                     # Only log as warning, not error, to avoid device unavailability
-                    _LOGGER.warning(f"Websocket command failed after {max_retries} attempts: {e}")
+                    _LOGGER.warning("Websocket command failed after %s attempts: %s", max_retries, e)
                     await self._close_websocket()
 
         return response_data
@@ -2114,7 +2152,7 @@ class AqualinkClient:
 
         C4-cmd review F1 (2026-05-18): the original per-site
         ``except Exception`` blocks swallowed ``ConfigEntryAuthFailed``
-        raised by ``_handle_realtime_update`` â€” the H10 review's
+        raised by ``_handle_realtime_update`` — the H10 review's
         precedent explicitly says auth failures must propagate so HA's
         reauth flow fires. This helper preserves the broad-except for
         transient noise (network blips, parser errors during refresh)
@@ -2131,10 +2169,10 @@ class AqualinkClient:
             raise
         except ConfigEntryAuthFailed:
             # H10 precedent: auth failures must surface so HA dispatches
-            # reauth â€” never swallow them into the transient-noise branch.
+            # reauth — never swallow them into the transient-noise branch.
             raise
-        except Exception as e:  # noqa: BLE001 â€” transient refresh noise
-            _LOGGER.debug(f"Error triggering coordinator callback: {e}")
+        except Exception as e:  # noqa: BLE001 — transient refresh noise
+            _LOGGER.debug("Error triggering coordinator callback: %s", e)
 
     def _build_state_request(
         self,
@@ -2152,22 +2190,22 @@ class AqualinkClient:
         stepper add+reduce) into one canonical shape.
 
         AC#4 ("zero behavior change") is interpreted as **dict-content
-        equal** â€” recursive value-equality, ignoring JSON key order.
+        equal** — recursive value-equality, ignoring JSON key order.
         Confirmed with the user before implementation: the iAqualink
         cloud is AWS IoT-shaped and parses JSON into dicts, so transmit
         key order is unobservable. Every field present in the pre-R23
         envelopes is still present with the same value; nothing was
         dropped. Per-device-type drift is preserved by the caller passing
-        the appropriate ``desired`` / ``namespace`` / ``robot_key`` â€”
+        the appropriate ``desired`` / ``namespace`` / ``robot_key`` —
         cyclonext uses ``robot.1`` instead of ``robot`` and cyclobat
         nests under ``main.ctrl`` / ``main.mode``.
 
         Args:
-            action: Cloud action verb â€” ``"setCleanerState"``,
+            action: Cloud action verb — ``"setCleanerState"``,
                 ``"setCleaningMode"``, or ``"setRemoteSteeringControl"``.
             desired: The dict to nest under
                 ``payload.state.desired.equipment.<robot_key>``. Embedded
-                verbatim â€” the helper does not transform it.
+                verbatim — the helper does not transform it.
             namespace: Override the top-level ``namespace`` field.
                 Defaults to ``self._device_type``.
             robot_key: Equipment dict key. ``"robot"`` (default) for
@@ -2234,7 +2272,7 @@ class AqualinkClient:
                     except Exception:
                         pass
 
-                # C4-cmd: one awaited refresh per command â€” replaces the
+                # C4-cmd: one awaited refresh per command — replaces the
                 # historical 3-task burst (immediate + 0.5s + 1.0s delayed).
                 # The coordinator's debounced `async_request_refresh` (called
                 # inside `_handle_realtime_update`) collapses near-duplicate
@@ -2267,7 +2305,7 @@ class AqualinkClient:
             await asyncio.wait_for(self.set_cleaner_state(request), timeout=30)
             _LOGGER.debug("Cleared desired state to prevent auto-restart")
         except Exception as e:
-            _LOGGER.warning(f"Failed to clear desired state: {e}")
+            _LOGGER.warning("Failed to clear desired state: %s", e)
 
     async def stop_cleaning(self) -> dict[str, Any]:
         """Stop the vacuum cleaning."""
@@ -2410,7 +2448,7 @@ class AqualinkClient:
                 response_data, requested_fan_speed
             )
         except Exception as e:
-            _LOGGER.debug(f"Error extracting fan speed from response: {e}")
+            _LOGGER.debug("Error extracting fan speed from response: %s", e)
             return None
 
     async def set_fan_speed(
@@ -2426,7 +2464,7 @@ class AqualinkClient:
             return await self._set_other_fan_speed(fan_speed)
 
     async def _set_i2d_fan_speed(self, fan_speed: str) -> dict[str, Any] | None:
-        """Set fan speed for i2d robot â€” delegates to I2DProtocol (R25-i2d)."""
+        """Set fan speed for i2d robot — delegates to I2DProtocol (R25-i2d)."""
         i2d = _i2d_protocol()
         request = i2d.set_fan_speed_payload(self, fan_speed)
         if request is None:
@@ -2438,7 +2476,7 @@ class AqualinkClient:
 
         # For i2d robots, extract success/failure from response
         if response and response.get("command", {}).get("response"):
-            _LOGGER.debug(f"i2d fan speed command response: {response}")
+            _LOGGER.debug("i2d fan speed command response: %s", response)
             return {"success": True, "fan_speed": fan_speed, "response": response}
 
         return {"success": False, "fan_speed": fan_speed}
@@ -2476,14 +2514,14 @@ class AqualinkClient:
             # Extract relevant information from the websocket response
             result = {"success": True, "fan_speed": fan_speed}
             if response_data:
-                _LOGGER.debug(f"Fan speed command response: {response_data}")
+                _LOGGER.debug("Fan speed command response: %s", response_data)
                 result["response"] = response_data
 
                 # Try to extract the actual fan speed from the response
                 confirmed_fan_speed = self._extract_fan_speed_from_response(response_data, fan_speed)
                 if confirmed_fan_speed:
                     result["confirmed_fan_speed"] = confirmed_fan_speed
-                    _LOGGER.debug(f"Websocket confirmed fan speed: {confirmed_fan_speed}")
+                    _LOGGER.debug("Websocket confirmed fan speed: %s", confirmed_fan_speed)
 
                 # For some robot types, we might get immediate state confirmation
                 payload = response_data.get("payload", {})
@@ -2558,19 +2596,19 @@ class AqualinkClient:
     ) -> None:
         """Send a remote control command with optimized timeout."""
         # R23: envelope literal collapsed. Note the action is
-        # `setRemoteSteeringControl` (not `setCleanerState`) â€” the cloud
+        # `setRemoteSteeringControl` (not `setCleanerState`) — the cloud
         # routes steering commands through a different state-controller verb.
         request = self._build_state_request(
             "setRemoteSteeringControl",
             {"rmt_ctrl": rmt_ctrl_value},
         )
-        _LOGGER.debug(f"Sending {command_name} command (rmt_ctrl: {rmt_ctrl_value})")
+        _LOGGER.debug("Sending %s command (rmt_ctrl: %s)", command_name, rmt_ctrl_value)
         await asyncio.wait_for(self.set_cleaner_state(request), timeout=15)  # Shorter timeout, no artificial delays
 
     async def remote_forward(self) -> None:
         """Send forward command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
-            _LOGGER.warning(f"Remote forward not supported for device type: {self._device_type}")
+            _LOGGER.warning("Remote forward not supported for device type: %s", self._device_type)
             return
 
         # Enter remote control mode if not already active
@@ -2583,7 +2621,7 @@ class AqualinkClient:
     async def remote_backward(self) -> None:
         """Send backward command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
-            _LOGGER.warning(f"Remote backward not supported for device type: {self._device_type}")
+            _LOGGER.warning("Remote backward not supported for device type: %s", self._device_type)
             return
 
         # Enter remote control mode if not already active
@@ -2596,7 +2634,7 @@ class AqualinkClient:
     async def remote_rotate_left(self) -> None:
         """Send rotate left command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
-            _LOGGER.warning(f"Remote rotate left not supported for device type: {self._device_type}")
+            _LOGGER.warning("Remote rotate left not supported for device type: %s", self._device_type)
             return
 
         # Enter remote control mode if not already active
@@ -2609,7 +2647,7 @@ class AqualinkClient:
     async def remote_rotate_right(self) -> None:
         """Send rotate right command to the robot for VR and VortraX robots."""
         if self._device_type not in ["vr", "vortrax"]:
-            _LOGGER.warning(f"Remote rotate right not supported for device type: {self._device_type}")
+            _LOGGER.warning("Remote rotate right not supported for device type: %s", self._device_type)
             return
 
         # Enter remote control mode if not already active
@@ -2622,7 +2660,7 @@ class AqualinkClient:
     async def remote_stop(self) -> None:
         """Send stop command for VR and VortraX robots and exit remote control mode."""
         if self._device_type not in ["vr", "vortrax"]:
-            _LOGGER.warning(f"Remote stop not supported for device type: {self._device_type}")
+            _LOGGER.warning("Remote stop not supported for device type: %s", self._device_type)
             return
 
         # Send stop command first
@@ -2639,7 +2677,7 @@ class AqualinkClient:
         Shared body for :meth:`add_fifteen_minutes` (+15) and
         :meth:`reduce_fifteen_minutes` (-15). Replaces two near-identical
         ~95-line methods that pre-R24 differed only in the sign of the
-        delta and the per-direction strings â€” bug fixes had to be applied
+        delta and the per-direction strings — bug fixes had to be applied
         twice and any drift between them was a silent hazard.
 
         Applies ``max(0, current + delta_minutes)`` to clamp the new
@@ -2658,8 +2696,8 @@ class AqualinkClient:
             verb = "Add" if delta_minutes > 0 else "Reduce"
             abs_delta = abs(delta_minutes)
             _LOGGER.warning(
-                f"{verb} {abs_delta} minutes not supported for device type: "
-                f"{self._device_type}"
+                "%s %s minutes not supported for device type: %s",
+                verb, abs_delta, self._device_type
             )
             return None
 
@@ -2680,8 +2718,8 @@ class AqualinkClient:
                 if time_since_last < 3:
                     remaining_cooldown = 3 - time_since_last
                     _LOGGER.warning(
-                        f"Rate limiting timing commands. Please wait "
-                        f"{remaining_cooldown:.1f} more seconds."
+                        "Rate limiting timing commands. Please wait "
+                        "%.1f more seconds.", remaining_cooldown
                     )
                     return {
                         "success": False,
@@ -2699,37 +2737,36 @@ class AqualinkClient:
             current_status = await self.fetch_status()
             current_stepper = current_status.get("stepper", 0)
 
-            # R24: clamp non-negative â€” see docstring.
+            # R24: clamp non-negative — see docstring.
             new_stepper = max(0, current_stepper + delta_minutes)
 
             abs_delta = abs(delta_minutes)
             action_label = f"{'Add' if delta_minutes > 0 else 'Reduce'} {abs_delta} minutes"
 
-            if self._debug_mode:
-                _LOGGER.debug(
-                    f"ðŸ” {action_label}: Setting stepper "
-                    f"{current_stepper} â†’ {new_stepper}"
-                )
-                _LOGGER.debug(
-                    f"{action_label}: current stepper={current_stepper}, "
-                    f"new stepper={new_stepper}"
-                )
+            _LOGGER.debug(
+                "%s: Setting stepper "
+                "%s → %s",
+                action_label, current_stepper, new_stepper
+            )
+            _LOGGER.debug(
+                "%s: current stepper=%s, "
+                "new stepper=%s",
+                action_label, current_stepper, new_stepper
+            )
 
             # R23: set + clear envelope pair.
             request = self._build_state_request(
                 "setCleaningMode", {"stepper": new_stepper}
             )
             result = await asyncio.wait_for(self.set_cleaner_state(request), timeout=15)
-            if self._debug_mode:
-                _LOGGER.debug(f"{action_label} response: {result}")
+            _LOGGER.debug("%s response: %s", action_label, result)
 
             clear_request = self._build_state_request(
                 "setCleaningMode", {"stepper": None}
             )
             await asyncio.wait_for(self.set_cleaner_state(clear_request), timeout=15)
 
-            if self._debug_mode:
-                _LOGGER.debug(f"âœ… {action_label} command completed successfully")
+            _LOGGER.debug("%s command completed successfully", action_label)
 
             # C4-cmd: one awaited refresh; helper re-raises ConfigEntryAuthFailed.
             await self._safe_post_command_refresh()
@@ -2744,7 +2781,7 @@ class AqualinkClient:
                 "new_stepper": new_stepper,
                 "message": (
                     f"{past_verb} {abs_delta} minutes {preposition} cleaning time. "
-                    f"Stepper: {current_stepper} â†’ {new_stepper}"
+                    f"Stepper: {current_stepper} → {new_stepper}"
                 ),
             }
 
@@ -2752,7 +2789,8 @@ class AqualinkClient:
             verb = "add" if delta_minutes > 0 else "reduce"
             abs_delta = abs(delta_minutes)
             _LOGGER.error(
-                f"âŒ {verb.capitalize()} {abs_delta} minutes command failed: {e}"
+                "%s %s minutes command failed: %s",
+                verb.capitalize(), abs_delta, e
             )
             return {
                 "success": False,

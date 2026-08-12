@@ -1,0 +1,55 @@
+{
+  "entity": {
+    "sensor": {
+      "activity": { "default": "mdi:robot-vacuum" },
+      "adjusted_cycle_duration": { "default": "mdi:timer" },
+      "base_cycle_duration": { "default": "mdi:timer-sand" },
+      "battery_level": { "default": "mdi:battery" },
+      "canister": { "default": "mdi:recycle" },
+      "cycle": { "default": "mdi:format-list-numbered" },
+      "cycle_duration": { "default": "mdi:timer-sand" },
+      "cycle_start_time": { "default": "mdi:clock-start" },
+      "device_type": { "default": "mdi:robot" },
+      "diagnostic_code": { "default": "mdi:stethoscope" },
+      "error_code": { "default": "mdi:alert-octagon" },
+      "error_state": { "default": "mdi:alert-circle" },
+      "estimated_end_time": { "default": "mdi:calendar-clock" },
+      "fan_speed": { "default": "mdi:fan" },
+      "last_cloud_contact": { "default": "mdi:cloud-check-outline" },
+      "model": { "default": "mdi:information-outline" },
+      "serial_number": { "default": "mdi:barcode" },
+      "status": { "default": "mdi:connection" },
+      "stepper": { "default": "mdi:stairs" },
+      "stepper_adj_time": { "default": "mdi:timer-plus" },
+      "stepper_adjustment_minutes": { "default": "mdi:timer-plus-outline" },
+      "temperature": { "default": "mdi:thermometer" },
+      "time_remaining": { "default": "mdi:timer" },
+      "time_remaining_human": { "default": "mdi:clock-outline" },
+      "total_hours": { "default": "mdi:timer" },
+      "version": { "default": "mdi:chip" }
+    },
+    "button": {
+      "remote_forward": { "default": "mdi:chevron-up-circle" },
+      "remote_backward": { "default": "mdi:chevron-down-circle" },
+      "remote_rotate_left": { "default": "mdi:rotate-left" },
+      "remote_rotate_right": { "default": "mdi:rotate-right" },
+      "remote_stop": { "default": "mdi:stop-circle-outline" },
+      "add_fifteen_minutes": { "default": "mdi:clock-plus-outline" },
+      "reduce_fifteen_minutes": { "default": "mdi:clock-minus-outline" }
+    },
+    "select": {
+      "pattern_floor": { "default": "mdi:vector-polyline" },
+      "pattern_floor_walls": { "default": "mdi:vector-polyline" },
+      "pattern_smart": { "default": "mdi:vector-polyline" }
+    }
+  },
+  "services": {
+    "remote_forward": "mdi:chevron-up-circle",
+    "remote_backward": "mdi:chevron-down-circle",
+    "remote_rotate_left": "mdi:rotate-left",
+    "remote_rotate_right": "mdi:rotate-right",
+    "remote_stop": "mdi:stop-circle-outline",
+    "add_fifteen_minutes": "mdi:clock-plus-outline",
+    "reduce_fifteen_minutes": "mdi:clock-minus-outline"
+  }
+}

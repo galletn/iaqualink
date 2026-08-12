@@ -7,16 +7,23 @@ from typing import Any
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import AqualinkClient
+from .const import DOMAIN
 from .coordinator import AqualinkDataUpdateCoordinator
 from .device import build_device_info
 from .types import IaqualinkConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+# All state comes from the coordinator, and the cloud tolerates the
+# remote-control commands being issued back-to-back (they are what the
+# iAquaLink app's jog buttons do). No serialisation needed.
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
@@ -30,16 +37,18 @@ async def async_setup_entry(
 
     # Only create remote control buttons for VR and VortraX robots
     if client.device_type in ["vr", "vortrax"]:
+        # Icons are no longer passed here: they live in icons.json keyed by
+        # translation_key, which is the HA convention (and the `icon-
+        # translations` quality-scale rule). A user overriding an icon in the
+        # UI now sticks, instead of being re-applied from code on restart.
         buttons = [
-            AqualinkRemoteButton(coordinator, client, "forward", "remote_forward", "mdi:chevron-up-circle"),
-            AqualinkRemoteButton(coordinator, client, "backward", "remote_backward", "mdi:chevron-down-circle"),
-            AqualinkRemoteButton(coordinator, client, "rotate_left", "remote_rotate_left", "mdi:rotate-left"),
-            AqualinkRemoteButton(coordinator, client, "rotate_right", "remote_rotate_right", "mdi:rotate-right"),
-            AqualinkRemoteButton(coordinator, client, "stop", "remote_stop", "mdi:stop-circle-outline"),
-            AqualinkRemoteButton(coordinator, client, "add_fifteen_minutes",
-                                 "add_fifteen_minutes", "mdi:clock-plus-outline"),
-            AqualinkRemoteButton(coordinator, client, "reduce_fifteen_minutes",
-                                 "reduce_fifteen_minutes", "mdi:clock-minus-outline"),
+            AqualinkRemoteButton(coordinator, client, "forward", "remote_forward"),
+            AqualinkRemoteButton(coordinator, client, "backward", "remote_backward"),
+            AqualinkRemoteButton(coordinator, client, "rotate_left", "remote_rotate_left"),
+            AqualinkRemoteButton(coordinator, client, "rotate_right", "remote_rotate_right"),
+            AqualinkRemoteButton(coordinator, client, "stop", "remote_stop"),
+            AqualinkRemoteButton(coordinator, client, "add_fifteen_minutes", "add_fifteen_minutes"),
+            AqualinkRemoteButton(coordinator, client, "reduce_fifteen_minutes", "reduce_fifteen_minutes"),
         ]
         async_add_entities(buttons)
 
@@ -64,13 +73,11 @@ class AqualinkRemoteButton(CoordinatorEntity[AqualinkDataUpdateCoordinator], But
         client: AqualinkClient,
         command: str,
         translation_key: str,
-        icon: str,
     ) -> None:
         """Initialize the button."""
         super().__init__(coordinator)
         self._client = client
         self._command = command
-        self._attr_icon = icon
 
         # Derive unique_id from the robot's serial number. The previous title-based
         # derivation (entry.title lowercased + underscores) broke whenever the user
@@ -117,45 +124,58 @@ class AqualinkRemoteButton(CoordinatorEntity[AqualinkDataUpdateCoordinator], But
         """
         return {"restored": self.coordinator.is_serving_stale_data}
 
+    # Commands whose effect on the reported cycle time is immediate; these get
+    # one coordinator refresh so the time-remaining sensors don't lag by up to
+    # a full poll interval. The movement commands deliberately do NOT refresh —
+    # the 3s SCAN_INTERVAL already covers them and an extra refresh per press
+    # made rapid jog-button use hammer the cloud.
+    _REFRESH_AFTER = frozenset({"add_fifteen_minutes", "reduce_fifteen_minutes"})
+
     async def async_press(self) -> None:
-        """Handle the button press."""
+        """Handle the button press.
+
+        Failures are raised as ``HomeAssistantError`` rather than logged and
+        swallowed. Pre-fix a command that never reached the robot still
+        rendered as a successful press in the UI, so the user had no signal
+        that anything went wrong short of reading the log.
+        """
+        handlers = {
+            "forward": self._client.remote_forward,
+            "backward": self._client.remote_backward,
+            "rotate_left": self._client.remote_rotate_left,
+            "rotate_right": self._client.remote_rotate_right,
+            "stop": self._client.remote_stop,
+            "add_fifteen_minutes": self._client.add_fifteen_minutes,
+            "reduce_fifteen_minutes": self._client.reduce_fifteen_minutes,
+        }
+        handler = handlers.get(self._command)
+        if handler is None:
+            # Unreachable via async_setup_entry, which only builds buttons from
+            # the literal list above. Guard anyway so a future typo surfaces
+            # as a clear error instead of a silent no-op press.
+            raise HomeAssistantError(f"Unknown button command {self._command!r}")
+
+        _LOGGER.debug(
+            "Button '%s' pressed for robot %s", self._command, self._client.robot_name
+        )
         try:
-            _LOGGER.info(f"Button '{self._command}' pressed for robot {self._client.robot_name}")
+            await handler()
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.debug(
+                "Button command %s failed for %s",
+                self._command, self._client.robot_name, exc_info=True,
+            )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+                translation_placeholders={
+                    "command": self._command,
+                    "name": str(self._client.robot_name),
+                    "error": str(err),
+                },
+            ) from err
 
-            if self._command == "forward":
-                await self._client.remote_forward()
-                _LOGGER.info(f"Remote forward command sent to {self._client.robot_name}")
-            elif self._command == "backward":
-                await self._client.remote_backward()
-                _LOGGER.info(f"Remote backward command sent to {self._client.robot_name}")
-            elif self._command == "rotate_left":
-                await self._client.remote_rotate_left()
-                _LOGGER.info(f"Remote rotate left command sent to {self._client.robot_name}")
-            elif self._command == "rotate_right":
-                await self._client.remote_rotate_right()
-                _LOGGER.info(f"Remote rotate right command sent to {self._client.robot_name}")
-            elif self._command == "stop":
-                await self._client.remote_stop()
-                _LOGGER.info(f"Remote stop command sent to {self._client.robot_name}")
-            elif self._command == "add_fifteen_minutes":
-                _LOGGER.info(f"About to send add 15 minutes command to {self._client.robot_name}")
-                response = await self._client.add_fifteen_minutes()
-                _LOGGER.info(f"Add 15 minutes command sent to {self._client.robot_name}, response: {response}")
-
-                # Only request coordinator refresh for timing commands that affect state
-                if hasattr(self.coordinator, 'async_request_refresh'):
-                    _LOGGER.info("Requesting coordinator refresh after add 15 minutes")
-                    await self.coordinator.async_request_refresh()
-
-            elif self._command == "reduce_fifteen_minutes":
-                _LOGGER.info(f"About to send reduce 15 minutes command to {self._client.robot_name}")
-                response = await self._client.reduce_fifteen_minutes()
-                _LOGGER.info(f"Reduce 15 minutes command sent to {self._client.robot_name}, response: {response}")
-
-                # Only request coordinator refresh for timing commands that affect state
-                if hasattr(self.coordinator, 'async_request_refresh'):
-                    _LOGGER.info("Requesting coordinator refresh after reduce 15 minutes")
-                    await self.coordinator.async_request_refresh()
-
-        except Exception as e:
-            _LOGGER.error(f"Failed to send {self._command} command to {self._client.robot_name}: {e}", exc_info=True)
+        if self._command in self._REFRESH_AFTER:
+            await self.coordinator.async_request_refresh()

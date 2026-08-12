@@ -40,34 +40,14 @@ _DIAGNOSTIC_SENSOR_KEYS = frozenset({
 
 _LOGGER = logging.getLogger(__name__)
 
-ICON_MAP = {
-    "serial_number":       "mdi:barcode",
-    "device_type":         "mdi:robot",
-    "cycle_start_time":    "mdi:clock-start",
-    "cycle_duration":      "mdi:timer-sand",
-    "cycle":               "mdi:format-list-numbered",
-    "battery_level":       "mdi:battery",
-    "total_hours":         "mdi:timer",
-    "canister":            "mdi:recycle",
-    "error_state":         "mdi:alert-circle",
-    "temperature":         "mdi:thermometer",
-    "time_remaining_human": "mdi:clock-outline",
-    "time_remaining":      "mdi:timer",
-    "estimated_end_time":  "mdi:calendar-clock",
-    "model":               "mdi:information-outline",
-    "fan_speed":           "mdi:fan",
-    "activity":            "mdi:robot-vacuum",
-    "status":              "mdi:connection",
-    "version":             "mdi:chip",
-    "error_code":          "mdi:alert-octagon",
-    "diagnostic_code":     "mdi:stethoscope",
-    "last_cloud_contact":  "mdi:cloud-check-outline",
-    "stepper":             "mdi:stairs",
-    "stepper_adj_time":    "mdi:timer-plus",
-    "base_cycle_duration": "mdi:timer-sand",
-    "stepper_adjustment_minutes": "mdi:timer-plus-outline",
-    "adjusted_cycle_duration": "mdi:timer",
-}
+# Read-only entities fed entirely from the coordinator — nothing to serialise.
+PARALLEL_UPDATES = 0
+
+# Icons moved to `icons.json` (keyed by translation_key, which for these
+# entities is the sensor key). That is the current HA convention and the
+# `icon-translations` quality-scale rule; it also stops a hardcoded icon from
+# overriding the user's own customisation on every restart.
+# `tests/test_translations.py` asserts icons.json covers every key here.
 
 # Unit of measurement map
 UNIT_MAP = {
@@ -208,7 +188,6 @@ class AqualinkSensor(CoordinatorEntity[AqualinkDataUpdateCoordinator], SensorEnt
         # Don't set _attr_name - let HA translate using translation_key
         # This allows friendly names to be translated while keeping entity IDs stable
         self._attr_unique_id = f"{client.robot_id}_{key}"
-        self._attr_icon = ICON_MAP.get(key)
         self._attr_should_poll = False  # Use coordinator updates only
         # Set unit if defined
         unit = UNIT_MAP.get(key)
@@ -242,7 +221,8 @@ class AqualinkSensor(CoordinatorEntity[AqualinkDataUpdateCoordinator], SensorEnt
                 cached_value = getattr(self, '_last_value', None)
                 if cached_value is not None:
                     _LOGGER.debug(
-                        f"Sensor {self._key} preserving cached value '{cached_value}' during {error_state} error")
+                        "Sensor %s preserving cached value '%s' during %s error",
+                        self._key, cached_value, error_state)
                     return cached_value
                 # If no cached value, fall through to try getting current data
 
@@ -261,7 +241,8 @@ class AqualinkSensor(CoordinatorEntity[AqualinkDataUpdateCoordinator], SensorEnt
                 if (self._key in ["fan_speed", "activity", "status", "time_remaining"] and
                         current_value != getattr(self, '_last_value', None)):
                     _LOGGER.debug(
-                        f"Sensor {self._key} value changed: {getattr(self, '_last_value', None)} -> {current_value}")
+                        "Sensor %s value changed: %s -> %s",
+                        self._key, getattr(self, '_last_value', None), current_value)
 
                 self._last_value = current_value
                 return current_value
@@ -270,7 +251,8 @@ class AqualinkSensor(CoordinatorEntity[AqualinkDataUpdateCoordinator], SensorEnt
                 cached_value = getattr(self, '_last_value', None)
                 if cached_value is not None:
                     _LOGGER.debug(
-                        f"Sensor {self._key} using cached value '{cached_value}' instead of '{current_value}'")
+                        "Sensor %s using cached value '%s' instead of '%s'",
+                        self._key, cached_value, current_value)
                     return cached_value
                 # If no cached value and current is None/unknown, return the current value anyway
                 return current_value

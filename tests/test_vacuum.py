@@ -77,32 +77,64 @@ def _make_vacuum(device_type: str | None = None):
 
 
 def _drive_update(vacuum, data: dict) -> None:
-    """Reproduce the relevant slice of `_handle_coordinator_update`.
+    """Drive the fan-speed-list half of `_handle_coordinator_update`.
 
     We avoid calling `super()._handle_coordinator_update()` because that
-    requires the full CoordinatorEntity wiring. The fan-speed-list logic is
-    self-contained: it reads `device_type` from `coordinator.data` and
-    assigns `self._fan_speed_list`. We inline-copy that subset.
+    requires the full CoordinatorEntity wiring, so we call the production
+    helper that owns this logic directly.
+
+    This used to inline-copy the per-device-type if/elif chain from
+    `vacuum.py`. That made the test assert against a *copy* of the thing it
+    was meant to be testing — the exact drift issue #76 was caused by. Now
+    that the lists live in one place (`_FAN_SPEEDS_BY_DEVICE_TYPE`) and the
+    assignment is a single method, the test calls the real code.
     """
     vacuum.coordinator.data = data
-    device_type = data.get("device_type")
-    if device_type:
-        if device_type == "vr":
-            vacuum._fan_speed_list = [
-                "wall_only", "floor_only",
-                "smart_floor_and_walls", "floor_and_walls",
-            ]
-        elif device_type == "cyclobat":
-            vacuum._fan_speed_list = [
-                "wall_only", "floor_only",
-                "smart_floor_and_walls", "floor_and_walls",
-            ]
-        elif device_type == "vortrax":
-            vacuum._fan_speed_list = ["floor_only", "floor_and_walls"]
-        elif device_type == "cyclonext":
-            vacuum._fan_speed_list = ["floor_only", "floor_and_walls"]
-        else:
-            vacuum._fan_speed_list = ["floor_only", "walls_only", "floor_and_walls"]
+    vacuum._apply_device_capabilities(data)
+
+
+# ---------------------------------------------------------------------------
+# Command guards — a disconnected robot must not fail silently
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["async_start", "async_stop", "async_return_to_base"])
+async def test_commands_raise_when_not_connected(method: str) -> None:
+    """start / stop / return-home used to `return` silently when the robot
+    was disconnected, so a dashboard press or an automation step looked like
+    it had succeeded while nothing was sent. They must raise instead.
+    """
+    from unittest.mock import AsyncMock
+
+    from homeassistant.exceptions import HomeAssistantError
+
+    vacuum = _make_vacuum(device_type="vr")
+    vacuum._status = "disconnected"
+    vacuum.coordinator.async_start_cleaning = AsyncMock()
+    vacuum.coordinator.async_stop_cleaning = AsyncMock()
+    vacuum.coordinator.async_return_to_base = AsyncMock()
+    vacuum.coordinator.title = "Pool Robot"
+
+    with pytest.raises(HomeAssistantError):
+        await getattr(vacuum, method)()
+
+    vacuum.coordinator.async_start_cleaning.assert_not_awaited()
+    vacuum.coordinator.async_stop_cleaning.assert_not_awaited()
+    vacuum.coordinator.async_return_to_base.assert_not_awaited()
+
+
+async def test_start_dispatches_when_connected() -> None:
+    """The happy path is unchanged: connected robots still start."""
+    from unittest.mock import AsyncMock
+
+    vacuum = _make_vacuum(device_type="vr")
+    vacuum._status = "connected"
+    vacuum.coordinator.async_start_cleaning = AsyncMock()
+    vacuum.coordinator.async_request_refresh = AsyncMock()
+
+    await vacuum.async_start()
+
+    vacuum.coordinator.async_start_cleaning.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -193,17 +225,26 @@ def test_wall_only_and_walls_only_are_distinct_keys() -> None:
 
 async def test_set_fan_speed_rejects_value_not_in_list() -> None:
     """When the user (or an automation, or a translation) passes a key that
-    isn't in `_fan_speed_list`, `async_set_fan_speed` must `ValueError` BEFORE
+    isn't in `_fan_speed_list`, `async_set_fan_speed` must raise BEFORE
     calling the cloud. This guards the issue-#76 silent-failure mode where a
     non-functional option got picked and the cloud silently rejected it.
+
+    The exception is `ServiceValidationError` (a `HomeAssistantError`), not a
+    bare `ValueError`: HA renders the former as a user mistake against the
+    offending action with a translated message, while the latter surfaced as
+    an integration traceback. The client-side guard in `client.set_fan_speed`
+    still raises `ValueError` — it is a library-level contract check, not a
+    user-facing one.
     """
     from unittest.mock import AsyncMock
+
+    from homeassistant.exceptions import ServiceValidationError
 
     vacuum = _make_vacuum(device_type="cyclonext")  # 2-entry list
     vacuum._client.set_fan_speed = AsyncMock()
     vacuum.coordinator.async_request_refresh = AsyncMock()
 
-    with pytest.raises(ValueError, match="Invalid fan speed"):
+    with pytest.raises(ServiceValidationError):
         await vacuum.async_set_fan_speed("walls_only")
 
     # Critical: the cloud client must NOT have been called. If it had been,

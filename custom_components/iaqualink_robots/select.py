@@ -40,6 +40,9 @@ from .types import IaqualinkConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
+# State comes from the coordinator; no per-entity polling to serialise.
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -92,7 +95,6 @@ class AqualinkPatternSelect(
     """The navigation pattern for one cleaning cycle."""
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:vector-polyline"
 
     def __init__(
         self,

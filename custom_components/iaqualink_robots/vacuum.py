@@ -11,6 +11,7 @@ from homeassistant.components.vacuum import (
 )
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -22,6 +23,12 @@ from .device import build_device_info
 from .types import IaqualinkConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+# State comes from the coordinator; commands are individually rate-limited by
+# the client, so HA does not need to serialise entity updates for this
+# platform.
+PARALLEL_UPDATES = 0
+
 ROBOT_FEATURES = {
     "default": (
         VacuumEntityFeature.START
@@ -126,6 +133,36 @@ _FAN_SPEED_REQUIRED_FEATURE: Dict[str, str] = {
 }
 
 
+#: Per-device-family fan-speed lists (the HA-display side of the contract).
+#:
+#: These MUST mirror the per-device-type ``cycle_speed_map`` keys in
+#: ``client.py::_set_other_fan_speed`` / ``_set_i2d_fan_speed``, otherwise the
+#: user can pick a mode the cloud has no encoding for and the command silently
+#: no-ops (issue #76).
+#:
+#: Glossary — the two similar keys are NOT the same mode:
+#:   ``wall_only``  = the cycle a vr/cyclobat robot runs when ONLY scrubbing
+#:                    walls. NOT a typo for ``walls_only``.
+#:   ``walls_only`` = i2d_robot's "waterline only" mode (0x04). A distinct
+#:                    cloud-side encoding; cyclonext does NOT support it.
+_FAN_SPEEDS_BY_DEVICE_TYPE: Dict[str, List[str]] = {
+    "vr": ["wall_only", "floor_only", "smart_floor_and_walls", "floor_and_walls"],
+    # cyclobat cloud encoding: 0=floor_only, 1=floor_and_walls,
+    # 2=smart_floor_and_walls, 3=wall_only (see client.py).
+    "cyclobat": ["wall_only", "floor_only", "smart_floor_and_walls", "floor_and_walls"],
+    "vortrax": ["floor_only", "floor_and_walls"],
+    # cyclonext only supports cycle=1 (floor_only) and cycle=3
+    # (floor_and_walls). Before the #76 fix it fell through to the i2d-shaped
+    # list and exposed a non-functional "Walls only" option.
+    "cyclonext": ["floor_only", "floor_and_walls"],
+    "i2d_robot": ["floor_only", "walls_only", "floor_and_walls"],
+}
+
+#: Fallback for an unknown future device type: the i2d-shaped 3-entry list,
+#: which is what the pre-table `else` branch used.
+_FAN_SPEEDS_DEFAULT: List[str] = ["floor_only", "walls_only", "floor_and_walls"]
+
+
 def _narrow_fan_speeds_to_features(
     speeds: List[str],
     features: Any,
@@ -203,34 +240,23 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
         self._warned_fan_speed_mismatches: set[tuple[str | None, tuple[str, ...]]] = set()
 
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
+        """Handle updated data from the coordinator.
+
+        Runs on every poll (SCAN_INTERVAL is 3s), so the body is kept to
+        cheap attribute work and logs only when something actually changed.
+        The per-concern helpers below were split out of what used to be a
+        single 165-line method.
+        """
         super()._handle_coordinator_update()
 
-        # Update all attributes from coordinator data - coordinator handles all business logic
         data = self.coordinator.data
         if data:
-            # Check if this is a no_data or connection error state - preserve cached state in these cases
-            error_state = data.get("error_state")
-            if error_state in ["no_data", "update_failed", "setup_cancelled", "connection_failed"]:
-                # During connection/data errors, preserve current vacuum state
-                _LOGGER.debug(f"Vacuum preserving cached state during {error_state} error")
-                # Trust the coordinator's resilient status logic - it preserves last known status
-                # for temporary failures and only marks offline after multiple consecutive failures
-                coordinator_status = data.get("status")
-                if coordinator_status:
-                    self._status = coordinator_status
-                    _LOGGER.debug(
-                        f"Vacuum status updated to '{coordinator_status}' from coordinator's resilient status logic")
-                # But keep current activity, fan speed, and attributes
+            if self._apply_degraded_state(data):
+                # Connection/data error — cached state preserved, nothing
+                # else to apply this cycle.
                 self.async_write_ha_state()
                 return
 
-            # Log when fan speed changes for debugging
-            current_fan_speed = data.get("fan_speed")
-            if current_fan_speed != self._attributes.get("fan_speed"):
-                _LOGGER.info(f"Vacuum fan speed updated: {self._attributes.get('fan_speed')} -> {current_fan_speed}")
-
-            # Get status and activity directly from coordinator
             self._status = data.get("status")
             # Only update attributes if data has changed (story M14).
             # ``dict(data)`` is a shallow copy — defensive against accidental
@@ -245,130 +271,139 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
             if self._attributes != data:
                 self._attributes = dict(data)
 
-            # Map activity from coordinator to VacuumActivity enum - only if not "unknown"
-            activity = data.get("activity", "idle")
-            if activity != "unknown":  # Don't change activity to idle if we get "unknown"
-                if activity == "cleaning":
-                    self._activity = VacuumActivity.CLEANING
-                elif activity == "returning":
-                    self._activity = VacuumActivity.RETURNING
-                elif activity == "error":
-                    self._activity = VacuumActivity.ERROR
-                else:
-                    self._activity = VacuumActivity.IDLE
-            else:
-                _LOGGER.debug(f"Vacuum preserving current activity {self._activity} instead of unknown")
-
-            # Set device type specific features and fan speed list
-            device_type = data.get("device_type")
-            if device_type:
-                self._supported_features = ROBOT_FEATURES.get(device_type, ROBOT_FEATURES["default"])
-
-                # Set fan speed list based on device type. The list MUST mirror
-                # the per-device-type `cycle_speed_map` keys in
-                # `coordinator.py::_set_other_fan_speed` and `_set_i2d_fan_speed`,
-                # otherwise the user can pick a mode the cloud has no encoding
-                # for and the command silently no-ops (issue #76).
-                #
-                # Glossary:
-                #   `wall_only`  = cycle the robot runs when ONLY scrubbing walls
-                #                  (vr/cyclobat capability). NOT a typo for
-                #                  `walls_only`.
-                #   `walls_only` = i2d_robot's "waterline only" mode (mode 0x04).
-                #                  Distinct cloud-side encoding from `wall_only`;
-                #                  cyclonext does NOT support this mode.
-                if device_type == "vr":
-                    self._fan_speed_list = ["wall_only", "floor_only", "smart_floor_and_walls", "floor_and_walls"]
-                elif device_type == "cyclobat":
-                    # cyclobat cloud encoding: 0=floor_only, 1=floor_and_walls,
-                    # 2=smart_floor_and_walls, 3=wall_only (see coordinator.py).
-                    self._fan_speed_list = ["wall_only", "floor_only", "smart_floor_and_walls", "floor_and_walls"]
-                elif device_type == "vortrax":
-                    self._fan_speed_list = ["floor_only", "floor_and_walls"]
-                elif device_type == "cyclonext":
-                    # cyclonext cloud encoding only supports cycle=1 (floor_only)
-                    # and cycle=3 (floor_and_walls). Pre-fix this branch fell
-                    # through to the i2d-shaped 3-entry list and exposed a
-                    # non-functional "Walls only" option (issue #76).
-                    self._fan_speed_list = ["floor_only", "floor_and_walls"]
-                else:
-                    # i2d_robot (and any unknown future type) keeps the
-                    # 3-entry list which IS valid for i2d (mode 0x04).
-                    self._fan_speed_list = ["floor_only", "walls_only", "floor_and_walls"]
-
-                # Narrow the per-family list to what THIS device advertises.
-                #
-                # The per-family lists above are a family-wide upper bound, but
-                # capability varies within a family: of two live `vr` robots,
-                # only one advertised `preset_waterline`. The other was being
-                # offered "Wall only", which the cloud silently ignored — the
-                # same failure issue #76 reported for cyclonext, still present
-                # for vr. Cross-check: deriving the list from features for the
-                # two captured cyclonext units independently reproduces the
-                # hardcoded cyclonext list above.
-                self._fan_speed_list = _narrow_fan_speeds_to_features(
-                    self._fan_speed_list, data.get("features")
-                )
-
-            # Update current fan speed from coordinator data (store as raw key) - only if not unknown
-            coordinator_fan_speed = data.get("fan_speed")
-            if coordinator_fan_speed and coordinator_fan_speed != "unknown" and coordinator_fan_speed != self._fan_speed:
-                _LOGGER.debug(
-                    f"Updating vacuum fan speed from coordinator: {self._fan_speed} -> {coordinator_fan_speed}")
-                # Always store the raw key - the fan_speed property will convert to display name
-                self._fan_speed = coordinator_fan_speed
-                _LOGGER.debug(f"Vacuum _fan_speed now set to: '{self._fan_speed}' (raw key)")
-            elif coordinator_fan_speed and coordinator_fan_speed != "unknown":
-                _LOGGER.debug(
-                    f"Vacuum fan speed unchanged: '{self._fan_speed}' (coordinator also has '{coordinator_fan_speed}')")
-            else:
-                _LOGGER.debug(
-                    f"Coordinator has no valid fan_speed data ({coordinator_fan_speed}), vacuum keeps: '{self._fan_speed}'")
+            self._apply_activity(data)
+            self._apply_device_capabilities(data)
+            self._apply_fan_speed(data)
 
         self.async_write_ha_state()
+        self._warn_on_fan_speed_mismatch()
 
-        # Debug logging after state update
-        if hasattr(self, '_fan_speed') and self._fan_speed:
-            # Test the fan_speed property after the update
-            current_display = self.fan_speed
-            available_speeds = self.fan_speed_list
-            _LOGGER.debug(
-                f"After coordinator update - Display fan speed: '{current_display}', Available: {available_speeds}")
-            if current_display not in available_speeds:
-                # Rate-limited: this runs on EVERY coordinator update (~10s),
-                # so an unconditional warning produced ~8,600 log lines a day
-                # for any device stuck in a mismatched state. Warn once per
-                # distinct (current, available) pair instead — the operator
-                # still sees it, exactly once per genuine drift.
-                #
-                # Feature-narrowing (see _narrow_fan_speeds_to_features) makes
-                # a mismatch *more* reachable: a device can report a cloud
-                # fan speed we deliberately removed from its list because it
-                # doesn't advertise the capability. That is a legitimate state,
-                # not a bug, and must not spam.
-                # Lazily created rather than relied upon from __init__: the
-                # entity is legitimately constructed via __new__ in places
-                # (e.g. tests exercising only _handle_coordinator_update), and
-                # a log rate-limiter must never be the reason an update path
-                # raises. A class-level default would share the set across
-                # instances, so build it per-instance on first use.
-                warned = getattr(self, "_warned_fan_speed_mismatches", None)
-                if warned is None:
-                    warned = set()
-                    self._warned_fan_speed_mismatches = warned
+    # -- _handle_coordinator_update helpers --------------------------------
 
-                signature = (current_display, tuple(available_speeds))
-                if signature not in warned:
-                    warned.add(signature)
-                    _LOGGER.warning(
-                        "Fan speed mismatch: current '%s' is not in the "
-                        "available speeds %s. The device may be reporting a "
-                        "cycle it does not advertise support for; this is "
-                        "logged once per distinct mismatch.",
-                        current_display, available_speeds,
-                    )
-            else:
-                _LOGGER.debug(f"Fan speed consistency OK: '{current_display}' is in available speeds")
+    def _apply_degraded_state(self, data: Dict[str, Any]) -> bool:
+        """Handle the connection/data-error path.
+
+        Returns True when the update was a degraded one and the caller
+        should stop: activity, fan speed and attributes are deliberately
+        left at their last known good values. The coordinator's resilient
+        status logic already preserves the last real status and only marks
+        the robot offline after repeated failures, so its ``status`` is
+        still worth taking.
+        """
+        error_state = data.get("error_state")
+        if error_state not in ("no_data", "update_failed", "setup_cancelled", "connection_failed"):
+            return False
+
+        coordinator_status = data.get("status")
+        if coordinator_status:
+            self._status = coordinator_status
+        _LOGGER.debug(
+            "Preserving cached vacuum state during %s error (status=%s)",
+            error_state, coordinator_status,
+        )
+        return True
+
+    def _apply_activity(self, data: Dict[str, Any]) -> None:
+        """Map the coordinator's activity string onto the VacuumActivity enum.
+
+        ``unknown`` is deliberately not mapped: it means "the cloud didn't
+        say", and downgrading that to IDLE made a cleaning robot flicker to
+        idle whenever a single poll came back thin.
+        """
+        activity = data.get("activity", "idle")
+        if activity == "unknown":
+            _LOGGER.debug("Preserving activity %s instead of unknown", self._activity)
+            return
+        self._activity = {
+            "cleaning": VacuumActivity.CLEANING,
+            "returning": VacuumActivity.RETURNING,
+            "error": VacuumActivity.ERROR,
+        }.get(activity, VacuumActivity.IDLE)
+
+    def _apply_device_capabilities(self, data: Dict[str, Any]) -> None:
+        """Set supported features and the fan-speed list for this device type."""
+        device_type = data.get("device_type")
+        if not device_type:
+            return
+
+        self._supported_features = ROBOT_FEATURES.get(device_type, ROBOT_FEATURES["default"])
+        speeds = list(_FAN_SPEEDS_BY_DEVICE_TYPE.get(device_type, _FAN_SPEEDS_DEFAULT))
+
+        # Narrow the per-family list to what THIS device advertises.
+        #
+        # The per-family lists are a family-wide upper bound, but capability
+        # varies within a family: of two live `vr` robots, only one
+        # advertised `preset_waterline`. The other was being offered
+        # "Wall only", which the cloud silently ignored — the same failure
+        # issue #76 reported for cyclonext, still present for vr.
+        # Cross-check: deriving the list from features for the two captured
+        # cyclonext units independently reproduces the hardcoded list.
+        self._fan_speed_list = _narrow_fan_speeds_to_features(
+            speeds, data.get("features")
+        )
+
+    def _apply_fan_speed(self, data: Dict[str, Any]) -> None:
+        """Adopt the coordinator's fan speed, stored as the raw key.
+
+        ``unknown`` and empty values are ignored rather than written
+        through — the display property would otherwise render a mode the
+        robot isn't in whenever a poll came back without cycle data.
+        """
+        coordinator_fan_speed = data.get("fan_speed")
+        if not coordinator_fan_speed or coordinator_fan_speed == "unknown":
+            return
+        if coordinator_fan_speed == self._fan_speed:
+            return
+        _LOGGER.debug(
+            "Fan speed updated from coordinator: %s -> %s",
+            self._fan_speed, coordinator_fan_speed,
+        )
+        # Always store the raw key — the fan_speed property converts to the
+        # display name.
+        self._fan_speed = coordinator_fan_speed
+
+    def _warn_on_fan_speed_mismatch(self) -> None:
+        """Warn once per distinct drift between current and available speeds.
+
+        Rate-limited because this runs on EVERY coordinator update: an
+        unconditional warning produced thousands of log lines a day for any
+        device stuck in a mismatched state.
+
+        Feature-narrowing (see ``_narrow_fan_speeds_to_features``) makes a
+        mismatch *more* reachable: a device can report a cloud fan speed we
+        deliberately removed from its list because it doesn't advertise the
+        capability. That is a legitimate state, not a bug, and must not spam.
+        """
+        if not getattr(self, "_fan_speed", None):
+            return
+
+        current_display = self.fan_speed
+        available_speeds = self.fan_speed_list
+        if current_display in available_speeds:
+            return
+
+        # Lazily created rather than relied upon from __init__: the entity is
+        # legitimately constructed via __new__ in places (e.g. tests
+        # exercising only _handle_coordinator_update), and a log rate-limiter
+        # must never be the reason an update path raises. A class-level
+        # default would share the set across instances, so build it
+        # per-instance on first use.
+        warned = getattr(self, "_warned_fan_speed_mismatches", None)
+        if warned is None:
+            warned = set()
+            self._warned_fan_speed_mismatches = warned
+
+        signature = (current_display, tuple(available_speeds))
+        if signature in warned:
+            return
+        warned.add(signature)
+        _LOGGER.warning(
+            "Fan speed mismatch: current '%s' is not in the "
+            "available speeds %s. The device may be reporting a "
+            "cycle it does not advertise support for; this is "
+            "logged once per distinct mismatch.",
+            current_display, available_speeds,
+        )
 
     @property
     def unique_id(self) -> str:
@@ -398,7 +433,7 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
                 "smart_floor_and_walls": "SMART Floor and walls"
             }
             display_name = english_fallback.get(self._fan_speed, self._fan_speed)
-            _LOGGER.debug(f"Vacuum fan_speed property: '{self._fan_speed}' -> '{display_name}'")
+            _LOGGER.debug("Vacuum fan_speed property: '%s' -> '%s'", self._fan_speed, display_name)
             return display_name
         _LOGGER.debug("Vacuum fan_speed property: None (no fan speed set)")
         return None
@@ -415,7 +450,7 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
             "smart_floor_and_walls": "SMART Floor and walls"
         }
         display_list = [english_fallback.get(speed, speed) for speed in self._fan_speed_list]
-        _LOGGER.debug(f"Vacuum fan_speed_list: {self._fan_speed_list} -> {display_list}")
+        _LOGGER.debug("Vacuum fan_speed_list: %s -> %s", self._fan_speed_list, display_list)
         return display_list
 
     @property
@@ -484,18 +519,33 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
         """Return the supported features of the vacuum."""
         return self._supported_features
 
+    def _require_connected(self) -> None:
+        """Raise unless the robot is reachable through the cloud.
+
+        These commands used to ``return`` silently when the robot was
+        disconnected, so a start/stop/return-home from a dashboard or an
+        automation looked like it had worked while nothing was sent. Raising
+        makes the failure visible in the UI and in automation traces.
+        """
+        if self._status != "connected":
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="not_connected",
+                translation_placeholders={
+                    "name": str(self.coordinator.title or self._serial_number),
+                },
+            )
+
     async def async_start(self) -> None:
         """Start the vacuum - delegate to coordinator."""
-        if self._status != "connected":
-            return
+        self._require_connected()
 
         await self.coordinator.async_start_cleaning()
         await self.coordinator.async_request_refresh()
 
     async def async_stop(self, **kwargs: Any) -> None:
         """Stop the vacuum - delegate to coordinator."""
-        if self._status != "connected":
-            return
+        self._require_connected()
 
         await self.coordinator.async_stop_cleaning()
         await self.coordinator.async_refresh()
@@ -514,9 +564,19 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
         # Check if it's a display name and convert to key
         internal_key = display_to_key.get(fan_speed, fan_speed)
 
-        # Check if the internal key is in our list
+        # Check if the internal key is in our list. ServiceValidationError
+        # (not ValueError) so HA renders it as a user mistake against the
+        # offending action, with a translated message naming what IS
+        # supported — a bare ValueError surfaced as an integration traceback.
         if internal_key not in self._fan_speed_list:
-            raise ValueError('Invalid fan speed')
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_fan_speed",
+                translation_placeholders={
+                    "fan_speed": str(fan_speed),
+                    "options": ", ".join(self._fan_speed_list),
+                },
+            )
 
         self._fan_speed = internal_key
 
@@ -529,22 +589,23 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
 
             # Log the response for debugging
             if command_result:
-                _LOGGER.debug(f"Fan speed command result: {command_result}")
+                _LOGGER.debug("Fan speed command result: %s", command_result)
 
                 # If command was successful and we got confirmation, update immediately
                 if command_result.get("success"):
                     # Use confirmed fan speed from websocket if available, otherwise use requested
                     confirmed_speed = command_result.get("confirmed_fan_speed", internal_key)
                     if confirmed_speed != internal_key:
-                        _LOGGER.info(
-                            f"Websocket confirmed different fan speed than requested: {confirmed_speed} vs {internal_key}")
+                        _LOGGER.debug(
+                            "Websocket confirmed different fan speed than requested: %s vs %s",
+                            confirmed_speed, internal_key)
                         self._fan_speed = confirmed_speed
 
-                    _LOGGER.debug(f"Fan speed successfully changed to: {self._fan_speed}")
+                    _LOGGER.debug("Fan speed successfully changed to: %s", self._fan_speed)
                     # Push the updated state immediately to Home Assistant
                     self.async_write_ha_state()
                 else:
-                    _LOGGER.warning(f"Fan speed command may have failed: {command_result}")
+                    _LOGGER.warning("Fan speed command may have failed: %s", command_result)
 
             # Request immediate refresh to get updated state from device
             # Add a small delay to allow the device to process the command
@@ -556,7 +617,7 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
             self.coordinator.schedule_task(self._delayed_refresh())
 
         except Exception as e:
-            _LOGGER.error(f"Failed to set fan speed: {e}")
+            _LOGGER.error("Failed to set fan speed: %s", e)
             # Revert local state if command failed by requesting refresh
             await self.coordinator.async_request_refresh()
             raise
@@ -568,8 +629,7 @@ class IAquaLinkRobotVacuum(CoordinatorEntity[AqualinkDataUpdateCoordinator], Sta
 
     async def async_return_to_base(self, **kwargs: Any) -> None:
         """Set the vacuum cleaner to return to the dock - delegate to coordinator."""
-        if self._status != "connected":
-            return
+        self._require_connected()
 
         await self.coordinator.async_return_to_base()
         await self.coordinator.async_request_refresh()

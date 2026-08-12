@@ -118,6 +118,63 @@ def test_strings_json_has_sensor_state_translations() -> None:
         )
 
 
+def test_every_created_sensor_has_a_name_translation() -> None:
+    """Every sensor the integration can create must have a name to render.
+
+    ``AqualinkSensor`` sets ``_attr_has_entity_name`` + ``_attr_translation_key``
+    and no ``_attr_name``, so a key missing from ``entity.sensor`` leaves HA
+    with nothing to display. Two sensors shipped that way for several
+    releases: ``base_cycle_duration`` and ``adjusted_cycle_duration`` are in
+    ``ALL_SENSOR_TYPES`` (and therefore created on every device family) but
+    had no entry in ``strings.json``.
+    """
+    from custom_components.iaqualink_robots.sensor import ALL_SENSOR_TYPES
+
+    sensor_strings = _load(STRINGS_JSON)["entity"]["sensor"]
+    missing = [
+        key for key, _name in ALL_SENSOR_TYPES
+        if key not in sensor_strings or "name" not in sensor_strings[key]
+    ]
+    assert not missing, (
+        f"Sensors created by sensor.py with no name translation: {missing}. "
+        "Add them under entity.sensor in strings.json and all 9 locale files "
+        "(English fallback is the convention until a native PR lands)."
+    )
+
+
+def test_icons_json_covers_every_entity_translation_key() -> None:
+    """icons.json is the icon source of truth (`icon-translations` rule).
+
+    Entities no longer set ``_attr_icon``, so a translation_key missing from
+    icons.json means that entity renders with HA's generic fallback icon.
+    """
+    icons = _load(PACKAGE_DIR / "icons.json")
+    strings = _load(STRINGS_JSON)["entity"]
+
+    for platform in ("sensor", "button", "select"):
+        declared = set(strings.get(platform, {}))
+        iconed = set(icons["entity"].get(platform, {}))
+        missing = declared - iconed
+        assert not missing, (
+            f"icons.json is missing entity.{platform} icons for: "
+            f"{sorted(missing)}"
+        )
+
+
+def test_no_attr_icon_left_in_entity_modules() -> None:
+    """Regression guard for the icons.json migration.
+
+    A hardcoded ``_attr_icon`` wins over icons.json and also overrides a
+    user's own icon customisation on every restart.
+    """
+    for module in ("button.py", "sensor.py", "select.py", "vacuum.py"):
+        source = (PACKAGE_DIR / module).read_text(encoding="utf-8")
+        assert "_attr_icon" not in source, (
+            f"{module} still assigns _attr_icon; icons belong in icons.json "
+            "keyed by translation_key."
+        )
+
+
 # Note on "wall_only" vs "walls_only" — they are two DISTINCT cloud-side
 # fan-speed modes (see CLAUDE.md). The state block must list both, not
 # collapse them as a typo. The drift test below would catch a future

@@ -8,13 +8,13 @@
           "name": "Názov zariadenia",
           "username": "Používateľské meno",
           "password": "Heslo",
-          "include_seconds_remaining": "Include seconds in time-remaining display"
+          "include_seconds_remaining": "Zahrnúť sekundy v zobrazení zostávajúceho času"
         },
         "data_description": {
           "name": "Názov pre váš bazénový robot v Home Assistant",
           "username": "Používateľské meno k vášmu iAquaLink účtu",
           "password": "Heslo k vášmu iAquaLink účtu",
-          "include_seconds_remaining": "When enabled, the time-remaining sensor updates every poll interval (every few seconds) and includes seconds in its value. Disable to update only when the minute ticks over — this dramatically reduces Home Assistant activity-log entries during long cleaning cycles without slowing down remote-control button responsiveness. Can be toggled later via Configure."
+          "include_seconds_remaining": "Ak je táto možnosť povolená, senzor zostávajúceho času sa aktualizuje v každom intervale dotazovania (každých niekoľko sekúnd) a jeho hodnota zahŕňa sekundy. Zakázaním tejto možnosti dôjde k aktualizácii iba pri preklopení minúty — to výrazne znižuje počet záznamov v denníku aktivít Home Assistant počas dlhých cyklov čistenia, bez toho aby sa spomalila odozva tlačidiel diaľkového ovládania. Neskôr je možné túto možnosť prepnúť cez Konfiguráciu."
         }
       },
       "select_device": {
@@ -30,13 +30,13 @@
         }
       },
       "reauth_confirm": {
-        "title": "Reauthenticate iAqualink Robot",
-        "description": "Your iAquaLink credentials for {username} are no longer accepted. Enter the current password to resume the integration without losing entity history.",
+        "title": "Znovu overiť iAqualink robota",
+        "description": "Vaše prihlasovacie údaje iAquaLink pre {username} už nie sú prijímané. Zadajte aktuálne heslo pre obnovenie integrácie bez straty histórie entít.",
         "data": {
-          "password": "Password"
+          "password": "Heslo"
         },
         "data_description": {
-          "password": "Your current iAquaLink account password"
+          "password": "Vaše aktuálne heslo k účtu iAquaLink"
         }
       }
     },
@@ -45,26 +45,26 @@
       "no_devices": "Vo vašom účte neboli nájdení žiadni roboti. Skontrolujte, či je váš robot správne zaregistrovaný v iAquaLink.",
       "device_not_found": "Vybrané zariadenie sa nepodarilo nájsť. Skúste znova.",
       "unknown": "Vyskytla sa neočakávaná chyba. Skúste znova.",
-      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again."
+      "invalid_auth": "Neplatné prihlasovacie údaje iAquaLink. Skontrolujte prosím svoje používateľské meno a heslo a skúste to znova."
     },
     "abort": {
       "already_configured": "Tento robot je už nakonfigurovaný v Home Assistant.",
-      "no_serial": "No serial number was returned for this robot. The cloud account is reachable but the device list is empty or incomplete. Please try again later.",
-      "reauth_successful": "Reauthentication successful. The integration has resumed.",
-      "reauth_unavailable": "Reauthentication is no longer available for this entry (it may have been deleted). Please delete and re-add the integration if needed.",
-      "already_in_progress": "Configuration of this robot is already in progress."
+      "no_serial": "Pre tohto robota nebolo vrátené žiadne sériové číslo. Cloudový účet je dostupný, ale zoznam zariadení je prázdny alebo neúplný. Skúste to prosím znova neskôr.",
+      "reauth_successful": "Opätovné overenie prebehlo úspešne. Integrácia bola obnovená.",
+      "reauth_unavailable": "Opätovné overenie už nie je pre tento záznam k dispozícii (možno bol vymazaný). V prípade potreby integráciu odstráňte a znova pridajte.",
+      "already_in_progress": "Konfigurácia tohto robota už prebieha."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "iAqualink Robot Options",
-        "description": "Adjust runtime behavior for this robot.",
+        "title": "Možnosti iAqualink robota",
+        "description": "Úprava správania tohto robota za behu.",
         "data": {
-          "include_seconds_remaining": "Include seconds in time-remaining display"
+          "include_seconds_remaining": "Zahrnúť sekundy v zobrazení zostávajúceho času"
         },
         "data_description": {
-          "include_seconds_remaining": "When enabled, the time-remaining sensor updates every poll interval (every few seconds) and includes seconds in its value. Disable to update only when the minute ticks over — this dramatically reduces Home Assistant activity-log entries during long cleaning cycles without slowing down remote-control button responsiveness."
+          "include_seconds_remaining": "Ak je táto možnosť povolená, senzor zostávajúceho času sa aktualizuje v každom intervale dotazovania (každých niekoľko sekúnd) a jeho hodnota zahŕňa sekundy. Zakázaním tejto možnosti dôjde k aktualizácii iba pri preklopení minúty — to výrazne znižuje počet záznamov v denníku aktivít Home Assistant počas dlhých cyklov čistenia, bez toho aby sa spomalila odozva tlačidiel diaľkového ovládania."
         }
       }
     }
@@ -74,12 +74,12 @@
       "activity": {
         "name": "Aktivita",
         "state": {
-          "cleaning": "Cleaning",
-          "error": "Error",
-          "idle": "Idle",
-          "returning": "Returning",
-          "docking": "Docking",
-          "paused": "Paused"
+          "cleaning": "Čistenie",
+          "error": "Chyba",
+          "idle": "Nečinný",
+          "returning": "Vracia sa",
+          "docking": "Dokovanie",
+          "paused": "Pozastavené"
         }
       },
       "battery_level": {
@@ -101,10 +101,10 @@
         "name": "Typ zariadenia"
       },
       "diagnostic_code": {
-        "name": "Diagnostic Code"
+        "name": "Diagnostický kód"
       },
       "error_code": {
-        "name": "Error Code"
+        "name": "Chybový kód"
       },
       "error_state": {
         "name": "Stav chyby"
@@ -115,15 +115,15 @@
       "fan_speed": {
         "name": "Rýchlosť turbíny",
         "state": {
-          "floor_only": "Floor only",
-          "wall_only": "Wall only",
-          "walls_only": "Walls only",
-          "floor_and_walls": "Floor and walls",
-          "smart_floor_and_walls": "SMART floor and walls"
+          "floor_only": "Iba dno",
+          "wall_only": "Iba stena",
+          "walls_only": "Iba steny",
+          "floor_and_walls": "Dno a steny",
+          "smart_floor_and_walls": "SMART dno a steny"
         }
       },
       "last_cloud_contact": {
-        "name": "Last Cloud Contact"
+        "name": "Posledný kontakt s cloudom"
       },
       "model": {
         "name": "Model"
@@ -134,8 +134,8 @@
       "status": {
         "name": "Stav",
         "state": {
-          "connected": "Connected",
-          "disconnected": "Disconnected",
+          "connected": "Pripojené",
+          "disconnected": "Odpojené",
           "offline": "Offline",
           "online": "Online"
         }
@@ -162,7 +162,7 @@
         "name": "Celkové hodiny"
       },
       "version": {
-        "name": "Firmware Version"
+        "name": "Verzia firmvéru"
       }
     },
     "button": {
@@ -191,36 +191,36 @@
     "vacuum": {},
     "select": {
       "pattern_floor": {
-        "name": "Floor Pattern",
+        "name": "Vzor čistenia dna",
         "state": {
-          "standard": "Standard",
-          "s_pattern": "S-Pattern"
+          "standard": "Štandardný",
+          "s_pattern": "Vzor S"
         }
       },
       "pattern_floor_walls": {
-        "name": "Floor & Wall Pattern",
+        "name": "Vzor čistenia dna a stien",
         "state": {
-          "standard": "Standard",
-          "s_pattern": "S-Pattern"
+          "standard": "Štandardný",
+          "s_pattern": "Vzor S"
         }
       },
       "pattern_smart": {
-        "name": "SMART Pattern",
+        "name": "SMART vzor",
         "state": {
-          "standard": "Standard",
-          "s_pattern": "S-Pattern"
+          "standard": "Štandardný",
+          "s_pattern": "Vzor S"
         }
       }
     }
   },
   "issues": {
     "legacy_service_behavior_change": {
-      "title": "iAqualink Robots: service behaviour changed",
+      "title": "iAqualink Robots: správanie služby sa zmenilo",
       "fix_flow": {
         "step": {
           "confirm": {
-            "title": "Confirm service behaviour change",
-            "description": "Open your automations and scripts and check any that call `iaqualink_robots.remote_forward`, `remote_backward`, `remote_rotate_left`, `remote_rotate_right`, `remote_stop`, `add_fifteen_minutes`, or `reduce_fifteen_minutes`. These services now actually move the robot instead of silently failing. Click Submit once you have reviewed them — this issue will not re-appear."
+            "title": "Potvrdiť zmenu správania služby",
+            "description": "Otvorte svoje automatizácie a skripty a skontrolujte všetky, ktoré volajú `iaqualink_robots.remote_forward`, `remote_backward`, `remote_rotate_left`, `remote_rotate_right`, `remote_stop`, `add_fifteen_minutes` alebo `reduce_fifteen_minutes`. Tieto služby teraz skutočne pohybujú robotom namiesto toho, aby ticho zlyhali. Po ich kontrole kliknite na Odoslať — tento problém sa už znova neobjaví."
           }
         }
       }

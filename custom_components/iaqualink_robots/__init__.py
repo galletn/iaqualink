@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import collections.abc
 import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import (
     config_validation as cv,
     entity_registry as er,
@@ -185,7 +187,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) -> bool:
-    from .client import AqualinkClient
+    from .client import AqualinkClient, AuthFailedError
     from .coordinator import AqualinkDataUpdateCoordinator
     from .const import SCAN_INTERVAL
 
@@ -208,10 +210,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) ->
     # Check if a specific serial number is specified in the entry
     target_serial = entry.data.get("serial_number")
 
-    # Create a client for this specific device using the constant API key
-    # Debug mode disabled by default to reduce log verbosity
-    # To enable debug mode for troubleshooting, change False to True below
-    debug_mode = False
+    # Create a client for this specific device using the constant API key.
+    #
+    # There is deliberately no `debug_mode` flag any more. It was hardcoded
+    # to False with a comment telling users to edit the source, and it gated
+    # ~20 `_LOGGER.debug(...)` calls — so those messages never appeared even
+    # for a user who had correctly enabled debug logging in
+    # `configuration.yaml`, which is exactly what the README tells them to do
+    # when reporting a problem. Verbosity is HA's logger config's job.
+    #
     # Resolve the include_seconds_remaining option. entry.options (set by
     # the OptionsFlow at runtime) takes precedence over entry.data (set by
     # the initial ConfigFlow). Falls back to the default for entries that
@@ -224,7 +231,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) ->
         username,
         password,
         API_KEY,
-        debug_mode=debug_mode,
         include_seconds_remaining=include_seconds_remaining,
     )
     # L19: hand the hass reference to the client BEFORE any cloud call so the
@@ -234,19 +240,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) ->
     # `client.set_hass(hass)` — idempotent reassignment.
     client.set_hass(hass)
 
-    # If a specific serial is provided, use it for device discovery
+    # If a specific serial is provided, use it for device discovery.
+    #
+    # Both calls are mapped onto HA's setup-outcome exceptions. Pre-fix,
+    # `_authenticate()` was awaited bare and `_discover_device` only mapped
+    # RuntimeError onto `return False`, which produced two user-visible bugs:
+    #
+    #   * A password changed while HA was down raised `AuthFailedError`
+    #     straight out of `async_setup_entry`. HA showed a generic setup
+    #     error and never started the reauth flow, so the only remedy the
+    #     user could find was delete + re-add (losing all history).
+    #   * A transient cloud outage at boot returned False — a *permanent*
+    #     failure — instead of asking HA to retry with backoff.
+    #
+    # The mapping below mirrors the one the coordinator already applies on
+    # every subsequent poll (see `coordinator._async_update_data`).
     if target_serial:
-        # Authenticate first
-        await client._authenticate()
-        # Then discover the specific device
         try:
+            await client._authenticate()
             await client._discover_device(target_serial=target_serial)
-        except RuntimeError as e:
-            _LOGGER.error(f"Failed to discover device {target_serial}: {e}")
-            return False
+        except ConfigEntryAuthFailed:
+            raise
+        except AuthFailedError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            raise ConfigEntryNotReady(
+                f"Failed to reach iAqualink cloud for device {target_serial}: {err}"
+            ) from err
 
     # Create coordinator with this client
-    coordinator = AqualinkDataUpdateCoordinator(hass, client, SCAN_INTERVAL.total_seconds(), debug_mode=debug_mode)
+    coordinator = AqualinkDataUpdateCoordinator(hass, client, SCAN_INTERVAL.total_seconds())
     coordinator.title = entry.title
 
     # Initial refresh to get data
@@ -394,6 +419,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) -
     try:
         await entry.runtime_data.coordinator.cleanup()
     except Exception as e:  # noqa: BLE001 — cleanup is best-effort
-        _LOGGER.warning(f"Error during coordinator cleanup: {e}")
+        _LOGGER.warning("Error during coordinator cleanup: %s", e)
 
     return True

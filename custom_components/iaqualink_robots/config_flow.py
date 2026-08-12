@@ -19,6 +19,52 @@ from .client import AqualinkClient, AuthFailedError
 _LOGGER = logging.getLogger(__name__)
 
 
+def _clean_username(value: str) -> str:
+    """Return the username as it should be stored in ``entry.data``.
+
+    Only whitespace is stripped — mobile keyboards routinely append a
+    trailing space to an autocompleted e-mail address. Case is preserved
+    verbatim so the value the user recognises is what they see in the UI;
+    comparisons go through :func:`_normalize_username` instead.
+    """
+    return value.strip()
+
+
+def _normalize_username(value: str) -> str:
+    """Return the comparison form of a username.
+
+    Cognito treats e-mail-style usernames case-insensitively, so two
+    entries differing only in case are the same account. Used for
+    entry-dedupe in :meth:`IaqualinkConfigFlow.async_step_user` and for
+    the reconfigure "did the account actually change" check.
+    """
+    return value.strip().casefold()
+
+
+def _account_owns_serial(devices: list[dict[str, Any]], serial: str | None) -> bool:
+    """Return True if ``serial`` appears in a ``discover_devices`` result.
+
+    Reauth and reconfigure both validate credentials by running discovery
+    once. Discovery succeeding only proves the credentials are valid for
+    *some* iAqualink account — not that the account owns the robot this
+    config entry is bound to. Without this check a user who types a second
+    household account's credentials gets a cheerful "reauthentication
+    successful" and an entry that then fails every poll forever, with no
+    obvious cause in the log.
+    """
+    if not serial:
+        # An entry with no stored serial predates the serial-based unique_id
+        # (or is corrupted). We cannot prove ownership either way, so accept
+        # rather than lock the user out of repairing their own entry.
+        return True
+    wanted = serial.strip()
+    return any(
+        isinstance(d.get("serial_number"), str)
+        and d["serial_number"].strip() == wanted
+        for d in devices
+    )
+
+
 class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # Version bumps trigger `async_migrate_entry` in __init__.py:
     #   1 -> 2  (M12) rewrite button unique_ids from title-derived to serial-based
@@ -50,7 +96,10 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            self._username = user_input["username"]
+            # Whitespace-strip on store (not just on compare) so the value
+            # persisted in entry.data is the one that authenticates cleanly
+            # on every later cloud call, including reauth.
+            self._username = _clean_username(user_input["username"])
             self._password = user_input["password"]
             self._include_seconds_remaining = user_input.get(
                 CONF_INCLUDE_SECONDS_REMAINING, DEFAULT_INCLUDE_SECONDS_REMAINING
@@ -71,11 +120,11 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # mobile autocomplete commonly trails a space. `include_ignore`
             # is False so users who once "ignored" this integration are not
             # permanently locked out.
-            normalized_username = self._username.strip().casefold()
+            normalized_username = _normalize_username(self._username)
             existing_serials_for_account = {
                 entry.data["serial_number"]
                 for entry in self._async_current_entries(include_ignore=False)
-                if (entry.data.get("username") or "").strip().casefold()
+                if _normalize_username(entry.data.get("username") or "")
                 == normalized_username
                 and entry.data.get("serial_number")
             }
@@ -141,10 +190,10 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # H9b review P2: distinguish credential failures from network
                 # failures. The cloud's 401 response means the username or
                 # password is wrong, not that we couldn't reach the server.
-                _LOGGER.debug(f"Auth failed during discovery: {e}")
+                _LOGGER.debug("Auth failed during discovery: %s", e)
                 errors["base"] = "invalid_auth"
             except Exception as e:
-                _LOGGER.error(f"Error discovering devices: {e}")
+                _LOGGER.error("Error discovering devices: %s", e)
                 errors["base"] = "cannot_connect"
 
         # Define form schema. C6 review P3: enforce min length 1 on username
@@ -278,21 +327,36 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             new_password = user_input["password"]
+            ownership_ok = False
             try:
                 # Re-run discovery with the new password — same validation
                 # path as initial setup. Cheap (single HTTP call) and proves
                 # the credentials reach Cognito.
-                await AqualinkClient.discover_devices(
-                    self._reauth_entry.data["username"],
+                devices = await AqualinkClient.discover_devices(
+                    _clean_username(self._reauth_entry.data["username"]),
                     new_password,
                     API_KEY,
                 )
             except AuthFailedError:
                 errors["base"] = "invalid_auth"
             except Exception as e:  # noqa: BLE001 — surface as cannot_connect
-                _LOGGER.error(f"Error during reauth discovery: {e}")
+                _LOGGER.error("Error during reauth discovery: %s", e)
                 errors["base"] = "cannot_connect"
             else:
+                # Credentials are valid for *an* account — confirm it is the
+                # account that owns this entry's robot before accepting them.
+                ownership_ok = _account_owns_serial(
+                    devices, self._reauth_entry.data.get("serial_number")
+                )
+                if not ownership_ok:
+                    _LOGGER.warning(
+                        "Reauth rejected: the account no longer lists this "
+                        "entry's robot. Use Reconfigure to move the entry to "
+                        "a different iAqualink account."
+                    )
+                    errors["base"] = "wrong_account"
+
+            if ownership_ok:
                 # Update password in place. unique_id, entity_id, area,
                 # automations, history all preserved.
                 self.hass.config_entries.async_update_entry(
@@ -324,6 +388,83 @@ class IaqualinkConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 "username": self._reauth_entry.data["username"],
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Reconfiguration flow.
+    #
+    # Reauth answers "the password changed"; it deliberately cannot change
+    # the username, because a username change is a *different account* and
+    # HA must re-verify that the new account still owns this robot.
+    #
+    # Before this step existed, a user who changed their iAqualink e-mail
+    # address — or moved the robot to a family member's account — had no
+    # option but to delete and re-add the integration, losing every
+    # entity_id, all recorder history, area assignments and automation
+    # references. This flow updates both credentials in place and keeps
+    # the entry's unique_id (the robot serial) intact.
+    # ------------------------------------------------------------------
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Let the user point this entry at a different iAqualink account."""
+        entry = self._get_reconfigure_entry()
+        errors = {}
+
+        if user_input is not None:
+            username = _clean_username(user_input["username"])
+            password = user_input["password"]
+            serial = entry.data.get("serial_number")
+            try:
+                devices = await AqualinkClient.discover_devices(
+                    username, password, API_KEY
+                )
+            except AuthFailedError:
+                errors["base"] = "invalid_auth"
+            except Exception as e:  # noqa: BLE001 — surface as cannot_connect
+                _LOGGER.error("Error during reconfigure discovery: %s", e)
+                errors["base"] = "cannot_connect"
+            else:
+                if not _account_owns_serial(devices, serial):
+                    # The credentials work, but this robot is not on that
+                    # account. Accepting them would leave a permanently
+                    # failing entry, so refuse and explain.
+                    errors["base"] = "wrong_account"
+                else:
+                    # Belt-and-braces: the entry keeps its serial-derived
+                    # unique_id. If a future edit ever let the serial change
+                    # here, this aborts instead of silently rebinding the
+                    # entry (and its history) to a different robot.
+                    #
+                    # Skipped for an entry that has no stored serial (predates
+                    # the serial-based unique_id, or was corrupted): there is
+                    # nothing to compare against, and setting a null unique_id
+                    # would be worse than leaving the entry as it is.
+                    if serial:
+                        await self.async_set_unique_id(serial)
+                        self._abort_if_unique_id_mismatch(reason="wrong_robot")
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        data_updates={
+                            "username": username,
+                            "password": password,
+                        },
+                    )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({
+                vol.Required(
+                    "username",
+                    default=entry.data.get("username", ""),
+                ): vol.All(str, vol.Length(min=1)),
+                vol.Required("password"): vol.All(str, vol.Length(min=1)),
+            }),
+            errors=errors,
+            description_placeholders={
+                "name": entry.title,
             },
         )
 

@@ -38,6 +38,18 @@
         "data_description": {
           "password": "Your current iAquaLink account password"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure iAqualink Robot",
+        "description": "Update the iAquaLink account used for {name}. The robot must still be listed on the new account — its serial number stays the same, so all entities, history and automations are preserved.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "The iAquaLink account username (e-mail address) that now owns this robot",
+          "password": "The password for that iAquaLink account"
+        }
       }
     },
     "error": {
@@ -45,14 +57,17 @@
       "no_devices": "Nessun robot trovato nel tuo account. Verifica che il tuo robot sia registrato correttamente con iAquaLink.",
       "device_not_found": "Il dispositivo selezionato non è stato trovato. Riprova.",
       "unknown": "Si è verificato un errore imprevisto. Riprova.",
-      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again."
+      "invalid_auth": "Invalid iAquaLink credentials. Please check your username and password and try again.",
+      "wrong_account": "Those credentials are valid, but this robot is not listed on that iAquaLink account. Check that you signed in with the account the robot is registered to."
     },
     "abort": {
       "already_configured": "Questo robot è già configurato in Home Assistant.",
       "no_serial": "No serial number was returned for this robot. The cloud account is reachable but the device list is empty or incomplete. Please try again later.",
       "reauth_successful": "Reauthentication successful. The integration has resumed.",
       "reauth_unavailable": "Reauthentication is no longer available for this entry (it may have been deleted). Please delete and re-add the integration if needed.",
-      "already_in_progress": "Configuration of this robot is already in progress."
+      "already_in_progress": "Configuration of this robot is already in progress.",
+      "wrong_robot": "The selected account does not match the robot this entry was set up for. The entry was left unchanged.",
+      "reconfigure_successful": "Account updated. The integration has reloaded."
     }
   },
   "options": {
@@ -163,6 +178,12 @@
       },
       "version": {
         "name": "Versione firmware"
+      },
+      "base_cycle_duration": {
+        "name": "Original Duration"
+      },
+      "adjusted_cycle_duration": {
+        "name": "Total Duration"
       }
     },
     "button": {
@@ -254,6 +275,23 @@
     "reduce_fifteen_minutes": {
       "name": "Riduci 15 Minuti",
       "description": "Riduci 15 minuti dal tempo di pulizia degli aspiratori (solo robot VR e VortraX)"
+    }
+  },
+  "exceptions": {
+    "command_failed": {
+      "message": "Failed to send the {command} command to {name}: {error}"
+    },
+    "timing_command_rate_limited": {
+      "message": "Wait {seconds} more seconds before adjusting the cleaning time again."
+    },
+    "timing_command_failed": {
+      "message": "Could not adjust the cleaning time: {error}"
+    },
+    "not_connected": {
+      "message": "{name} is not connected to the iAquaLink cloud right now, so the command was not sent."
+    },
+    "invalid_fan_speed": {
+      "message": "{fan_speed} is not a cleaning mode this robot supports. Supported modes: {options}."
     }
   }
 }

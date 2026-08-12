@@ -22,9 +22,26 @@ from tests.const import (
     MOCK_DEVICE_TYPE,
     MOCK_ENTRY_DATA,
     MOCK_NAME,
+    MOCK_PASSWORD,
     MOCK_SERIAL,
+    MOCK_USERNAME,
     MOCK_USER_INPUT,
 )
+
+# A discover_devices payload that does NOT contain this entry's robot —
+# i.e. valid credentials for a *different* iAqualink account.
+OTHER_ACCOUNT_DEVICES = [
+    {
+        "serial_number": MOCK_DEVICE_SECOND["serial_number"],
+        "device_type": "vr",
+        "name": "Someone else's robot",
+    }
+]
+
+# The entry's own robot, as discovery returns it.
+OWN_ACCOUNT_DEVICES = [
+    {"serial_number": MOCK_SERIAL, "device_type": MOCK_DEVICE_TYPE, "name": MOCK_NAME}
+]
 
 
 @pytest.mark.usefixtures("mock_discover_single_device")
@@ -557,3 +574,348 @@ async def test_reauth_flow_network_error_shows_cannot_connect(hass: HomeAssistan
     assert final["type"] == data_entry_flow.FlowResultType.FORM
     assert final["step_id"] == "reauth_confirm"
     assert final["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reauth_flow_wrong_account_rejected(hass: HomeAssistant) -> None:
+    """Credentials that authenticate against a *different* iAqualink account
+    must be rejected with `wrong_account`, not accepted.
+
+    Discovery succeeding only proves the credentials are valid for some
+    account. Without the ownership check the user gets a cheerful
+    "reauthentication successful" and an entry that then fails every poll
+    forever, with nothing in the log pointing at the real cause. The entry
+    must be left untouched so the old (working, if expired) password isn't
+    clobbered by the wrong one.
+    """
+    entry = await _setup_reauth_entry(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(return_value=OTHER_ACCOUNT_DEVICES),
+    ), patch.object(
+        hass.config_entries, "async_reload", new=AsyncMock(return_value=True)
+    ) as reload_mock:
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_REAUTH, "entry_id": entry.entry_id},
+            data=entry.data,
+        )
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={"password": "other-account-password"}
+        )
+
+    assert final["type"] == data_entry_flow.FlowResultType.FORM
+    assert final["step_id"] == "reauth_confirm"
+    assert final["errors"] == {"base": "wrong_account"}
+    # Entry untouched: password, unique_id and serial all preserved.
+    assert entry.data["password"] == MOCK_ENTRY_DATA["password"]
+    assert entry.unique_id == MOCK_SERIAL
+    assert entry.data["serial_number"] == MOCK_SERIAL
+    reload_mock.assert_not_awaited()
+
+
+async def test_reauth_flow_entry_without_serial_still_accepts(hass: HomeAssistant) -> None:
+    """An entry with no stored `serial_number` (pre-serial-unique_id vintage,
+    or corrupted) cannot have ownership proven either way. Rather than lock
+    the user out of repairing their own entry, the ownership check passes.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=MOCK_SERIAL,
+        data={k: v for k, v in MOCK_ENTRY_DATA.items() if k != "serial_number"},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(return_value=OTHER_ACCOUNT_DEVICES),
+    ), patch.object(
+        hass.config_entries, "async_reload", new=AsyncMock(return_value=True)
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_REAUTH, "entry_id": entry.entry_id},
+            data=entry.data,
+        )
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"], user_input={"password": "new-password"}
+        )
+
+    assert final["type"] == data_entry_flow.FlowResultType.ABORT
+    assert final["reason"] == "reauth_successful"
+    assert entry.data["password"] == "new-password"
+
+
+# ---------------------------------------------------------------------------
+# Reconfiguration flow: move an existing entry to a different iAqualink
+# account (changed e-mail address, robot handed to a family member) without
+# losing entity_ids, recorder history, areas or automation references.
+#
+# Reauth deliberately cannot change the username — a different username is a
+# different account, which has to be re-verified against the robot's serial.
+# ---------------------------------------------------------------------------
+
+NEW_USERNAME = "new-owner@example.com"
+NEW_PASSWORD = "s3cret-new"
+
+
+async def _setup_reconfigure_entry(hass: HomeAssistant):
+    """Build a config entry suitable for triggering async_step_reconfigure."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=MOCK_SERIAL,
+        data=MOCK_ENTRY_DATA,
+        title=MOCK_NAME,
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def _start_reconfigure(hass: HomeAssistant, entry):
+    """Kick off the reconfigure flow and assert the form is shown."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "entry_id": entry.entry_id,
+        },
+    )
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+    return result
+
+
+async def test_reconfigure_form_defaults_to_current_username(hass: HomeAssistant) -> None:
+    """The reconfigure form pre-fills the username currently stored on the
+    entry so the common case (password-only correction after a mistyped
+    e-mail) is a one-field edit rather than a retype.
+    """
+    entry = await _setup_reconfigure_entry(hass)
+    result = await _start_reconfigure(hass, entry)
+
+    username_key = next(
+        key for key in result["data_schema"].schema if str(key) == "username"
+    )
+    assert username_key.default() == MOCK_USERNAME
+
+
+async def test_reconfigure_updates_credentials_and_keeps_identity(
+    hass: HomeAssistant,
+) -> None:
+    """Reconfigure happy path: BOTH username and password are rewritten in
+    entry.data, while `unique_id` and `serial_number` — the entry's identity,
+    and therefore every entity_id and all recorder history hanging off it —
+    stay exactly as they were.
+    """
+    entry = await _setup_reconfigure_entry(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(return_value=OWN_ACCOUNT_DEVICES),
+    ), patch.object(
+        hass.config_entries, "async_reload", new=AsyncMock(return_value=True)
+    ):
+        result = await _start_reconfigure(hass, entry)
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"username": NEW_USERNAME, "password": NEW_PASSWORD},
+        )
+        # `async_update_reload_and_abort` schedules the reload as a task on
+        # newer HA versions — drain it while async_reload is still patched.
+        await hass.async_block_till_done()
+
+    assert final["type"] == data_entry_flow.FlowResultType.ABORT
+    assert final["reason"] == "reconfigure_successful"
+    assert entry.data["username"] == NEW_USERNAME
+    assert entry.data["password"] == NEW_PASSWORD
+    # Identity preserved — this is the whole point of reconfigure over
+    # delete + re-add.
+    assert entry.unique_id == MOCK_SERIAL
+    assert entry.data["serial_number"] == MOCK_SERIAL
+
+
+async def test_reconfigure_strips_username_whitespace(hass: HomeAssistant) -> None:
+    """A trailing space from mobile autocomplete must not be persisted — the
+    stored username has to be the one that authenticates cleanly on every
+    later cloud call.
+    """
+    entry = await _setup_reconfigure_entry(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(return_value=OWN_ACCOUNT_DEVICES),
+    ), patch.object(
+        hass.config_entries, "async_reload", new=AsyncMock(return_value=True)
+    ):
+        result = await _start_reconfigure(hass, entry)
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"username": f"  {NEW_USERNAME} ", "password": NEW_PASSWORD},
+        )
+        await hass.async_block_till_done()
+
+    assert final["reason"] == "reconfigure_successful"
+    assert entry.data["username"] == NEW_USERNAME
+
+
+async def test_reconfigure_invalid_auth_shows_error(hass: HomeAssistant) -> None:
+    """Bad credentials re-show the form with `invalid_auth` and leave the
+    entry untouched.
+    """
+    entry = await _setup_reconfigure_entry(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(side_effect=AuthFailedError("401 Unauthorized")),
+    ):
+        result = await _start_reconfigure(hass, entry)
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"username": NEW_USERNAME, "password": "wrong"},
+        )
+
+    assert final["type"] == data_entry_flow.FlowResultType.FORM
+    assert final["step_id"] == "reconfigure"
+    assert final["errors"] == {"base": "invalid_auth"}
+    assert entry.data["username"] == MOCK_USERNAME
+    assert entry.data["password"] == MOCK_PASSWORD
+
+
+async def test_reconfigure_network_error_shows_cannot_connect(
+    hass: HomeAssistant,
+) -> None:
+    """A non-auth discovery failure is `cannot_connect`, distinct from
+    `invalid_auth` — the user should retry, not go hunting for a typo in
+    credentials that are actually correct.
+    """
+    entry = await _setup_reconfigure_entry(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(side_effect=RuntimeError("simulated network error")),
+    ):
+        result = await _start_reconfigure(hass, entry)
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"username": NEW_USERNAME, "password": NEW_PASSWORD},
+        )
+
+    assert final["type"] == data_entry_flow.FlowResultType.FORM
+    assert final["step_id"] == "reconfigure"
+    assert final["errors"] == {"base": "cannot_connect"}
+    assert entry.data["username"] == MOCK_USERNAME
+
+
+async def test_reconfigure_wrong_account_rejected(hass: HomeAssistant) -> None:
+    """Valid credentials for an account that does NOT list this robot must be
+    refused with `wrong_account`.
+
+    Accepting them would rebind a working entry to an account that can never
+    answer for its serial — the entry would authenticate fine and then fail
+    every single poll, which is far harder to diagnose than an up-front error.
+    """
+    entry = await _setup_reconfigure_entry(hass)
+
+    with patch(
+        "custom_components.iaqualink_robots.config_flow.AqualinkClient.discover_devices",
+        new=AsyncMock(return_value=OTHER_ACCOUNT_DEVICES),
+    ):
+        result = await _start_reconfigure(hass, entry)
+        final = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"username": NEW_USERNAME, "password": NEW_PASSWORD},
+        )
+
+    assert final["type"] == data_entry_flow.FlowResultType.FORM
+    assert final["step_id"] == "reconfigure"
+    assert final["errors"] == {"base": "wrong_account"}
+    assert entry.data["username"] == MOCK_USERNAME
+    assert entry.data["password"] == MOCK_PASSWORD
+    assert entry.unique_id == MOCK_SERIAL
+
+
+# ---------------------------------------------------------------------------
+# Username hygiene at the user step + the module-level helpers behind it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("mock_discover_single_device", "bypass_setup_fixture")
+async def test_user_flow_strips_username_whitespace_on_store(
+    hass: HomeAssistant,
+) -> None:
+    """Whitespace is stripped on STORE, not just on compare.
+
+    Pre-fix the padded value was persisted verbatim into entry.data, so every
+    later cloud call — including reauth, which reads the stored username —
+    carried the stray space. Only the dedupe comparison normalized it.
+    """
+    padded_input = {**MOCK_USER_INPUT, "username": f"  {MOCK_USERNAME}\t"}
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    final = await hass.config_entries.flow.async_configure(
+        result["flow_id"], user_input=padded_input
+    )
+
+    assert final["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+    assert final["data"]["username"] == MOCK_USERNAME
+
+
+def test_clean_username_strips_only_whitespace() -> None:
+    """`_clean_username` must NOT casefold — the value is what the user sees
+    in the UI, so their capitalization is preserved verbatim. Case-insensitive
+    matching is `_normalize_username`'s job.
+    """
+    from custom_components.iaqualink_robots.config_flow import _clean_username
+
+    assert _clean_username("  Test@Example.COM  ") == "Test@Example.COM"
+    assert _clean_username(MOCK_USERNAME) == MOCK_USERNAME
+
+
+def test_normalize_username_strips_and_casefolds() -> None:
+    """`_normalize_username` is the comparison form — Cognito treats
+    email-style usernames case-insensitively.
+    """
+    from custom_components.iaqualink_robots.config_flow import _normalize_username
+
+    assert _normalize_username(" Test@Example.COM ") == "test@example.com"
+    assert _normalize_username("A@B.C") == _normalize_username("a@b.c ")
+
+
+def test_account_owns_serial_matching_and_non_matching() -> None:
+    """Ownership is a straight serial membership test over the discovery
+    result, whitespace-tolerant on both sides.
+    """
+    from custom_components.iaqualink_robots.config_flow import _account_owns_serial
+
+    assert _account_owns_serial(OWN_ACCOUNT_DEVICES, MOCK_SERIAL) is True
+    assert _account_owns_serial(OWN_ACCOUNT_DEVICES, f" {MOCK_SERIAL} ") is True
+    assert _account_owns_serial(OTHER_ACCOUNT_DEVICES, MOCK_SERIAL) is False
+    assert _account_owns_serial([], MOCK_SERIAL) is False
+
+
+def test_account_owns_serial_missing_serial_is_permissive() -> None:
+    """No stored serial → ownership is unprovable either way. Accept, so a
+    user with a legacy/corrupted entry can still repair it rather than being
+    locked out.
+    """
+    from custom_components.iaqualink_robots.config_flow import _account_owns_serial
+
+    assert _account_owns_serial(OTHER_ACCOUNT_DEVICES, None) is True
+    assert _account_owns_serial(OTHER_ACCOUNT_DEVICES, "") is True
+
+
+def test_account_owns_serial_ignores_non_string_serials() -> None:
+    """A device whose `serial_number` came back as a non-string (int, None,
+    or the key missing entirely) must not crash the membership test.
+    """
+    from custom_components.iaqualink_robots.config_flow import _account_owns_serial
+
+    junk = [{"name": "no serial key"}, {"serial_number": None}, {"serial_number": 12345}]
+    assert _account_owns_serial(junk, MOCK_SERIAL) is False
+    assert _account_owns_serial(junk + list(OWN_ACCOUNT_DEVICES), MOCK_SERIAL) is True

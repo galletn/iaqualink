@@ -38,6 +38,18 @@
         "data_description": {
           "password": "Vaše aktuálne heslo k účtu iAquaLink"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure iAqualink Robot",
+        "description": "Update the iAquaLink account used for {name}. The robot must still be listed on the new account — its serial number stays the same, so all entities, history and automations are preserved.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "The iAquaLink account username (e-mail address) that now owns this robot",
+          "password": "The password for that iAquaLink account"
+        }
       }
     },
     "error": {
@@ -45,14 +57,17 @@
       "no_devices": "Vo vašom účte neboli nájdení žiadni roboti. Skontrolujte, či je váš robot správne zaregistrovaný v iAquaLink.",
       "device_not_found": "Vybrané zariadenie sa nepodarilo nájsť. Skúste znova.",
       "unknown": "Vyskytla sa neočakávaná chyba. Skúste znova.",
-      "invalid_auth": "Neplatné prihlasovacie údaje iAquaLink. Skontrolujte prosím svoje používateľské meno a heslo a skúste to znova."
+      "invalid_auth": "Neplatné prihlasovacie údaje iAquaLink. Skontrolujte prosím svoje používateľské meno a heslo a skúste to znova.",
+      "wrong_account": "Those credentials are valid, but this robot is not listed on that iAquaLink account. Check that you signed in with the account the robot is registered to."
     },
     "abort": {
       "already_configured": "Tento robot je už nakonfigurovaný v Home Assistant.",
       "no_serial": "Pre tohto robota nebolo vrátené žiadne sériové číslo. Cloudový účet je dostupný, ale zoznam zariadení je prázdny alebo neúplný. Skúste to prosím znova neskôr.",
       "reauth_successful": "Opätovné overenie prebehlo úspešne. Integrácia bola obnovená.",
       "reauth_unavailable": "Opätovné overenie už nie je pre tento záznam k dispozícii (možno bol vymazaný). V prípade potreby integráciu odstráňte a znova pridajte.",
-      "already_in_progress": "Konfigurácia tohto robota už prebieha."
+      "already_in_progress": "Konfigurácia tohto robota už prebieha.",
+      "wrong_robot": "The selected account does not match the robot this entry was set up for. The entry was left unchanged.",
+      "reconfigure_successful": "Account updated. The integration has reloaded."
     }
   },
   "options": {
@@ -163,6 +178,12 @@
       },
       "version": {
         "name": "Verzia firmvéru"
+      },
+      "base_cycle_duration": {
+        "name": "Original Duration"
+      },
+      "adjusted_cycle_duration": {
+        "name": "Total Duration"
       }
     },
     "button": {
@@ -254,6 +275,23 @@
     "reduce_fifteen_minutes": {
       "name": "Odobrať 15 minút",
       "description": "Odoberie 15 minút z času čistenia (len pre roboty VR a VortraX)"
+    }
+  },
+  "exceptions": {
+    "command_failed": {
+      "message": "Failed to send the {command} command to {name}: {error}"
+    },
+    "timing_command_rate_limited": {
+      "message": "Wait {seconds} more seconds before adjusting the cleaning time again."
+    },
+    "timing_command_failed": {
+      "message": "Could not adjust the cleaning time: {error}"
+    },
+    "not_connected": {
+      "message": "{name} is not connected to the iAquaLink cloud right now, so the command was not sent."
+    },
+    "invalid_fan_speed": {
+      "message": "{fan_speed} is not a cleaning mode this robot supports. Supported modes: {options}."
     }
   }
 }

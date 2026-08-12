@@ -567,7 +567,17 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator):
                 self._first_failure_at = dt_util.utcnow()
 
             if not self.is_long_outage:
-                _LOGGER.warning(
+                # DEBUG, not WARNING: this fires on EVERY failed poll, and at
+                # SCAN_INTERVAL=3s a 30-minute outage would write ~600 warning
+                # lines before the long-outage branch below escalates once.
+                #
+                # It was previously gated behind the always-False debug_mode
+                # flag, so it never appeared at all; un-gating it at WARNING
+                # (as removing that flag first did) would have replaced one
+                # bug with a louder one, in the release whose point is less
+                # log noise. A short blip is not warning-worthy — the
+                # long-outage ERROR is the operator-visible signal.
+                _LOGGER.debug(
                     "Update failed (attempt %s, "
                     "outage age %.0fs "
                     "< %ss threshold): %s",

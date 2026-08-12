@@ -607,7 +607,7 @@ async def test_setup_entry_discovery_runtime_error_raises_not_ready(
     from custom_components.iaqualink_robots import async_setup_entry
 
     mock_setup_client["client"]._discover_device = AsyncMock(
-        side_effect=RuntimeError("Device with serial R23X12345678 not found")
+        side_effect=RuntimeError("get_devices exited without returning")
     )
     entry = _current_entry(hass)
 
@@ -616,6 +616,44 @@ async def test_setup_entry_discovery_runtime_error_raises_not_ready(
 
     # The serial is included so the log line identifies which robot failed.
     assert MOCK_SERIAL in str(excinfo.value)
+
+
+async def test_setup_entry_device_not_on_account_raises_config_entry_error(
+    hass: HomeAssistant, mock_setup_client
+) -> None:
+    """"Robot not on this account" is permanent — it must NOT retry forever.
+
+    The cloud answered; the answer was that this serial is not on this
+    account (robot moved or removed). `ConfigEntryNotReady` would retry with
+    backoff indefinitely and never tell the user what to do, so this maps to
+    `ConfigEntryError` with a message naming the Reconfigure flow.
+    """
+    from homeassistant.exceptions import ConfigEntryError
+
+    from custom_components.iaqualink_robots import async_setup_entry
+    from custom_components.iaqualink_robots.client import DeviceNotFoundError
+
+    mock_setup_client["client"]._discover_device = AsyncMock(
+        side_effect=DeviceNotFoundError(f"Target device {MOCK_SERIAL} not found")
+    )
+    entry = _current_entry(hass)
+
+    with pytest.raises(ConfigEntryError) as excinfo:
+        await async_setup_entry(hass, entry)
+
+    message = str(excinfo.value)
+    assert MOCK_SERIAL in message
+    assert "Reconfigure" in message
+
+
+def test_device_not_found_error_is_a_runtime_error() -> None:
+    """Subclassing RuntimeError keeps pre-existing `except RuntimeError`
+    callers working — the new type only adds the ability to tell a permanent
+    "not on this account" apart from transient plumbing failures.
+    """
+    from custom_components.iaqualink_robots.client import DeviceNotFoundError
+
+    assert issubclass(DeviceNotFoundError, RuntimeError)
 
 
 async def test_setup_entry_network_error_during_auth_raises_not_ready(

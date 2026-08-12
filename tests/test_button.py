@@ -102,26 +102,55 @@ async def test_button_press_success_does_not_raise(
     coordinator.async_request_refresh.assert_not_awaited()
 
 
-async def test_timing_button_requests_refresh(
+async def test_timing_button_routes_through_coordinator(
     hass: HomeAssistant, mock_client_and_coordinator,
 ) -> None:
-    """The +/-15 minute buttons DO refresh: they change the reported cycle
-    time immediately and would otherwise lag by up to a full poll interval."""
+    """The +/-15 minute buttons must go through the coordinator, not the client.
+
+    Calling ``client.add_fifteen_minutes()`` directly skipped the 3-second
+    debounce (a double-tap issued two cloud writes) and, more importantly,
+    skipped the failure check: the client signals failure by *returning*
+    ``{"success": False, ...}`` rather than raising, so a rejected adjustment
+    was reported to the user as a successful press. The coordinator owns the
+    debounce, the raise-on-failure, and the post-command refresh.
+    """
     from unittest.mock import AsyncMock
 
     from custom_components.iaqualink_robots.button import AqualinkRemoteButton
 
     coordinator, client = mock_client_and_coordinator
+    coordinator.async_add_fifteen_minutes = AsyncMock()
     client.add_fifteen_minutes = AsyncMock(return_value={"success": True})
-    coordinator.async_request_refresh = AsyncMock()
     button = AqualinkRemoteButton(
         coordinator, client, "add_fifteen_minutes", "add_fifteen_minutes"
     )
 
     await button.async_press()
 
-    client.add_fifteen_minutes.assert_awaited_once()
-    coordinator.async_request_refresh.assert_awaited_once()
+    coordinator.async_add_fifteen_minutes.assert_awaited_once()
+    client.add_fifteen_minutes.assert_not_awaited()
+
+
+async def test_timing_button_surfaces_coordinator_failure(
+    hass: HomeAssistant, mock_client_and_coordinator,
+) -> None:
+    """A rejected adjustment must reach the UI as an error, not a silent success."""
+    from unittest.mock import AsyncMock
+
+    from homeassistant.exceptions import HomeAssistantError
+
+    from custom_components.iaqualink_robots.button import AqualinkRemoteButton
+
+    coordinator, client = mock_client_and_coordinator
+    coordinator.async_reduce_fifteen_minutes = AsyncMock(
+        side_effect=HomeAssistantError("cloud rejected the adjustment")
+    )
+    button = AqualinkRemoteButton(
+        coordinator, client, "reduce_fifteen_minutes", "reduce_fifteen_minutes"
+    )
+
+    with pytest.raises(HomeAssistantError):
+        await button.async_press()
 
 
 async def test_button_icons_come_from_icons_json(

@@ -124,13 +124,6 @@ class AqualinkRemoteButton(CoordinatorEntity[AqualinkDataUpdateCoordinator], But
         """
         return {"restored": self.coordinator.is_serving_stale_data}
 
-    # Commands whose effect on the reported cycle time is immediate; these get
-    # one coordinator refresh so the time-remaining sensors don't lag by up to
-    # a full poll interval. The movement commands deliberately do NOT refresh —
-    # the 3s SCAN_INTERVAL already covers them and an extra refresh per press
-    # made rapid jog-button use hammer the cloud.
-    _REFRESH_AFTER = frozenset({"add_fifteen_minutes", "reduce_fifteen_minutes"})
-
     async def async_press(self) -> None:
         """Handle the button press.
 
@@ -138,6 +131,15 @@ class AqualinkRemoteButton(CoordinatorEntity[AqualinkDataUpdateCoordinator], But
         swallowed. Pre-fix a command that never reached the robot still
         rendered as a successful press in the UI, so the user had no signal
         that anything went wrong short of reading the log.
+
+        The two timing commands route through the **coordinator**, not the
+        client. Calling ``client.add_fifteen_minutes()`` directly skipped two
+        things the service path has always had: the 3-second debounce (so a
+        double-tap issued two cloud writes), and the failure check — the
+        client reports failure by *returning* ``{"success": False, ...}``
+        rather than raising, so a rejected adjustment came back through the
+        try/except below as a success. The coordinator owns both, and its
+        own ``async_request_refresh`` is why no refresh is issued here.
         """
         handlers = {
             "forward": self._client.remote_forward,
@@ -145,8 +147,8 @@ class AqualinkRemoteButton(CoordinatorEntity[AqualinkDataUpdateCoordinator], But
             "rotate_left": self._client.remote_rotate_left,
             "rotate_right": self._client.remote_rotate_right,
             "stop": self._client.remote_stop,
-            "add_fifteen_minutes": self._client.add_fifteen_minutes,
-            "reduce_fifteen_minutes": self._client.reduce_fifteen_minutes,
+            "add_fifteen_minutes": self.coordinator.async_add_fifteen_minutes,
+            "reduce_fifteen_minutes": self.coordinator.async_reduce_fifteen_minutes,
         }
         handler = handlers.get(self._command)
         if handler is None:
@@ -161,6 +163,9 @@ class AqualinkRemoteButton(CoordinatorEntity[AqualinkDataUpdateCoordinator], But
         try:
             await handler()
         except HomeAssistantError:
+            # Covers ServiceValidationError (debounce) and ConfigEntryAuthFailed
+            # (which subclasses HomeAssistantError via ConfigEntryError) — the
+            # latter MUST reach HA unwrapped or the reauth flow never fires.
             raise
         except Exception as err:
             _LOGGER.debug(
@@ -177,5 +182,7 @@ class AqualinkRemoteButton(CoordinatorEntity[AqualinkDataUpdateCoordinator], But
                 },
             ) from err
 
-        if self._command in self._REFRESH_AFTER:
-            await self.coordinator.async_request_refresh()
+        # No refresh here. Movement commands don't need one — the 3s
+        # SCAN_INTERVAL covers them, and a refresh per press hammered the
+        # cloud during rapid jogging. The timing commands do need one, and
+        # the coordinator method already issues it.

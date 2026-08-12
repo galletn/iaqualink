@@ -241,7 +241,14 @@ def calculate_times(
             result["time_remaining_human"] = format_time_human(0, 0, 0)
 
     except Exception as e:
-        _LOGGER.warning("Error calculating times: %s", e)
+        # DEBUG, not WARNING: this runs on every poll, so a persistently
+        # malformed payload would write a warning every 3 seconds. It was
+        # previously gated behind the always-False debug_mode flag; un-gating
+        # it at WARNING would have been a fresh source of the log spam this
+        # release exists to remove. The user-visible signal is the graceful
+        # degradation below (time remaining reads 0), and debug logging
+        # surfaces the cause when someone investigates.
+        _LOGGER.debug("Error calculating times: %s", e)
         result["cycle_end_time"] = None
         result["estimated_end_time"] = None
         result["time_remaining"] = 0

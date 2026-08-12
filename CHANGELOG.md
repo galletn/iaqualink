@@ -40,6 +40,13 @@ silently, and log noise. No new device features.
   reporting a problem — still hid them.
 - **Garbled characters in log messages and command results** (`â€”`, `â‰¥`)
   from a double-encoding accident are fixed.
+- **The ±15-minute buttons now respect the rate limit and report failures.**
+  They bypassed the 3-second guard the equivalent service call has always
+  had, so a double-tap sent two adjustments to the cloud — and a rejected
+  adjustment was still shown as a successful press.
+- **A robot that is no longer on your iAqualink account now says so.** Home
+  Assistant used to retry the setup forever without explaining anything;
+  it now reports the problem and points at Reconfigure.
 
 ### ✨ Added
 

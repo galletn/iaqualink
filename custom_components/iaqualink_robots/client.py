@@ -108,6 +108,23 @@ class AuthFailedError(Exception):
     """
 
 
+class DeviceNotFoundError(RuntimeError):
+    """The account is reachable, but does not list the requested robot.
+
+    Distinct from the plumbing ``RuntimeError``s elsewhere in this module
+    because it is **permanent**: the cloud answered, and the answer was that
+    this serial is not on this account (typically the robot was moved to
+    another account, or removed from it). Retrying cannot fix that, so
+    ``async_setup_entry`` translates it to ``ConfigEntryError`` — a terminal
+    setup failure pointing the user at the Reconfigure flow — rather than
+    ``ConfigEntryNotReady``, which would retry with backoff forever and never
+    say why.
+
+    Subclasses ``RuntimeError`` so existing callers that catch that keep
+    working.
+    """
+
+
 # Safety margin subtracted from the JWT `exp` so we refresh slightly before
 # the cloud actually invalidates the token. Covers clock skew between AWS
 # Cognito and the HA host.
@@ -808,10 +825,10 @@ class AqualinkClient:
             # or if we found no compatible devices at all
             if target_serial:
                 _LOGGER.error("Target device %s not found in the device list.", target_serial)
-                raise RuntimeError(f"Target device {target_serial} not found")
+                raise DeviceNotFoundError(f"Target device {target_serial} not found")
             else:
                 _LOGGER.error("No compatible robot found in the device list.")
-                raise RuntimeError("No supported robot found")
+                raise DeviceNotFoundError("No supported robot found")
         except asyncio.CancelledError:
             _LOGGER.debug("Device discovery cancelled")
             raise  # Re-raise cancellation to preserve shutdown behavior

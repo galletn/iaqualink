@@ -7,7 +7,11 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryError,
+    ConfigEntryNotReady,
+)
 from homeassistant.helpers import (
     config_validation as cv,
     entity_registry as er,
@@ -187,7 +191,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) -> bool:
-    from .client import AqualinkClient, AuthFailedError
+    from .client import AqualinkClient, AuthFailedError, DeviceNotFoundError
     from .coordinator import AqualinkDataUpdateCoordinator
     from .const import SCAN_INTERVAL
 
@@ -263,6 +267,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkConfigEntry) ->
             raise
         except AuthFailedError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
+        except DeviceNotFoundError as err:
+            # Permanent, not transient: the cloud answered and this serial is
+            # not on this account. Retrying with backoff would never resolve
+            # and would never tell the user why, so this is a terminal setup
+            # error that names the fix.
+            raise ConfigEntryError(
+                f"{err}. The robot is no longer listed on this iAqualink "
+                "account — use Reconfigure to point this entry at the account "
+                "that owns it, or delete the entry if the robot is gone."
+            ) from err
         except asyncio.CancelledError:
             raise
         except Exception as err:

@@ -2,7 +2,7 @@
 
 ![GitHub Repo stars](https://img.shields.io/github/stars/galletn/iaqualink?style=for-the-badge&color=%2318bcf2)
 ![Github Repo issues](https://img.shields.io/github/issues/galletn/iaqualink?style=for-the-badge&color=%2318bcf2)
-![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5?style=for-the-badge)
+![Marketplace](https://img.shields.io/badge/Marketplace-Custom-41BDF5?style=for-the-badge)
 ![GitHub Release Date](https://img.shields.io/github/release-date/galletn/iaqualink?style=for-the-badge&label=Latest%20Release&color=%2318bcf2)
 ![GitHub Release Version](https://img.shields.io/github/v/release/galletn/iaqualink?style=for-the-badge&color=%2318bcf2)
 
@@ -31,15 +31,16 @@ A comprehensive Home Assistant integration for **iAqualink robotic pool cleaners
 
 ## 🚀 Installation
 
-### HACS
+### Marketplace
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=galletn&repository=iaqualink&category=integration)
+[![Open your Home Assistant instance and open a repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=galletn&repository=iaqualink)
 
-1. Open **HACS** in Home Assistant
+1. Open **Marketplace** in Home Assistant
 2. Search for **"iAqualink Robots"**
 3. Click **Install** and restart Home Assistant
 
-> **If not found in search:** Add custom repository `galletn/iaqualink` as type **Integration**.
+> **If not found in search:** Add custom repository `https://github.com/galletn/iaqualink`.
+> [![Open your Home Assistant instance and show the custom repositories you added to the Marketplace.](https://my.home-assistant.io/badges/marketplace_repositories.svg)](https://my.home-assistant.io/redirect/marketplace_repositories/)
 
 ### Manual installation
 
